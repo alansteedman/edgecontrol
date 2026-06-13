@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Camera</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box }
+  html, body { width:100%; height:100%; background:#000; overflow:hidden; font-family:monospace }
+  #video { width:100%; height:100%; object-fit:cover; display:block }
+  #overlay { position:fixed; top:0; left:0; right:0; padding:10px 14px; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(to bottom, rgba(0,0,0,.7), transparent); pointer-events:none }
+  #cam-name { font-size:13px; font-weight:700; color:#fff; letter-spacing:.4px }
+  #status { font-size:10px; font-weight:700; color:#4fc3f7; background:rgba(0,0,0,.5); padding:3px 9px; border-radius:4px; letter-spacing:.5px }
+  #controls { position:fixed; bottom:0; left:0; right:0; padding:10px 14px; display:flex; gap:8px; justify-content:flex-end; background:linear-gradient(to top, rgba(0,0,0,.7), transparent); opacity:0; transition:opacity .2s }
+  body:hover #controls { opacity:1 }
+  .ctrl-btn { background:rgba(30,30,30,.85); border:1px solid #333; color:#ccc; padding:6px 14px; border-radius:5px; cursor:pointer; font-size:11px; font-family:monospace; letter-spacing:.3px }
+  .ctrl-btn:hover { background:#222; color:#fff }
+  #play-prompt { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.5); cursor:pointer; z-index:50 }
+  #play-prompt div { background:rgba(0,0,0,.75); color:#fff; font-size:14px; font-weight:700; padding:16px 32px; border-radius:8px; letter-spacing:.5px; border:1px solid #333 }
+  #play-prompt.hidden { display:none }
+</style>
+</head>
+<body>
+<video id="video" autoplay playsinline muted></video>
+<div id="overlay">
+  <span id="cam-name">Camera</span>
+  <span id="status">CONNECTING…</span>
+</div>
+<div id="controls">
+  <button class="ctrl-btn" id="audio-btn" onclick="toggleAudio()">🔇 Muted</button>
+  <button class="ctrl-btn" onclick="document.getElementById('video').requestFullscreen?.()">⛶ Fullscreen</button>
+</div>
+<div id="play-prompt" class="hidden" onclick="startPlay()">
+  <div>▶ Click to play</div>
+</div>
+<script>
+  const params = new URLSearchParams(location.search)
+  const streamKey = params.get('stream') || 'camera'
+  const name = params.get('name') || 'Camera'
+  document.getElementById('cam-name').textContent = name
+  document.title = name
+
+  const video  = document.getElementById('video')
+  const status = document.getElementById('status')
+  const prompt = document.getElementById('play-prompt')
+
+  // State
+  let pc = null, mseWs = null, mseBlobUrl = null, active = true
+
+  function setStatus(t, c) { status.textContent = t; status.style.color = c }
+
+  function tryPlay() {
+    video.play().then(() => { prompt.classList.add('hidden') }).catch(() => {
+      prompt.classList.remove('hidden')
+    })
+  }
+
+  function startPlay() {
+    prompt.classList.add('hidden')
+    video.play().catch(()=>{})
+  }
+
+  function cleanupMse() {
+    if (mseWs)      { try { mseWs.close() } catch {} ; mseWs = null }
+    if (mseBlobUrl) { URL.revokeObjectURL(mseBlobUrl); mseBlobUrl = null }
+  }
+
+  // ── WebSocket MSE (go2rtc /api/ws) ────────────────────────────────────────
+  // go2rtc protocol: connect → send {type:'mse', value:'<codecs>'}
+  //   → server replies {type:'mse', value:'video/mp4; codecs="..."'} → binary MP4 fragments
+  // WSS works through Cloudflare tunnel; HTTP chunked streaming does not.
+  async function startMSE() {
+    setStatus('CONNECTING (MSE)…', '#f59e0b')
+    cleanupMse()
+    video.srcObject = null; video.src = ''
+
+    const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${wsProto}//${location.host}/api/go2rtc/api/ws?src=${streamKey}`
+
+    return new Promise((resolve, reject) => {
+      const ms = new MediaSource()
+      mseBlobUrl = URL.createObjectURL(ms)
+      video.src = mseBlobUrl
+
+      let sb = null, queue = [], done = false
+
+      ms.addEventListener('sourceopen', () => {
+        if (!active) return
+        mseWs = new WebSocket(wsUrl)
+        mseWs.binaryType = 'arraybuffer'
+
+        mseWs.onopen = () => {
+          // Negotiate codec with go2rtc — it replies with the MIME type it will use
+          mseWs.send(JSON.stringify({type:'mse', value:'avc1.640029,avc1.64002A,avc1.640033,mp4a.40.2'}))
+        }
+
+        mseWs.onmessage = e => {
+          if (typeof e.data === 'string') {
+            const msg = JSON.parse(e.data)
+            if (msg.type === 'mse' && !sb) {
+              // msg.value = 'video/mp4; codecs="avc1.640029,mp4a.40.2"'
+              try {
+                sb = ms.addSourceBuffer(msg.value)
+                sb.mode = 'segments'
+                sb.addEventListener('updateend', drain)
+                drain()
+              } catch(err) { if (!done) { done = true; reject(err) } }
+            }
+          } else {
+            // Binary MP4 fragment
+            queue.push(new Uint8Array(e.data))
+            if (sb && !sb.updating) drain()
+          }
+        }
+
+        mseWs.onerror = () => { if (!done) { done = true; reject(new Error('MSE ws error')) } }
+        mseWs.onclose = () => {
+          if (!done) { done = true; reject(new Error('MSE ws closed')) }
+          else if (active) setTimeout(connect, 3000)
+        }
+      })
+
+      function drain() {
+        if (!sb || sb.updating || queue.length === 0) return
+        try { sb.appendBuffer(queue.shift()) } catch { queue = [] }
+        if (!done) {
+          done = true
+          setStatus('● LIVE', '#4ade80')
+          tryPlay()
+          resolve()
+        }
+      }
+
+      setTimeout(() => { if (!done) { done = true; reject(new Error('MSE timeout')) } }, 10000)
+    })
+  }
+
+  // ── WebRTC first, fall back to WebSocket MSE ──────────────────────────────
+  async function connect() {
+    if (!active) return
+    if (pc) { pc.close(); pc = null }
+    cleanupMse()
+    video.srcObject = null; video.src = ''
+    setStatus('CONNECTING…', '#4fc3f7')
+
+    // ── 1. Try WebRTC (low latency on LAN, ~200ms) ──────────────────────────
+    try {
+      // No STUN — LAN, local candidates are sufficient. Will fail/timeout over Cloudflare.
+      pc = new RTCPeerConnection({ iceServers:[], bundlePolicy:'max-bundle', iceCandidatePoolSize:4 })
+      pc.addTransceiver('video', {direction:'recvonly'})
+      pc.addTransceiver('audio', {direction:'recvonly'})
+      pc.ontrack = e => {
+        if (!video.srcObject) video.srcObject = new MediaStream()
+        video.srcObject.addTrack(e.track)
+        tryPlay()
+      }
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      await new Promise(r => {
+        if (pc.iceGatheringState==='complete') return r()
+        pc.onicegatheringstatechange = ()=>{ if(pc.iceGatheringState==='complete') r() }
+        setTimeout(r, 400)
+      })
+      const res = await fetch(`/api/go2rtc/api/webrtc?src=${streamKey}`, {
+        method:'POST', headers:{'Content-Type':'application/sdp'}, body:pc.localDescription.sdp
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await pc.setRemoteDescription({type:'answer', sdp: await res.text()})
+
+      const iceResult = await Promise.race([
+        new Promise(r => {
+          const check = () => {
+            const s = pc.iceConnectionState
+            if (s==='connected'||s==='completed') r('ok')
+            else if (s==='failed') r('failed')
+          }
+          pc.oniceconnectionstatechange = check; check()
+        }),
+        new Promise(r => setTimeout(()=>r('timeout'), 3000))
+      ])
+
+      if (iceResult === 'ok') {
+        setStatus('● LIVE', '#4ade80')
+        pc.oniceconnectionstatechange = () => {
+          const s = pc.iceConnectionState
+          if (s==='failed'||s==='disconnected') {
+            pc.close(); pc = null; video.srcObject = null
+            if (active) setTimeout(connect, 3000)
+          }
+        }
+        return  // WebRTC succeeded — done
+      }
+
+      // ICE failed/timed out — clean up and fall through to MSE
+      pc.close(); pc = null; video.srcObject = null
+      console.log('[cam-popup] WebRTC', iceResult, '— falling back to MSE')
+    } catch(e) {
+      console.error('[cam-popup] WebRTC error', e)
+      if (pc) { pc.close(); pc = null }
+      video.srcObject = null
+    }
+
+    // ── 2. Fall back to WebSocket MSE ──────────────────────────────────────
+    try {
+      await startMSE()
+    } catch(e) {
+      console.error('[cam-popup] MSE error', e)
+      setStatus('RECONNECTING…', '#f59e0b')
+      if (active) setTimeout(connect, 5000)
+    }
+  }
+
+  function toggleAudio() {
+    video.muted = !video.muted
+    document.getElementById('audio-btn').textContent = video.muted ? '🔇 Muted' : '🔊 Audio On'
+  }
+
+  window.addEventListener('beforeunload', () => {
+    active = false
+    if (pc) { pc.close(); pc = null }
+    cleanupMse()
+  })
+
+  connect()
+</script>
+</body>
+</html>

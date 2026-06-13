@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Macro Monitor — EdgeController</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#0a0a0a;color:#e0e0e0;font-family:'Courier New',monospace;overflow:hidden;user-select:none}
+
+#header{height:48px;background:#111;border-bottom:1px solid #1e1e1e;display:flex;align-items:center;gap:10px;padding:0 16px;flex-shrink:0;position:relative;z-index:10}
+#macro-title{font-size:14px;font-weight:700;color:#e0e0e0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#status-dot{width:8px;height:8px;border-radius:50%;background:#333;flex-shrink:0;transition:background .3s}
+#status-text{font-size:10px;font-weight:700;letter-spacing:.8px;color:#444;flex-shrink:0;min-width:70px}
+#continue-btn{display:none;padding:8px 20px;background:#1a0d00;border:1.5px solid #fbbf24;color:#fde68a;border-radius:6px;cursor:pointer;font-family:monospace;font-size:11px;font-weight:700;letter-spacing:.5px;animation:btnpulse 1s ease-in-out infinite alternate}
+@keyframes btnpulse{from{box-shadow:0 0 6px #fbbf2466}to{box-shadow:0 0 18px #fbbf24aa}}
+#continue-btn:hover{background:#261400;border-color:#fde68a}
+#done-badge{display:none;padding:5px 14px;background:#0d2010;border:1px solid #4ade80;color:#4ade80;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.8px}
+
+#cwrap{flex:1;overflow:auto;position:relative;background:#080808;background-image:radial-gradient(circle,#181818 1px,transparent 1px);background-size:28px 28px;height:calc(100vh - 48px)}
+#canvas{position:relative;min-width:2400px;min-height:2000px}
+#svg-layer{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+
+.mvblk{position:absolute;min-width:175px;border-radius:8px;border:1.5px solid transparent;box-shadow:0 4px 20px rgba(0,0,0,.6);transition:box-shadow .2s,border-color .2s}
+.mvblk.active{border-color:#4ade80 !important;box-shadow:0 0 0 3px rgba(74,222,128,.35),0 4px 28px rgba(0,0,0,.9) !important;animation:blkglow .7s ease-in-out infinite alternate}
+.mvblk.waiting{border-color:#fbbf24 !important;animation:waitglow .5s ease-in-out infinite alternate}
+@keyframes blkglow{from{box-shadow:0 0 0 2px rgba(74,222,128,.3),0 0 12px rgba(74,222,128,.2)}to{box-shadow:0 0 0 3px rgba(74,222,128,.6),0 0 28px rgba(74,222,128,.35)}}
+@keyframes waitglow{from{box-shadow:0 0 0 2px rgba(251,191,36,.3)}to{box-shadow:0 0 0 3px rgba(251,191,36,.7),0 0 24px rgba(251,191,36,.3)}}
+.mvblkh{padding:9px 12px;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;letter-spacing:.4px}
+.mvblkb{padding:4px 12px 9px;font-size:10px;color:rgba(255,255,255,.5);background:rgba(0,0,0,.4);border-radius:0 0 6px 6px;line-height:1.6;min-height:22px}
+.mvblkb .cdbar{height:3px;background:#111;border-radius:2px;overflow:hidden;margin-top:5px}
+.mvblkb .cdbar-fill{height:100%;background:linear-gradient(90deg,#4ade80,#16a085);transition:width .15s linear}
+.port{position:absolute;width:11px;height:11px;border-radius:50%;background:#1c2535;border:2px solid #2a3a50}
+.port-in{top:-6px;left:50%;transform:translateX(-50%)}
+.port-oy,.port-ob{bottom:-6px;left:27%;transform:translateX(-50%)}
+.port-on{bottom:-6px;left:73%;transform:translateX(-50%)}
+.port-od{bottom:-6px;left:73%;transform:translateX(-50%)}
+.port-o{bottom:-6px;left:50%;transform:translateX(-50%)}
+.conn-path{fill:none;stroke-width:2.5;stroke-linecap:round;pointer-events:none}
+
+/* Wait overlay */
+#wait-overlay{display:none;position:fixed;inset:0;background:rgba(26,9,0,.5);z-index:20;pointer-events:none;animation:ovflash 1s ease-in-out infinite alternate}
+@keyframes ovflash{from{background:rgba(26,9,0,.4)}to{background:rgba(26,9,0,.65)}}
+</style>
+</head>
+<body>
+<div id="header">
+  <div id="status-dot"></div>
+  <span id="macro-title">—</span>
+  <span id="status-text">IDLE</span>
+  <button id="continue-btn" onclick="doResume()">▶ CONTINUE</button>
+  <div id="done-badge">✓ COMPLETE</div>
+</div>
+<div id="cwrap">
+  <div id="canvas"><svg id="svg-layer"></svg></div>
+</div>
+<div id="wait-overlay"></div>
+
+<script>
+// ── Block visual definitions ─────────────────────────────────────────────────
+const BD = {
+  start:      {icon:'▶',label:'START',     bg:'#0e2614',bd:'#4ade8066',tx:'#4ade80',ports:{i:[],o:['o']}},
+  end:        {icon:'■',label:'END',       bg:'#260e0e',bd:'#f8717166',tx:'#f87171',ports:{i:['i'],o:[]}},
+  stop_all:   {icon:'⛔',label:'STOP ALL', bg:'#2a0808',bd:'#dc262666',tx:'#fca5a5',ports:{i:['i'],o:['o']}},
+  delay:      {icon:'⏱',label:'DELAY',    bg:'#0d1a2e',bd:'#60a5fa66',tx:'#93c5fd',ports:{i:['i'],o:['o']}},
+  ramp:       {icon:'↗',label:'RAMP',     bg:'#1c0e2e',bd:'#c084fc66',tx:'#d8b4fe',ports:{i:['i'],o:['o']}},
+  wait_eom:   {icon:'◈',label:'WAIT EOM', bg:'#261500',bd:'#f9731666',tx:'#fdba74',ports:{i:['i'],o:['o']}},
+  wait_manual:{icon:'⏸',label:'WAITING', bg:'#222000',bd:'#fbbf2466',tx:'#fde68a',ports:{i:['i'],o:['o']}},
+  if_else:    {icon:'⋈',label:'IF/ELSE',  bg:'#1e0628',bd:'#e879f966',tx:'#f0abfc',ports:{i:['i'],o:['oy','on']}},
+  loop:       {icon:'↺',label:'LOOP',     bg:'#0c0c1a',bd:'#818cf866',tx:'#a5b4fc',ports:{i:['i'],o:['ob','od']}},
+  run_macro:  {icon:'▷',label:'RUN MACRO',bg:'#0a1a10',bd:'#34d39966',tx:'#6ee7b7',ports:{i:['i'],o:['o']}},
+  dev:        {icon:'⚡',label:'SET DEVICE',bg:'#280d0d',bd:'#ef444466',tx:'#fca5a5',ports:{i:['i'],o:['o']}},
+}
+const pc = {o:'port-o',oy:'port-oy',on:'port-on',ob:'port-ob',od:'port-od'}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const params = new URLSearchParams(location.search)
+let macroId   = params.get('id')
+let macro     = null
+let macros    = []
+let activeId  = null
+let waitingId = null
+let doneTimer = null
+
+// ── Block summary ─────────────────────────────────────────────────────────────
+function blockSummary(type, cfg) {
+  if (!cfg) return ''
+  switch(type) {
+    case 'delay':    return `${cfg.dur??10}s`
+    case 'ramp':     return `${cfg.from??0} → ${cfg.to??100}`
+    case 'wait_eom': return `${(cfg.cond||'').includes('>')?' >'  :' <'} ${cfg.thr??70}%`
+    case 'wait_manual': return cfg.prompt||''
+    case 'if_else':  return `${(cfg.cond||'').includes('>')?' >' :' <'} ${cfg.thr??80}%`
+    case 'loop':     return cfg.mode==='Repeat N times'?`×${cfg.count??3}`:`EOM ${(cfg.mode||'').includes('>')?'>':'<'} ${cfg.thr??75}%`
+    case 'run_macro':{ const m=macros.find(x=>x.id===cfg.macroId); return m?`▷ ${m.name}`:'' }
+    case 'dev':      return cfg.waveform||''
+    default: return ''
+  }
+}
+
+// ── Port positions ────────────────────────────────────────────────────────────
+function portPos(b, pt) {
+  const el = document.getElementById('blk-'+b.id)
+  const w = el?el.offsetWidth:(b.w||175), h = el?el.offsetHeight:(b.h||68)
+  if (pt==='i')  return {x:b.x+w/2,   y:b.y}
+  if (pt==='o')  return {x:b.x+w/2,   y:b.y+h}
+  if (pt==='oy'||pt==='ob') return {x:b.x+w*.27, y:b.y+h}
+  if (pt==='on'||pt==='od') return {x:b.x+w*.73, y:b.y+h}
+  return null
+}
+
+function bezier(p1,p2) {
+  const dy=p2.y-p1.y, cp=Math.max(60,Math.abs(dy)*.55)
+  return `M ${p1.x} ${p1.y} C ${p1.x} ${p1.y+cp} ${p2.x} ${p2.y-cp} ${p2.x} ${p2.y}`
+}
+function portColor(fp) {
+  if(fp==='oy'||fp==='ob') return '#4ade80'
+  if(fp==='on') return '#f87171'
+  if(fp==='od') return '#94a3b8'
+  return '#4a7fa8'
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderGraph() {
+  if (!macro) return
+  const canvas = document.getElementById('canvas')
+  canvas.querySelectorAll('.mvblk').forEach(e=>e.remove())
+  document.getElementById('svg-layer').innerHTML=''
+
+  macro.blocks.forEach(b => {
+    const def = BD[b.type] || BD.stop_all
+    const isActive  = b.id === activeId
+    const isWaiting = b.id === activeId && waitingId
+
+    const el = document.createElement('div')
+    el.className = 'mvblk' + (isActive&&!isWaiting?' active':'') + (isWaiting?' waiting':'')
+    el.id = 'blk-' + b.id
+    el.style.cssText = `left:${b.x}px;top:${b.y}px;background:${def.bg};border-color:${def.bd}`
+
+    const lbl  = b.type==='dev' ? `SET ${(b.config?.waveform||'DEVICE').toUpperCase().slice(0,12)}` : def.label
+    const sub  = b.type==='dev' ? `Ch ${b.channel||'A'}` : ''
+    const summ = blockSummary(b.type, b.config)
+
+    el.innerHTML = `
+      <div class="mvblkh" style="background:${def.bg}">
+        <span style="color:${def.tx};font-size:14px;flex-shrink:0">${def.icon}</span>
+        <span style="color:${def.tx};flex:1">${lbl}${sub?`<br><span style="font-size:9px;opacity:.5;font-weight:400">${sub}</span>`:''}</span>
+      </div>
+      <div class="mvblkb" id="blkb-${b.id}">${summ}</div>
+    `
+
+    // Input port
+    const ports = def.ports
+    if (ports.i.includes('i')) {
+      const p=document.createElement('div'); p.className='port port-in'; el.appendChild(p)
+    }
+    ports.o.forEach(pt=>{
+      const p=document.createElement('div'); p.className='port '+(pc[pt]||'port-o'); el.appendChild(p)
+    })
+
+    canvas.appendChild(el)
+    b.w = 175; b.h = 68
+  })
+
+  // Draw connections after layout
+  requestAnimationFrame(drawConns)
+}
+
+function drawConns() {
+  const svg = document.getElementById('svg-layer')
+  svg.innerHTML = ''
+  if (!macro) return
+  const adj = {}
+  for (const b of macro.blocks) adj[b.id] = {}
+  for (const c of macro.conns) { if(adj[c.fid]) adj[c.fid][c.fp]=c.tid }
+
+  macro.conns.forEach(c => {
+    const p1=portPos(macro.blocks.find(b=>b.id===c.fid), c.fp)
+    const p2=portPos(macro.blocks.find(b=>b.id===c.tid), 'i')
+    if (!p1||!p2) return
+    const col=portColor(c.fp)
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path')
+    path.setAttribute('d',bezier(p1,p2)); path.setAttribute('class','conn-path')
+    path.setAttribute('stroke',col); path.setAttribute('opacity','0.6')
+    svg.appendChild(path)
+    const dot=document.createElementNS('http://www.w3.org/2000/svg','circle')
+    dot.setAttribute('cx',p2.x); dot.setAttribute('cy',p2.y+1); dot.setAttribute('r','3')
+    dot.setAttribute('fill',col); dot.setAttribute('opacity','0.6')
+    svg.appendChild(dot)
+  })
+}
+
+// ── Scroll active block into centre of viewport ───────────────────────────────
+function scrollToBlock(blockId) {
+  const el = document.getElementById('blk-'+blockId)
+  const wrap = document.getElementById('cwrap')
+  if (!el||!wrap) return
+  const b = macro.blocks.find(x=>x.id===blockId)
+  if (!b) return
+  const bw = el.offsetWidth||175, bh = el.offsetHeight||68
+  const targetX = b.x - wrap.clientWidth/2  + bw/2
+  const targetY = b.y - wrap.clientHeight/2 + bh/2
+  wrap.scrollTo({ left:Math.max(0,targetX), top:Math.max(0,targetY), behavior:'smooth' })
+}
+
+// ── Status bar helpers ────────────────────────────────────────────────────────
+function setStatus(text, dotColor) {
+  document.getElementById('status-text').textContent = text
+  document.getElementById('status-text').style.color = dotColor
+  document.getElementById('status-dot').style.background = dotColor
+}
+
+// ── Event handlers ────────────────────────────────────────────────────────────
+function setActive(blockId) {
+  activeId = blockId; waitingId = null
+  document.getElementById('wait-overlay').style.display='none'
+  document.getElementById('continue-btn').style.display='none'
+  document.querySelectorAll('.mvblk').forEach(el=>{
+    const id=el.id.replace('blk-','')
+    el.classList.toggle('active',   id===blockId&&!waitingId)
+    el.classList.toggle('waiting',  false)
+  })
+  scrollToBlock(blockId)
+}
+
+function updateCountdown(data) {
+  const body = document.getElementById('blkb-'+activeId); if (!body) return
+  const { remaining, total } = data
+  const pct = Math.max(0, Math.min(100, (remaining/total)*100))
+  const remStr = remaining >= 10 ? `${Math.ceil(remaining)}s` : `${remaining.toFixed(1)}s`
+  body.innerHTML = `<span style="color:#93c5fd;font-weight:700">${remStr}</span> <span style="color:#2a2a2a">/ ${total}s</span><div class="cdbar"><div class="cdbar-fill" style="width:${pct}%"></div></div>`
+}
+
+function updateRamp(data) {
+  const body = document.getElementById('blkb-'+activeId); if (!body) return
+  const { value, from, to, elapsed, total } = data
+  const pct = Math.max(0, Math.min(100, ((value - Math.min(from,to)) / (Math.max(from,to) - Math.min(from,to) || 1)) * 100))
+  body.innerHTML = `<span style="color:#d8b4fe;font-weight:700;font-size:13px">${value}</span> <span style="color:#444">${from} → ${to}</span><span style="color:#333;float:right">${elapsed.toFixed(1)}s / ${total}s</span><div class="cdbar" style="margin-top:5px"><div class="cdbar-fill" style="width:${pct}%;background:linear-gradient(90deg,#7c3aed,#c084fc);transition:width .1s"></div></div>`
+}
+
+function updateLabel(text, color) {
+  const body = document.getElementById('blkb-'+activeId); if (!body) return
+  body.innerHTML = `<span style="color:${color||'#888'};font-weight:700">${text}</span>`
+}
+
+function showWait(prompt) {
+  waitingId = macroId
+  document.querySelectorAll('.mvblk').forEach(el=>{
+    const id=el.id.replace('blk-','')
+    el.classList.toggle('active',  false)
+    el.classList.toggle('waiting', id===activeId)
+  })
+  document.getElementById('continue-btn').style.display=''
+  document.getElementById('continue-btn').textContent = `▶ ${prompt||'CONTINUE'}`
+  document.getElementById('wait-overlay').style.display='block'
+  setStatus('WAITING', '#fbbf24')
+  if (activeId) scrollToBlock(activeId)
+}
+
+function showStopped() {
+  activeId=null; waitingId=null
+  document.querySelectorAll('.mvblk').forEach(el=>{ el.classList.remove('active','waiting') })
+  document.getElementById('wait-overlay').style.display='none'
+  document.getElementById('continue-btn').style.display='none'
+  document.getElementById('done-badge').style.display=''
+  setStatus('COMPLETE', '#4ade80')
+  clearTimeout(doneTimer)
+  doneTimer = setTimeout(()=>{ document.getElementById('done-badge').style.display='none'; setStatus('IDLE','#444') }, 5000)
+}
+
+async function doResume() {
+  if (!macroId) return
+  await fetch(`/api/macros/${macroId}/resume`, {method:'POST'}).catch(()=>{})
+  document.getElementById('wait-overlay').style.display='none'
+  document.getElementById('continue-btn').style.display='none'
+  setStatus('RUNNING', '#4ade80')
+}
+
+// ── Load macro ────────────────────────────────────────────────────────────────
+async function loadMacro(id) {
+  const res = await fetch('/api/macros').catch(()=>null); if(!res) return
+  macros = await res.json()
+  macro = macros.find(m=>m.id===id)
+  if (!macro) { document.getElementById('macro-title').textContent='Macro not found'; return }
+  document.getElementById('macro-title').textContent = macro.name
+  document.title = `${macro.name} — Macro Monitor`
+  renderGraph()
+  // Position scroll to start block initially
+  const start = macro.blocks.find(b=>b.type==='start')
+  if (start) setTimeout(()=>scrollToBlock(start.id), 150)
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+let ws
+function connect() {
+  const wsProto = location.protocol==='https:'?'wss:':'ws:'
+  ws = new WebSocket(`${wsProto}//${location.host}`)
+  ws.onopen  = ()=>{ if(!macro&&macroId) loadMacro(macroId) }
+  ws.onclose = ()=>setTimeout(connect, 2000)
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data)
+    switch(m.type) {
+      case 'macro:running':
+        document.getElementById('done-badge').style.display='none'
+        clearTimeout(doneTimer)
+        if (m.id !== macroId) { macroId=m.id; loadMacro(macroId) }
+        setStatus('RUNNING','#4ade80')
+        break
+      case 'macro:step':
+        if(m.id===macroId){ setActive(m.blockId); setStatus('RUNNING','#4ade80') }
+        break
+      case 'macro:countdown':
+        if(m.id===macroId) updateCountdown(m)
+        break
+      case 'macro:ramp':
+        if(m.id===macroId) updateRamp(m)
+        break
+      case 'macro:label':
+        if(m.id===macroId) updateLabel(m.text, m.color)
+        break
+      case 'macro:wait':
+        if(m.id===macroId) showWait(m.prompt)
+        break
+      case 'macro:stopped':
+        if(m.id===macroId) showStopped()
+        break
+      case 'macro:updated':
+        if(m.macro?.id===macroId){ macro=m.macro; renderGraph() }
+        break
+    }
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+setStatus('IDLE','#444')
+connect()
+if (macroId) loadMacro(macroId)
+window.addEventListener('resize', drawConns)
+</script>
+</body>
+</html>

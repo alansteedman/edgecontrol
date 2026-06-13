@@ -1,0 +1,16 @@
+[Unit]
+Description=EdgeController Network Setup
+After=NetworkManager.service NetworkManager-wait-online.service
+Wants=NetworkManager.service
+Before=pm2-alans.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/edge-network
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

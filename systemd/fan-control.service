@@ -1,0 +1,13 @@
+[Unit]
+Description=Pi 5 temperature-controlled fan daemon
+After=sysinit.target
+DefaultDependencies=no
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fan-control.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

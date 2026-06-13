@@ -1,0 +1,129 @@
+#!/bin/bash
+# EdgeController network setup — runs at boot (before pm2/edgecontroller)
+# Reads /boot/firmware/edgecontroller.conf, connects WiFi or enters AP mode
+
+CONF="/boot/firmware/edgecontroller.conf"
+FLAG_DIR="/run/edgecontroller"
+AP_FLAG="$FLAG_DIR/ap-mode"
+AP_IP="10.42.0.1"
+LOG_TAG="edge-network"
+CONFIG_JSON="/home/alans/edgecontroller/config.json"
+
+log() { echo "[$LOG_TAG] $*"; logger -t "$LOG_TAG" "$*"; }
+
+mkdir -p "$FLAG_DIR"
+rm -f "$AP_FLAG"
+
+# ── Set hostname from boxId in config.json ───────────────────────────────────
+BOX_ID=$(node -e "
+try {
+  const c = require('$CONFIG_JSON');
+  process.stdout.write(c.boxId || '');
+} catch(e) { process.stdout.write(''); }
+" 2>/dev/null)
+
+if [ -n "$BOX_ID" ]; then
+  CURRENT_HOST=$(hostname)
+  if [ "$CURRENT_HOST" != "$BOX_ID" ]; then
+    log "Setting hostname: $CURRENT_HOST -> $BOX_ID"
+    hostnamectl set-hostname "$BOX_ID"
+    echo "$BOX_ID" > /etc/hostname
+    systemctl restart avahi-daemon 2>/dev/null || true
+  fi
+fi
+
+# ── Parse INI config file ─────────────────────────────────────────────────────
+conf_get() {
+  local section="$1" key="$2"
+  [ ! -f "$CONF" ] && echo "" && return
+  awk -v s="[$section]" -v k="$key" '
+    /^\[/ { in_sec = ($0 == s) }
+    in_sec && $0 ~ "^" k "[ \t]*=" {
+      sub(/^[^=]*=[ \t]*/, "")
+      sub(/[ \t]*#.*$/, "")
+      sub(/^[ \t]+/, "")
+      sub(/[ \t]+$/, "")
+      print; exit
+    }
+  ' "$CONF"
+}
+
+CONF_SSID=$(conf_get wifi ssid)
+CONF_PASS=$(conf_get wifi password)
+
+# ── Apply config-file WiFi credentials if present ────────────────────────────
+if [ -n "$CONF_SSID" ]; then
+  log "Config file has WiFi: '$CONF_SSID' — applying..."
+  nmcli con delete "$CONF_SSID" 2>/dev/null || true
+  if [ -n "$CONF_PASS" ]; then
+    nmcli dev wifi connect "$CONF_SSID" password "$CONF_PASS" ifname wlan0 2>&1 | logger -t "$LOG_TAG" || true
+  else
+    nmcli dev wifi connect "$CONF_SSID" ifname wlan0 2>&1 | logger -t "$LOG_TAG" || true
+  fi
+  # Clear credentials from the FAT32 file immediately (don't leave passwords readable)
+  sed -i 's/^ssid[ \t]*=.*/ssid =/' "$CONF"
+  sed -i 's/^password[ \t]*=.*/password =/' "$CONF"
+  sleep 6
+fi
+
+# ── Check internet ────────────────────────────────────────────────────────────
+check_internet() {
+  curl -s --connect-timeout 5 --max-time 8 https://1.1.1.1 -o /dev/null 2>/dev/null
+}
+
+log "Checking internet..."
+ONLINE=false
+for i in 1 2 3 4 5 6; do
+  if check_internet; then ONLINE=true; break; fi
+  sleep 3
+done
+
+if $ONLINE; then
+  log "Internet available — normal boot"
+  exit 0
+fi
+
+# ── No internet — enter AP setup mode ────────────────────────────────────────
+log "No internet after 30s — entering AP setup mode"
+
+DEVICE_ID=$(node -e "
+const {createHash}=require('crypto');
+const {readFileSync}=require('fs');
+try {
+  const m=readFileSync('/proc/cpuinfo','utf8').match(/Serial\s*:\s*([0-9a-f]+)/i);
+  console.log(m?createHash('sha256').update(m[1]).digest('hex').slice(0,4):'xxxx');
+} catch { console.log('xxxx'); }
+" 2>/dev/null || echo "xxxx")
+
+HOTSPOT_SSID="EdgeController-$DEVICE_ID"
+HOTSPOT_PASS="edgesetup"
+
+log "Starting hotspot SSID='$HOTSPOT_SSID'"
+
+# Remove stale AP profile
+nmcli con delete "edge-setup" 2>/dev/null || true
+
+# Create AP connection — NM shared mode handles DHCP + NAT automatically
+nmcli con add type wifi ifname wlan0 con-name "edge-setup" autoconnect no \
+  ssid "$HOTSPOT_SSID" \
+  802-11-wireless.mode ap \
+  802-11-wireless.band bg \
+  ipv4.method shared \
+  ipv4.addresses "$AP_IP/24" \
+  wifi-sec.key-mgmt wpa-psk \
+  wifi-sec.psk "$HOTSPOT_PASS" 2>&1 | logger -t "$LOG_TAG"
+
+nmcli con up "edge-setup" 2>&1 | logger -t "$LOG_TAG"
+
+# Wait for AP to come up and NM dnsmasq to start
+sleep 5
+
+# ── Port 80 → 3000 redirect (captive portal) ─────────────────────────────────
+iptables -t nat -F PREROUTING 2>/dev/null || true
+iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-port 3000
+
+# Write AP mode flag for edgecontroller to read
+printf '%s' "$HOTSPOT_SSID" > "$AP_FLAG"
+
+log "AP mode active | SSID: $HOTSPOT_SSID | Pass: $HOTSPOT_PASS | IP: $AP_IP"
+exit 0

@@ -1658,6 +1658,7 @@ server.on('upgrade', (request, socket, head) => {
 function safeConfig() {
   return {
     boxId:   config.boxId,
+    version: APP_VERSION,
     auth:    { enabled: config.auth?.enabled || false, adminUsername: config.auth?.admin?.username || '', userUsername: config.auth?.user?.username || '', hasUser: !!(config.auth?.user?.passwordHash) },
     tunnel:  { enabled: config.tunnel?.enabled || false, hostname: config.tunnel?.hostname || '', hasToken: !!config.tunnel?.token, status: tunnelStatus }
   }

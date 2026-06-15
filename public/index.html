@@ -597,6 +597,10 @@ select.mci{cursor:pointer}
           <label>Device ID</label>
           <span id="cfg-boxid" style="font-family:monospace;font-size:14px;color:#4fc3f7;background:#0a1a24;border:1px solid #1a3a50;border-radius:6px;padding:6px 10px;display:inline-block"></span>
         </div>
+        <div class="cfg-row">
+          <label>Version</label>
+          <span id="cfg-version" style="font-family:monospace;font-size:14px;color:#888;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:6px;padding:6px 10px;display:inline-block">—</span>
+        </div>
       </div>
 
       <!-- WiFi -->
@@ -825,6 +829,7 @@ function handle(m) {
       if(m.role) S.role=m.role
       if(m.deck) { S.deck=m.deck; renderDeckCard() }
       if(m.config?.boxId){ const hb=document.getElementById('hdr-boxid'); if(hb)hb.textContent=m.config.boxId; const cb=document.getElementById('cfg-boxid'); if(cb)cb.textContent=m.config.boxId }
+      if(m.config?.version){ const vb=document.getElementById('cfg-version'); if(vb)vb.textContent='v'+m.config.version }
       renderAll(); break
     case 'deck:status':
       S.deck={ status:m.status, name:m.name }; renderDeckCard(); break

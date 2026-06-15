@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-REPO="https://github.com/alansteedman/edgecontroller"
+REPO="https://github.com/alansteedman/edgecontrol"
 APP_DIR="/home/alans/edgecontroller"
 APP_USER="alans"
 NODE_VERSION="22"

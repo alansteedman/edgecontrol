@@ -1,4 +1,12 @@
 node_modules/
 config.json
+macros.json
+waveforms.json
 *.log
+*.bak*
 .env
+audio/
+icons/
+ecosystem.config.cjs
+package-lock.json
+pawprints_raw.py

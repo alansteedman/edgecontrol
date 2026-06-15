@@ -11,6 +11,7 @@ import multer from 'multer'
 import { exec, execSync, spawn } from 'child_process'
 import net from 'net'
 import { EventEmitter } from 'events'
+EventEmitter.defaultMaxListeners = 100
 import { SerialPort } from 'serialport'
 import { ReadlineParser } from '@serialport/parser-readline'
 
@@ -311,6 +312,29 @@ async function getAdapter() {
   return adapter
 }
 
+
+// Global BLE device proxy cache — avoids creating multiple DBus proxies for the same address
+// which leaks match rules and causes dbus connection failures
+const _bleDeviceCache = new Map()   // addr.toLowerCase() -> {proxy, name}
+const _bleDevicePending = new Map()  // addr -> Promise (dedup concurrent requests)
+async function getCachedDevice(adp, addr) {
+  const key = addr.toLowerCase()
+  if (_bleDeviceCache.has(key)) return _bleDeviceCache.get(key)
+  if (_bleDevicePending.has(key)) return _bleDevicePending.get(key)
+  const p = adp.getDevice(addr).then(async proxy => {
+    const name = await proxy.getName().catch(()=>'')
+    const result = { proxy, name }
+    _bleDeviceCache.set(key, result)
+    _bleDevicePending.delete(key)
+    return result
+  }).catch(err => { _bleDevicePending.delete(key); throw err })
+  _bleDevicePending.set(key, p)
+  return p
+}
+
+
+// BLE exclusive-access mutex — prevents concurrent connect+scan from different device classes
+let _bleConnecting = 0
 // Register a JustWorks pairing agent so pair() can complete without user input
 async function registerPairingAgent() {
   try {
@@ -352,7 +376,7 @@ async function registerPairingAgent() {
     console.log('[agent] Agent registration failed (non-fatal):', e.message)
   }
 }
-registerPairingAgent()
+// registerPairingAgent() — temporarily disabled for coyote debugging
 
 const devices = {}
 const clients = new Set()
@@ -454,6 +478,7 @@ class CoyoteDevice {
     try {
       const adp = await getAdapter()
       console.log(`[${this.id}] Starting discovery...`)
+      while (_bleConnecting > 0) { await new Promise(r=>setTimeout(r,2000)) }
       if (!await adp.isDiscovering()) await adp.startDiscovery()
       const foundResult = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('Device not found in 15s')), 15000)
@@ -462,8 +487,7 @@ class CoyoteDevice {
             const addrs = await adp.devices()
             for (const addr of addrs) {
               try {
-                const d = await adp.getDevice(addr)
-                const name = await d.getName().catch(()=>'')
+                const {proxy: d, name} = await getCachedDevice(adp, addr)
                 if (name.startsWith('47L')) {
                   if (this.bleName && name !== this.bleName) continue
                   // If this device has a specific MAC configured, only match that exact device
@@ -487,6 +511,7 @@ class CoyoteDevice {
       const device = foundResult.d
       this._device=device
       this._connectedAddr=foundResult.addr.toLowerCase()
+      _bleConnecting++
       // Stop discovery and VERIFY it stopped — BCM4345C0 chip can't connect while scanning
       for (let i=0; i<8; i++) {
         await adp.stopDiscovery().catch(()=>{})
@@ -523,8 +548,9 @@ class CoyoteDevice {
       await this.writeChar.writeValue(Buffer.from([0xBF, 0xC8, 0xC8, 0x00, 0x00, 0x00, 0x00]), { type:'command' })
       await new Promise(r=>setTimeout(r,200))
       this._connectLock=false; this.status='connected'
-      this._retryDelay=5000  // reset backoff on successful connect
+      this._retryDelay=5000; this._leAbortCount=0  // reset on success
       broadcast({ type:'device:status', id:this.id, status:'connected' })
+      _bleConnecting--
       console.log(`[${this.id}] Ready`)
       this._startSending()
       try {
@@ -533,18 +559,15 @@ class CoyoteDevice {
             console.log(`[${this.id}] Disconnected`)
             this._stopSending(); this._connectLock=false; this.status='disconnected'; this._connectedAddr=null; this._smoothA=0; this._smoothB=0
             broadcast({ type:'device:status', id:this.id, status:'disconnected' })
-            setTimeout(()=>this.connect().catch(e=>console.error(`[${this.id}] reconnect:`,e.message)),5000)
           }
         })
       } catch {}
     } catch (err) {
       console.error(`[${this.id}] connect error:`, err.message)
+      if (_bleConnecting > 0) _bleConnecting--
       this.status='error'; this._connectLock=false
       broadcast({ type:'device:status', id:this.id, status:'error', error:err.message })
       try { await adapter?.stopDiscovery() } catch {}
-      // Exponential backoff — repeated hammering can lock up the Coyote firmware.
-      // le-connection-abort-by-local often means the device is in a bad state;
-      // backing off gives it time to recover. Cap at 60s.
       const delay = this._retryDelay
       this._retryDelay = Math.min(this._retryDelay * 2, 60000)
       console.log(`[${this.id}] Retrying in ${delay/1000}s (backoff: ${this._retryDelay/1000}s next)`)
@@ -627,6 +650,240 @@ class CoyoteDevice {
   }
 }
 
+
+
+// ── PawPrints Wireless Sensor ─────────────────────────────────────────────────
+class PawPrintsDevice {
+  constructor(id, name, mac, bleName) {
+    this.id=id; this.name=name; this.type='pawprints'
+    this.mac=(mac||'').toLowerCase(); this.bleName=bleName||null
+    this.status='disconnected'
+    this.gattServer=null; this.writeChar=null; this.notifyChar=null
+    this.buttons=[false,false,false]
+    this.accel={x:0,y:0,z:0}
+    this.gyro={x:0,y:0,z:0}
+    this.battery=null
+    this._device=null; this._connectLock=false; this._connectedAddr=null
+    this._retryDelay=5000
+    this._b3Timer=null
+    this._lastCmd1Time=0
+    this._cmd1Interval=100
+  }
+
+  async connect() {
+    if (this._connectLock || this.status==='connected') return
+    this._connectLock=true; this.status='connecting'
+    broadcast({ type:'device:status', id:this.id, status:'connecting' })
+    try {
+      const adp=await getAdapter()
+      console.log(`[${this.id}] PawPrints: starting discovery...`)
+      while (_bleConnecting > 0) { await new Promise(r=>setTimeout(r,2000)) }
+      if (!await adp.isDiscovering()) await adp.startDiscovery()
+      const foundResult=await new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>reject(new Error('PawPrints not found in 25s')),25000)
+        const check=async()=>{
+          // Yield the chip immediately if something else is connecting
+          if (_bleConnecting > 0) {
+            clearTimeout(timer)
+            await adp.stopDiscovery().catch(()=>{})
+            reject(new Error('BLE busy, will retry'))
+            return
+          }
+          try {
+            const addrs=await adp.devices()
+            for (const addr of addrs) {
+              try {
+                const {proxy: d, name}=await getCachedDevice(adp, addr)
+                const addrL = addr.toLowerCase()
+                // Match by name prefix OR by stored MAC (directed advertising has no name)
+                const nameMatch = name.startsWith('47L120')
+                const macMatch = this.mac && addrL === this.mac.toLowerCase()
+                if (nameMatch || macMatch) {
+                  if (nameMatch && this.bleName && name!==this.bleName) continue
+                  if (nameMatch && this.mac && addrL!==this.mac.toLowerCase()) continue
+                  const alreadyUsed=Object.values(devices).some(
+                    other=>other!==this && other.type==='pawprints' &&
+                           other.status==='connected' &&
+                           addrL===(other._connectedAddr||other.mac||'')
+                  )
+                  if (alreadyUsed) continue
+                  // Only accept if RSSI is live (non-zero = device actively advertising right now)
+                  // RSSI=0/null means device is in BlueZ cache but not currently advertising
+                  const rssi = await d.getRSSI().catch(()=>null)
+                  if (!rssi) continue
+                  clearTimeout(timer); console.log(`[${this.id}] Found: ${name||'(no name)'} at ${addr} (RSSI ${rssi})`); resolve({d,addr}); return
+                }
+              } catch {}
+            }
+          } catch {}
+          setTimeout(check,500)
+        }
+        check()
+      })
+      this._device=foundResult.d; this._connectedAddr=foundResult.addr.toLowerCase()
+      _bleConnecting++
+      // Stop discovery — BCM4345 can't scan and connect at the same time
+      await adp.stopDiscovery().catch(()=>{})
+      await new Promise(r=>setTimeout(r,500))
+      // Disable bonding so BlueZ does NOT send SMP Pairing Request (PawPrints rejects SMP, causing abort)
+      await new Promise(res => exec('sudo btmgmt bondable off', res))
+      await new Promise(res => exec('sudo bluetoothctl trust ' + foundResult.addr.toUpperCase(), res))
+      await new Promise(r=>setTimeout(r,200))
+      console.log(`[${this.id}] Connecting...`)
+      // Connect with retry for 'In Progress' (happens when pm2 restarts mid-connect, clears in ~5s)
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await Promise.race([
+            this._device.connect(),
+            new Promise((_,rej)=>setTimeout(()=>rej(new Error('connect timeout')),20000))
+          ])
+          break
+        } catch(e) {
+          if (e.message && e.message.includes('In Progress') && attempt < 3) {
+            console.log(`[${this.id}] In Progress (attempt ${attempt}), waiting 5s for BlueZ to clear...`)
+            await new Promise(r=>setTimeout(r,5000))
+            continue
+          }
+          throw e
+        }
+      }
+      console.log(`[${this.id}] HCI connected OK, getting GATT...`)
+      // GATT services should be cached from previous attempts — should be fast
+      this.gattServer=await Promise.race([
+        this._device.gatt(),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('GATT timeout')),10000))
+      ])
+      const svc=await this.gattServer.getPrimaryService('0000180c-0000-1000-8000-00805f9b34fb')
+      this.writeChar =await svc.getCharacteristic('0000150a-0000-1000-8000-00805f9b34fb')
+      // Send 0x50 config IMMEDIATELY — device disconnects if not received quickly
+      const cfg=Buffer.alloc(17,0)
+      cfg[0]=0x50; cfg[1]=0x04; cfg[2]=0xD0
+      await this.writeChar.writeValue(cfg,{type:'command'})
+      await new Promise(r=>setTimeout(r,150))
+      // Enable data stream
+      await this.writeChar.writeValue(Buffer.from([0x53,0x04,0xFF]),{type:'command'})
+      // Now set up notifications (0x50 already sent — device won't disconnect)
+      this.notifyChar=await svc.getCharacteristic('0000150b-0000-1000-8000-00805f9b34fb')
+      await this.notifyChar.startNotifications()
+      this.notifyChar.on('valuechanged', buf=>this._onNotify(Buffer.from(buf)))
+
+      this._connectLock=false; this.status='connected'; this._retryDelay=5000
+      broadcast({ type:'device:status', id:this.id, status:'connected' })
+      _bleConnecting--
+      exec('sudo btmgmt bondable on', ()=>{})
+      console.log(`[${this.id}] PawPrints ready`)
+      try {
+        this._device.helper.on('PropertiesChanged',(iface,props)=>{
+          if (iface==='org.bluez.Device1' && props.Connected?.value===false) {
+            console.log(`[${this.id}] Disconnected`)
+            this._connectLock=false; this.status='disconnected'; this._connectedAddr=null
+            this.buttons=[false,false,false]; this.accel={x:0,y:0,z:0}
+            broadcast({ type:'device:status', id:this.id, status:'disconnected' })
+          }
+        })
+      } catch {}
+    } catch(err) {
+      exec('sudo btmgmt bondable on', ()=>{})
+      console.error(`[${this.id}] connect error:`,err.message)
+      if (_bleConnecting > 0) _bleConnecting--
+      this.status='error'; this._connectLock=false
+      broadcast({ type:'device:status', id:this.id, status:'error', error:err.message })
+      try { await adapter?.stopDiscovery() } catch {}
+      const delay=this._retryDelay
+      const isTransient = err.message && (
+        err.message.includes('le-connection-abort-by-local') ||
+        err.message.includes('not found in') ||
+        err.message.includes('connect timeout') ||
+        err.message.includes('In Progress')
+      )
+      if (err.message && err.message.includes('le-connection-abort-by-local')) {
+        // LL timing failure (0x3E): restart bluetooth to clear BlueZ passive-scan state,
+        // but ONLY if no coyotes are currently connected — avoid disrupting active sessions.
+        const coyoteActive = Object.values(devices).some(d => d.type==='coyote' && d.status==='connected')
+        if (!coyoteActive) {
+          console.log('[pawprints] Restarting bluetooth to clear LL failure state (no active coyote session)...')
+          await new Promise(res=>exec('sudo systemctl restart bluetooth',res))
+          await new Promise(r=>setTimeout(r,3000))
+        }
+      }
+      if (!isTransient) {
+        this._retryDelay=Math.min(this._retryDelay*2,60000)
+      }
+      console.log(`[${this.id}] Stopped — click Connect to retry`)
+    }
+  }
+
+  _b3Pressed(v) {
+    const was=this.buttons[2]
+    if (was===v) return
+    this.buttons=[this.buttons[0],this.buttons[1],v]
+    broadcast({ type:'pawprints:data', id:this.id, buttons:this.buttons, accel:this.accel, raw:'' })
+    console.log('[' + this.id + '] B3=' + v)
+  }
+
+  _onNotify(buf) {
+    if (buf.length < 13) return
+    const cmd=buf[0]
+    if (cmd===0x01) {
+      // Normal sensor packet. B3 is detected when cmd=0x01 packets stop arriving
+      // (cmd=0x00 packets may still come during B3 press but don't count as "active")
+      const now=Date.now()
+      if (this._lastCmd1Time>0) { const iv=now-this._lastCmd1Time; if (iv<500) this._cmd1Interval=this._cmd1Interval*0.8+iv*0.2 }
+      this._lastCmd1Time=now
+      clearTimeout(this._b3Timer)
+      if (this.buttons[2]) this._b3Pressed(false)
+      // 2.5x observed interval: 1 dropped packet (2x) doesn't fire, 2 dropped (3x) does
+      this._b3Timer = setTimeout(() => this._b3Pressed(true), Math.max(200, this._cmd1Interval*2.5))
+      // buf[1]: B1 inverted (0x00=pressed, 0x01=not) -- user confirmed
+      // buf[2]: B2 inverted (0x00=pressed, 0x01=not) -- by analogy
+      // buf[4,5,6]: gyro X,Y,Z as signed int8 (confirmed by spin test)
+      // buf[7-12]: accel X,Y,Z as int16BE
+      const b1=buf[1]===0x00
+      const b2=buf[2]===0x00
+      const b3=this.buttons[2]
+      const gx=buf.readInt8(4)
+      const gy=buf.readInt8(5)
+      const gz=buf.readInt8(6)
+      const x=buf.readInt16BE(7)
+      const y=buf.readInt16BE(9)
+      const z=buf.readInt16BE(11)
+      const wasPressed=this.buttons.some(Boolean)
+      this.buttons=[b1,b2,b3]
+      this.accel={x,y,z}
+      this.gyro={x:gx,y:gy,z:gz}
+      if (b1||b2||b3||wasPressed) console.log('[' + this.id + '] buttons: [' + b1 + ',' + b2 + ',' + b3 + '] accel: ' + x + ',' + y + ',' + z)
+      broadcast({ type:'pawprints:data', id:this.id, buttons:this.buttons, accel:this.accel, gyro:this.gyro, raw:buf.toString('hex') })
+    } else if (cmd===0x00) {
+      // cmd=0x00 packets arrive periodically but carry no useful sensor data
+    } else if (cmd===0xD0) {
+      // Physical passthrough mode: buf[1]=btn3, buf[2]=btn2, buf[3]=btn1(top)
+      // buf[8-9]=X int16BE, buf[10-11]=Y, buf[12-13]=Z
+      if (buf.length < 14) return
+      const b1=buf[3]===0x00
+      const b2=buf[2]===0x00
+      const b3=buf[1]===0x00
+      const x=buf.readInt16BE(8)
+      const y=buf.readInt16BE(10)
+      const z=buf.readInt16BE(12)
+      this.buttons=[b1,b2,b3]
+      this.accel={x,y,z}
+      broadcast({ type:'pawprints:data', id:this.id, buttons:this.buttons, accel:this.accel, raw:buf.toString('hex') })
+    } else if (cmd===0x51) {
+      if (buf.length>=4) { this.battery=buf[3]; broadcast({ type:'pawprints:battery', id:this.id, battery:this.battery }) }
+    }
+  }
+
+  async disconnect() {
+    try { if (this._device) await this._device.disconnect() } catch {}
+    this._connectedAddr=null; this.status='disconnected'
+    this.buttons=[false,false,false]; this.accel={x:0,y:0,z:0}
+    broadcast({ type:'device:status', id:this.id, status:'disconnected' })
+  }
+
+  toJSON() {
+    return { id:this.id, type:'pawprints', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, buttons:this.buttons, accel:this.accel, battery:this.battery }
+  }
+}
 
 // ── Nimble Stroker Device ─────────────────────────────────────────────────────
 // 7-byte binary serial protocol at 115200 baud, 50Hz send rate
@@ -867,7 +1124,6 @@ class EstimDevice {
     if (this.status==='connected') {
       this.status='disconnected'
       broadcast({type:'device:status',id:this.id,status:'disconnected'})
-      setTimeout(()=>this.connect().catch(()=>{}), 5000)
     }
     if (this._fd) { fsClose(this._fd,()=>{}); this._fd=null }
     this._connectLock=false
@@ -1058,7 +1314,7 @@ class EomDevice {
     if (!this._everConnected) return  // Never auto-retry on initial failure — user must click Connect
     // Wait 30s before reconnecting — gives ESP32 time to reboot and free zombie connections
     console.log(`[${this.id}] EoM reconnecting in 30s...`)
-    this._reconnectTimer=setTimeout(()=>{ this._reconnectTimer=null; if(this.status!=='connected') this.connect().catch(()=>{}) }, 30000)
+    // No auto-reconnect — user must click Connect
   }
 
   _send(obj) { if (this._ws && this._ws.readyState===1) this._ws.send(JSON.stringify(obj)) }
@@ -1146,7 +1402,8 @@ function rebuildGo2rtcConfig() {
 }
 
 function createDevice(cfg) {
-  if (cfg.type==='coyote') return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
+  if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
+  if (cfg.type==='pawprints') return new PawPrintsDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
   if (cfg.type==='eom')    return new EomDevice(cfg.id,cfg.name,cfg.ip,cfg.port)
   if (cfg.type==='nimble') return new NimbleDevice(cfg.id,cfg.name,cfg.ttyPath)
   if (cfg.type==='estim')  return new EstimDevice(cfg.id,cfg.name,cfg.ttyPath)
@@ -1157,8 +1414,7 @@ for (const d of config.devices) {
   try {
     const dev = createDevice(d)
     devices[d.id] = dev
-    // All devices: user must click Connect in the UI.
-    // Auto-connecting serial devices on startup causes stale fds and false 'connected' states.
+    if (dev.type === 'coyote') setTimeout(() => dev.connect().catch(() => {}), 3000)
   } catch {}
 }
 // Always rebuild go2rtc config on startup so it stays in sync with saved cameras
@@ -1181,9 +1437,10 @@ async function doScan() {
           try {
             const d=await adp.getDevice(addr)
             const name=await d.getName().catch(()=>'')||'(unknown)'
-            const isCoyote=name.startsWith('47L')
+            const isCoyote=name.startsWith('47L121')
+            const isPawPrints=name.startsWith('47L120')
             const rssi=await d.getRSSI().catch(()=>0)
-            const result={mac:addr,name,rssi,isCoyote}
+            const result={mac:addr,name,rssi,isCoyote,isPawPrints}
             scanResults.push(result)
             broadcast({ type:'scan:found', device:result })
           } catch {}
@@ -1763,12 +2020,88 @@ class MacroRunner {
         break
       }
 
+      case 'wait_pawprints': {
+        const pp = (cfg.ppRef && devices[cfg.ppRef]?.status === 'connected') ? devices[cfg.ppRef] : Object.values(devices).find(d => d instanceof PawPrintsDevice && d.status === 'connected')
+        if (!pp) {
+          // No device connected — skip the wait
+          await this._exec(next(), blockMap, adj, depth); break
+        }
+        const mode = cfg.mode || 'Button Press'
+        if (mode === 'Button Press') {
+          const btnIdx = { B1: 0, B2: 1, B3: 2 }[cfg.button]  // undefined = Any
+          let prevState = pp.buttons.slice()
+          broadcast({ type: 'macro:wait', id: this.macro.id, blockId, prompt: cfg.button && cfg.button !== 'Any' ? `Press ${cfg.button} on PawPrints` : 'Press any PawPrints button' })
+          while (!this._abort) {
+            const cur = pp.buttons
+            // Detect rising edge: was false, now true
+            const triggered = btnIdx !== undefined
+              ? (!prevState[btnIdx] && cur[btnIdx])
+              : cur.some((v, i) => !prevState[i] && v)
+            if (triggered) break
+            prevState = cur.slice()
+            await this._sleep(50)
+          }
+        } else {
+          // Tilt deviation mode — trigger when device moves away from calibrated position
+          const axis = cfg.axis || 'Any'
+          const sensitivity = cfg.sensitivity ?? 15
+          const cal = { x: cfg.calX ?? 0, y: cfg.calY ?? 0, z: cfg.calZ ?? 0 }
+          const axes = axis === 'Any' ? ['x','y','z'] : [axis.toLowerCase()]
+          broadcast({ type: 'macro:wait', id: this.macro.id, blockId, prompt: `Waiting for tilt on ${axis}...` })
+          while (!this._abort) {
+            const hit = axes.some(a => Math.abs((pp.accel[a] ?? 0) - cal[a]) > sensitivity)
+            if (hit) break
+            await this._sleep(100)
+          }
+        }
+        this._waitResolve = null
+        if (!this._abort) await this._exec(next(), blockMap, adj, depth)
+        break
+      }
+
       case 'if_else': {
         const gt = (cfg.cond || '').includes('>')
         const yes = gt ? getEomArousal() > (cfg.thr ?? 80) : getEomArousal() < (cfg.thr ?? 80)
         broadcast({ type: 'macro:label', id: this.macro.id, blockId, text: yes ? '→ YES' : '→ NO', color: yes ? '#4ade80' : '#f87171' })
         await this._sleep(350)
         await this._exec(next(yes ? 'oy' : 'on'), blockMap, adj, depth); break
+      }
+
+      case 'if_pawprints': {
+        const pp = (cfg.ppRef && devices[cfg.ppRef]?.status === 'connected') ? devices[cfg.ppRef] : Object.values(devices).find(d => d instanceof PawPrintsDevice && d.status === 'connected')
+        if (!pp) {
+          broadcast({ type: 'macro:label', id: this.macro.id, blockId, text: '→ NO (no device)', color: '#f87171' })
+          await this._sleep(350)
+          await this._exec(next('on'), blockMap, adj, depth); break
+        }
+        const mode = cfg.mode || 'Button Press'
+        let yes = false
+        if (mode === 'Button Press') {
+          // Wait for any button press, YES if it matches configured button
+          const btnIdx = { B1: 0, B2: 1, B3: 2 }[cfg.button]  // undefined = Any
+          let prevState = pp.buttons.slice()
+          while (!this._abort) {
+            const cur = pp.buttons
+            const pressedIdx = cur.findIndex((v, i) => !prevState[i] && v)
+            if (pressedIdx !== -1) {
+              yes = btnIdx === undefined ? true : pressedIdx === btnIdx
+              break
+            }
+            prevState = cur.slice()
+            await this._sleep(50)
+          }
+        } else {
+          // Tilt: instant snapshot — YES if currently past threshold
+          const axis = cfg.axis || 'Any'
+          const sensitivity = cfg.sensitivity ?? 15
+          const cal = { x: cfg.calX ?? 0, y: cfg.calY ?? 0, z: cfg.calZ ?? 0 }
+          const axes = axis === 'Any' ? ['x','y','z'] : [axis.toLowerCase()]
+          yes = axes.some(a => Math.abs((pp.accel[a] ?? 0) - cal[a]) > sensitivity)
+        }
+        broadcast({ type: 'macro:label', id: this.macro.id, blockId, text: yes ? '→ YES' : '→ NO', color: yes ? '#4ade80' : '#f87171' })
+        await this._sleep(350)
+        if (!this._abort) await this._exec(next(yes ? 'oy' : 'on'), blockMap, adj, depth)
+        break
       }
 
       case 'loop': {

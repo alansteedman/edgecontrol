@@ -223,6 +223,24 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 .cfg-row label{min-width:80px;font-size:11px;color:#555}
 .cfg-row input{flex:1;background:#141414;border:1px solid #2a2a2a;color:#e0e0e0;padding:6px 9px;border-radius:5px;font-size:13px}
 
+
+/* ── PawPrints device card ── */
+.pp-btn-on{background:#1a3a5a!important;border-color:#4fc3f7!important;color:#4fc3f7!important}
+.pp-card{background:#181818;border:1px solid #222;border-radius:10px;padding:15px;margin-bottom:14px}
+.pp-btn-row{display:flex;gap:10px;justify-content:center;margin:10px 0}
+.pp-btn{width:44px;height:44px;border-radius:50%;background:#111;border:2px solid #2a2a2a;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#444;transition:all .1s;letter-spacing:.3px}
+.pp-btn.pressed{background:#1a3a50;border-color:#4fc3f7;color:#4fc3f7;box-shadow:0 0 8px #4fc3f744}
+.pp-accel{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 0}.pp-accel2{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:4px 0}
+.pp-axis{background:#111;border:1px solid #1a1a1a;border-radius:6px;padding:6px 8px;text-align:center}
+.pp-axis-lbl{font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.pp-axis-val{font-size:16px;font-weight:700;color:#e0e0e0;font-variant-numeric:tabular-nums}
+.pp-tilt{width:120px;height:120px;background:#111;border:1px solid #1e1e1e;border-radius:50%;position:relative;margin:0 auto 10px;flex-shrink:0}
+.pp-tilt-dot{width:14px;height:14px;border-radius:50%;background:#4fc3f7;position:absolute;transform:translate(-50%,-50%);transition:left .08s,top .08s;box-shadow:0 0 6px #4fc3f788}
+.pp-tilt-cross{position:absolute;top:50%;left:0;right:0;height:1px;background:#222;transform:translateY(-50%)}
+.pp-tilt-cross2{position:absolute;left:50%;top:0;bottom:0;width:1px;background:#222;transform:translateX(-50%)}
+.pp-modal-inner{display:flex;flex-direction:column;align-items:center;gap:12px;padding-top:8px}
+.pp-raw{font-family:monospace;font-size:10px;color:#333;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:5px;padding:6px 8px;max-height:80px;overflow-y:auto;width:100%;word-break:break-all}
+
 /* ── Scan modal ── */
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:200;align-items:center;justify-content:center}
 .overlay.open{display:flex}
@@ -314,6 +332,10 @@ select.mci{cursor:pointer}
     <button class="side-btn" id="nav-estim" style="display:none" onclick="showTab('estim',this)">
       <span class="side-icon"><img src="/icons/estim.png" alt="E-Stim"></span>
       <span class="side-lbl">E-Stim 2B</span>
+    </button>
+    <button class="side-btn" id="nav-pawprints" style="display:none" onclick="showTab('pawprints',this)">
+      <span class="side-icon">🐾</span>
+      <span class="side-lbl">PawPrints</span>
     </button>
     <button class="side-btn" id="nav-camera" onclick="showTab('camera',this)">
       <span class="side-icon">📷</span>
@@ -543,6 +565,17 @@ select.mci{cursor:pointer}
         <div class="sec-label">E-Stim Systems 2B</div>
       </div>
       <div id="estim-cards"><div class="empty">No E-Stim 2B devices — add one from Devices</div></div>
+    </div>
+  </div>
+
+
+  <!-- PawPrints tab -->
+  <div id="tab-pawprints" class="tab-pane">
+    <div class="scroll" style="padding:16px">
+      <div class="sec-row" style="margin-bottom:14px">
+        <div class="sec-label">PawPrints Sensors</div>
+      </div>
+      <div id="pp-cards"><div class="empty">No PawPrints devices — add one from Devices</div></div>
     </div>
   </div>
 
@@ -804,7 +837,7 @@ function handle(m) {
       window._handleMacroWS?.(m); break
     case 'device:status':
       if(S.devices[m.id]) S.devices[m.id].status=m.status
-      renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); break
+      renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); renderPawPrintsCards(); break
     case 'device:state':
       if(S.devices[m.id]){
         if(m.channels) S.devices[m.id].channels=m.channels
@@ -850,6 +883,17 @@ function handle(m) {
       // Re-fetch full waveforms to get audio frame data (stripped from WS broadcast)
       fetch('/api/waveforms').then(r=>r.json()).then(wfs=>{ if(wfs?.builtin){ S.waveforms=wfs; renderWfTab(); renderAudioList(); renderCoyoteCards() } }).catch(()=>{})
       break
+    case 'pawprints:data':
+      if(S.devices[m.id]){ S.devices[m.id].buttons=m.buttons; S.devices[m.id].accel=m.accel }
+      updatePpCard(m.id, m.buttons, m.accel)
+      updatePpModal(m.id, m.buttons, m.accel, m.gyro, m.raw); break
+    case 'pawprints:gyro':
+      if(S.devices[m.id]) S.devices[m.id].gyro=m.gyro
+      if(_ppModalId===m.id){ const gxe=document.getElementById('pp-gx'); if(gxe)gxe.textContent=m.gyro.x; const gye=document.getElementById('pp-gy'); if(gye)gye.textContent=m.gyro.y; const gze=document.getElementById('pp-gz'); if(gze)gze.textContent=m.gyro.z }; break
+    case 'pawprints:battery':
+      if(S.devices[m.id]) S.devices[m.id].battery=m.battery
+      const ppBatEl=document.getElementById('pp-bat-'+m.id); if(ppBatEl) ppBatEl.textContent=m.battery+'%'
+      const ppBatMod=document.getElementById('pp-bat-modal'); if(ppBatMod&&_ppModalId===m.id) ppBatMod.textContent=m.battery+'%'; break
     case 'tunnel:status':
       updateTunnelUI({status:m.status,hostname:m.hostname,enabled:m.enabled}); break
     case 'scan:start':
@@ -893,10 +937,12 @@ function renderAll() {
   const hasNimble  = Object.values(S.devices).some(d=>d.type==='nimble')
   const hasEstim   = Object.values(S.devices).some(d=>d.type==='estim')
   const hasCamera  = Object.values(S.devices).some(d=>d.type==='camera')
+  const hasPawPrints = Object.values(S.devices).some(d=>d.type==='pawprints')
   document.getElementById('nav-coyote').style.display = hasCoyote ? '' : 'none'
   document.getElementById('nav-eom').style.display    = hasEom    ? '' : 'none'
   document.getElementById('nav-nimble').style.display = hasNimble ? '' : 'none'
   document.getElementById('nav-estim').style.display  = hasEstim  ? '' : 'none'
+  document.getElementById('nav-pawprints').style.display = hasPawPrints ? '' : 'none'
   document.getElementById('nav-camera').style.display = hasCamera ? '' : 'none'
   document.getElementById('nav-config').style.display = S.role==='admin' ? '' : 'none'
   renderDevList()
@@ -904,6 +950,7 @@ function renderAll() {
   renderEomCards()
   renderNimbleCards()
   renderEstimCards()
+  renderPawPrintsCards()
   renderGroups()
   renderWfTab()
   renderAudioList()
@@ -957,7 +1004,7 @@ function eomUpdateDenials(id, count) {
 }
 
 // ── Devices tab ───────────────────────────────────────────────────────────────
-const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡' }
+const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾' }
 
 function renderDevList() {
   const el=document.getElementById('dev-list')
@@ -975,6 +1022,7 @@ function renderDevList() {
         <div class="dev-row-sub">${d.type} · ${d.type==='eom'?(d.ip+':'+d.port):d.type==='camera'?d.ip:(d.bleName||d.mac||d.ttyPath||'')}</div>
       </div>
       <div class="status-dot ${dotClass}"></div>
+      ${conn&&d.type==='pawprints'?`<button class="btn btn-ghost btn-xs" onclick="openPpModal('${d.id}')">Monitor</button>`:''}
       ${conn
         ?`<button class="btn btn-ghost btn-xs" onclick="discDev('${d.id}')">Disconnect</button>`
         :`<button class="btn btn-primary btn-xs" onclick="connDev('${d.id}')">Connect</button>`}
@@ -2666,7 +2714,8 @@ const DEVICE_TYPES = [
   {type:'eom',    icon:'〰', label:'EoM',          sub:'WiFi',        step:'wifi'},
   {type:'nimble', icon:'◎', label:'NimbleStroker', sub:'USB serial',  step:'usb'},
   {type:'estim',  icon:'⚡', label:'E-Stim 2B',    sub:'USB serial',  step:'usb'},
-  {type:'camera', icon:'📷', label:'IP Camera',    sub:'RTSP / ONVIF',step:'camera'},
+  {type:'camera',    icon:'📷', label:'IP Camera',    sub:'RTSP / ONVIF',step:'camera'},
+  {type:'pawprints', icon:'🐾', label:'PawPrints',    sub:'BLE sensor',  step:'ble'},
 ]
 function openScan(){
   document.getElementById('scan-overlay').classList.add('open')
@@ -2732,14 +2781,16 @@ function appendScanResult(dev){
   const alreadyBadge=existing
     ? `<span style="font-size:9px;font-weight:700;background:#1a1a1a;color:#666;border:1px solid #333;border-radius:4px;padding:1px 6px;margin-left:5px;vertical-align:middle">ADDED · ${existing.name}</span>`
     : ''
-  item.innerHTML='<div style="flex:1"><div class="scan-name">'+dev.name+(dev.isCoyote?'<span class="coy-badge">COYOTE</span>':'')+alreadyBadge+'</div><div class="scan-mac">'+dev.mac+' · '+dev.rssi+' dBm</div></div>'
+  const ppBadge=dev.isPawPrints?'<span class="coy-badge" style="background:#1a2535;color:#4fc3f7;border-color:#1e3a5a">PAWPRINTS</span>':''
+  item.innerHTML='<div style="flex:1"><div class="scan-name">'+dev.name+(dev.isCoyote?'<span class="coy-badge">COYOTE</span>':'')+ppBadge+alreadyBadge+'</div><div class="scan-mac">'+dev.mac+' · '+dev.rssi+' dBm</div></div>'
   list.appendChild(item)
 }
 async function addDevice(){
   if(!scanPick) return
   const name=document.getElementById('add-name').value.trim()||scanPick.name
   try {
-    const r=await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'coyote',name,mac:scanPick.mac,bleName:scanPick.name})})
+    const devType=scanPick.isPawPrints?'pawprints':'coyote'
+    const r=await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:devType,name,mac:scanPick.mac,bleName:scanPick.name})})
     if(!r.ok) throw new Error(await r.text())
     closeScan(); lg('Added: '+name)
   } catch(e){ alert('Error: '+e.message) }
@@ -3371,6 +3422,36 @@ const BDef = {
     sc:[{k:'prompt',l:'Prompt text',t:'text'}],
     sm:c=>`"${c.prompt||'Continue when ready'}"`
   },
+  wait_pawprints: { label:'WAIT: PAW', icon:'🐾', bg:'#001a2e', bd:'#4fc3f7', tx:'#7dd3fc', ports:{i:['i'],o:['o']},
+    dc:{ppRef:'',mode:'Button Press',button:'Any',axis:'Any',calX:0,calY:0,calZ:0,sensitivity:15},
+    sc:[
+      {k:'ppRef',l:'Device',t:'ppsel'},
+      {k:'mode',l:'Wait for',t:'sel',opts:['Button Press','Tilt Angle']},
+      {k:'button',l:'Button (press mode)',t:'sel',opts:['Any','B1','B2','B3']},
+      {k:'axis',l:'Axis (tilt mode)',t:'sel',opts:['Any','X','Y','Z']},
+      {k:'_cal',l:'',t:'ppcal'},
+      {k:'calX',l:'Cal X',t:'num',min:-300,max:300},
+      {k:'calY',l:'Cal Y',t:'num',min:-300,max:300},
+      {k:'calZ',l:'Cal Z',t:'num',min:-300,max:300},
+      {k:'sensitivity',l:'Sensitivity (units)',t:'num',min:1,max:200}
+    ],
+    sm:c=>c.mode==='Tilt Angle'?`Tilt ±${c.sensitivity??15} on ${c.axis||'Any'}`:`Press ${c.button||'Any'} button`
+  },
+  if_pawprints: { label:'PAW: IF / ELSE', icon:'🐾', bg:'#1a0e2e', bd:'#a78bfa', tx:'#c4b5fd', ports:{i:['i'],o:['oy','on']},
+    dc:{ppRef:'',mode:'Button Press',button:'Any',axis:'Any',calX:0,calY:0,calZ:0,sensitivity:15},
+    sc:[
+      {k:'ppRef',l:'Device',t:'ppsel'},
+      {k:'mode',l:'Check',t:'sel',opts:['Button Press','Tilt Angle']},
+      {k:'button',l:'Button (press mode)',t:'sel',opts:['Any','B1','B2','B3']},
+      {k:'axis',l:'Axis (tilt mode)',t:'sel',opts:['Any','X','Y','Z']},
+      {k:'_cal',l:'',t:'ppcal'},
+      {k:'calX',l:'Cal X',t:'num',min:-300,max:300},
+      {k:'calY',l:'Cal Y',t:'num',min:-300,max:300},
+      {k:'calZ',l:'Cal Z',t:'num',min:-300,max:300},
+      {k:'sensitivity',l:'Sensitivity (units)',t:'num',min:1,max:200}
+    ],
+    sm:c=>c.mode==='Tilt Angle'?`Tilt ±${c.sensitivity??15} on ${c.axis||'Any'}`:`${c.button||'Any'} pressed?`
+  },
   if_else: { label:'IF / ELSE', icon:'⋈', bg:'#1e0628', bd:'#e879f9', tx:'#f0abfc', ports:{i:['i'],o:['oy','on']},
     dc:{cond:'EOM Arousal >',thr:80},
     sc:[{k:'cond',l:'Condition',t:'sel',opts:['EOM Arousal >','EOM Arousal <']},{k:'thr',l:'Threshold (%)',t:'range',min:0,max:100}],
@@ -3681,6 +3762,8 @@ const ME_HINTS = {
   ramp: 'Ramps the intensity of the selected device channel. Non-blocking fires in background — macro continues immediately.',
   wait_eom: 'Execution pauses until the EOM arousal reading crosses the threshold. Set a timeout to avoid waiting forever.',
   wait_manual: 'Shows a CONTINUE button in the web UI. Macro pauses until you click it.',
+  wait_pawprints: 'Pauses until a PawPrints button is pressed or a tilt angle is reached. Skips if no device is connected.',
+  if_pawprints: 'Button mode: waits for any press, YES if it matches the configured button, NO if not. Tilt mode: instant snapshot — YES if currently past threshold, NO if not.',
   if_else: 'Branches based on current EOM arousal. YES = condition met, NO = condition not met.',
   loop: 'LOOP port goes to the first block of the loop body. DONE port continues when the loop exits.',
 }
@@ -3731,6 +3814,22 @@ function renderMeCfg() {
       coyotes.forEach(d=>h+=`<option value="${d.id}"${String(v||'')==d.id?' selected':''}>${d.name}</option>`)
       h+=`</select>`
     }
+    else if(f.t==='ppsel') {
+      const pps=Object.values(S.devices).filter(d=>d.type==='pawprints')
+      h+=`<select class="mci" onchange="meCfgUp('${b.id}','${f.k}',this.value)">`
+      h+=`<option value="">Any PawPrints</option>`
+      pps.forEach(d=>h+=`<option value="${d.id}"${String(v||'')==d.id?' selected':''}>${d.name}</option>`)
+      h+=`</select>`
+    }
+    else if(f.t==='ppcal') {
+      h+=`<div style="margin:8px 0 4px;padding:8px;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:6px">`
+      h+=`<div style="font-size:10px;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Calibrate position</div>`
+      h+=`<div id="ppcal-live-${b.id}" style="font-size:11px;color:#4fc3f7;margin-bottom:8px;font-variant-numeric:tabular-nums">X: — &nbsp; Y: — &nbsp; Z: —</div>`
+      h+=`<div style="display:flex;gap:6px">`
+      h+=`<button class="mci" style="flex:1" onclick="mePpCalibrate('${b.id}')">Calibrate</button>`
+      h+=`<button class="mci" style="flex:1" onclick="mePpSet('${b.id}')">Set Trip Point</button>`
+      h+=`</div></div>`
+    }
     else if(f.t==='chsel') {
       h+=`<select class="mci" onchange="meCfgUp('${b.id}','${f.k}',this.value)">`
       ;['A','B'].forEach(ch=>h+=`<option value="${ch}"${String(v||'')==ch?' selected':''}>${ch}</option>`)
@@ -3740,6 +3839,27 @@ function renderMeCfg() {
   h+=`</div>`
   if(ME_HINTS[b.type]) h+=`<div style="padding:0 14px 14px"><div class="mchn">${ME_HINTS[b.type]}</div></div>`
   body.innerHTML=h
+}
+
+window.mePpCalibrate = function(blockId) {
+  const b=ME.blocks.find(x=>x.id===blockId); if(!b) return
+  const ppId=b.config?.ppRef||''
+  const pp=ppId?S.devices[ppId]:Object.values(S.devices).find(d=>d.type==='pawprints'&&d.status==='connected')
+  if(!pp?.accel) { const el=document.getElementById('ppcal-live-'+blockId); if(el) el.textContent='No device connected'; return }
+  ME._ppCal=ME._ppCal||{}
+  ME._ppCal[blockId]={x:pp.accel.x,y:pp.accel.y,z:pp.accel.z}
+  const el=document.getElementById('ppcal-live-'+blockId)
+  if(el) el.textContent=`X: ${pp.accel.x}  Y: ${pp.accel.y}  Z: ${pp.accel.z}`
+}
+
+window.mePpSet = function(blockId) {
+  const b=ME.blocks.find(x=>x.id===blockId); if(!b) return
+  const cal=ME._ppCal?.[blockId]
+  if(!cal) { alert('Click Calibrate first with the device in the starting position'); return }
+  if(!b.config) b.config={}
+  b.config.calX=cal.x; b.config.calY=cal.y; b.config.calZ=cal.z
+  meSelectBlock(blockId)
+  setDirty()
 }
 
 window.meCfgUp = function(id, key, val) {
@@ -3757,8 +3877,8 @@ function buildMePalette() {
   const secs=[
     {title:'Control',items:['start','end','stop_all','run_macro']},
     {title:'Timing', items:['delay','ramp']},
-    {title:'Triggers',items:['wait_eom','wait_manual']},
-    {title:'Logic',  items:['if_else','loop']},
+    {title:'Triggers',items:['wait_eom','wait_manual','wait_pawprints']},
+    {title:'Logic',  items:['if_else','if_pawprints','loop']},
   ]
   secs.forEach(sec=>{
     const d=document.createElement('div'); d.style.cssText='padding:8px 0 4px'
@@ -4035,6 +4155,181 @@ loadMacros()
 
 })() // end macro IIFE
 
+
+// ── PawPrints ─────────────────────────────────────────────────────────────────
+let _ppModalId = null
+
+function renderPawPrintsCards() {
+  const el = document.getElementById('pp-cards')
+  if (!el) return
+  const devs = Object.values(S.devices).filter(d => d.type === 'pawprints')
+  if (!devs.length) { el.innerHTML = '<div class="empty">No PawPrints devices — add one from Devices</div>'; return }
+  el.innerHTML = ''
+  devs.forEach(d => el.appendChild(buildPpCard(d)))
+}
+
+function buildPpCard(dev) {
+  const id = dev.id
+  const conn = dev.status === 'connected'
+  const card = document.createElement('div')
+  card.className = 'pp-card'; card.id = 'pp-card-' + id
+  const statusCls = conn ? 'sp-connected' : (dev.status === 'connecting' ? 'sp-connecting' : 'sp-disconnected')
+  const statusLbl = conn ? 'connected' : (dev.status === 'connecting' ? 'connecting…' : dev.status)
+  const btns = dev.buttons || [false, false, false]
+  const accel = dev.accel || {x:0, y:0, z:0}
+  const bat = dev.battery != null ? dev.battery + '%' : ''
+  card.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:17px">🐾</span>
+        <span style="font-weight:600;font-size:15px">${dev.name}</span>
+        <span class="status-pill ${statusCls}">${statusLbl}</span>
+      </div>
+      <span id="pp-bat-${id}" style="font-size:11px;color:#555">${bat}</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <div class="pp-btn ${btns[0]?'pp-btn-on':''}" id="pp-cb-0-${id}">B1</div>
+      <div class="pp-btn ${btns[1]?'pp-btn-on':''}" id="pp-cb-1-${id}">B2</div>
+      <div class="pp-btn ${btns[2]?'pp-btn-on':''}" id="pp-cb-2-${id}">B3</div>
+      <div style="flex:1"></div>
+      <span style="font-size:10px;color:#444;align-self:center">X:<span id="pp-cx-${id}">${accel.x}</span> Y:<span id="pp-cy-${id}">${accel.y}</span> Z:<span id="pp-cz-${id}">${accel.z}</span></span>
+    </div>
+    <div style="display:flex;gap:8px">
+      ${conn
+        ? `<button class="btn btn-ghost btn-sm" onclick="openPpModal('${id}')">Monitor</button>
+           <button class="btn btn-ghost btn-sm" onclick="ppDisconnect('${id}')">Disconnect</button>`
+        : `<button class="btn btn-primary btn-sm" onclick="ppConnect('${id}')">${dev.status==='connecting'?'Connecting…':'Connect'}</button>`}
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto;color:#c0392b" onclick="removeDevice('${id}')">Remove</button>
+    </div>`
+  return card
+}
+
+function updatePpCard(id, buttons, accel) {
+  for (let i = 0; i < 3; i++) {
+    const el = document.getElementById('pp-cb-' + i + '-' + id)
+    if (el) el.className = 'pp-btn' + (buttons[i] ? ' pp-btn-on' : '')
+  }
+  const x = document.getElementById('pp-cx-' + id); if (x) x.textContent = accel.x
+  const y = document.getElementById('pp-cy-' + id); if (y) y.textContent = accel.y
+  const z = document.getElementById('pp-cz-' + id); if (z) z.textContent = accel.z
+}
+
+const _ppBtnTimers = [null, null, null]
+function updatePpModal(id, buttons, accel, gyro, raw) {
+  if (_ppModalId !== id) return
+  for (let i = 0; i < 3; i++) {
+    const el = document.getElementById('pp-mb-' + i)
+    if (!el) continue
+    if (buttons[i]) {
+      clearTimeout(_ppBtnTimers[i])
+      _ppBtnTimers[i] = setTimeout(() => {
+        const e = document.getElementById('pp-mb-' + i)
+        if (e) { e.style.background=''; e.style.borderColor=''; e.style.color=''; e.style.boxShadow='' }
+      }, 400)
+      el.style.background='#1a3a50'; el.style.borderColor='#4fc3f7'
+      el.style.color='#4fc3f7'; el.style.boxShadow='0 0 8px #4fc3f744'
+    }
+  }
+  const xe = document.getElementById('pp-ax-x'); if (xe) xe.textContent = accel.x
+  const ye = document.getElementById('pp-ax-y'); if (ye) ye.textContent = accel.y
+  const ze = document.getElementById('pp-ax-z'); if (ze) ze.textContent = accel.z
+  if (typeof gyro !== 'undefined' && gyro) {
+    const gxe = document.getElementById('pp-gx'); if (gxe) gxe.textContent = gyro.x
+    const gye = document.getElementById('pp-gy'); if (gye) gye.textContent = gyro.y
+    const gze = document.getElementById('pp-gz'); if (gze) gze.textContent = gyro.z
+  }
+  const dot = document.getElementById('pp-tilt-dot')
+  if (dot) {
+    const px = Math.max(0, Math.min(100, 50 + accel.x / 10))
+    const py = Math.max(0, Math.min(100, 50 - accel.y / 10))
+    dot.style.left = px + '%'; dot.style.top = py + '%'
+  }
+  if (raw) {
+    const log = document.getElementById('pp-raw-log')
+    if (log) {
+      const bytes = raw.match(/.{2}/g) || []
+      const prev = log._prevBytes || bytes
+      const line = document.createElement('div')
+      line.style.fontFamily = 'monospace'
+      line.style.fontSize = '10px'
+      line.style.letterSpacing = '1px'
+      line.innerHTML = bytes.map((b,i) => {
+        const changed = b !== prev[i]
+        return '<span style="' + (changed ? 'color:#f97316;font-weight:700' : 'color:#555') + '">' + b + '</span>'
+      }).join(' ')
+      log._prevBytes = bytes
+      log.appendChild(line)
+      while (log.children.length > 30) log.removeChild(log.firstChild)
+      log.scrollTop = log.scrollHeight
+    }
+  }
+}
+
+function openPpModal(id) {
+  _ppModalId = id
+  const dev = S.devices[id]
+  const nameEl = document.getElementById('pp-modal-name'); if (nameEl) nameEl.textContent = dev?.name || 'PawPrints'
+  const batEl = document.getElementById('pp-bat-modal'); if (batEl) batEl.textContent = dev?.battery != null ? dev.battery + '%' : ''
+  document.getElementById('pp-modal-overlay').style.display = 'flex'
+}
+
+function closePpModal() {
+  _ppModalId = null
+  document.getElementById('pp-modal-overlay').style.display = 'none'
+}
+
+async function ppConnect(id) {
+  await fetch('/api/devices/' + id + '/connect', {method:'POST'}).catch(() => {})
+}
+
+async function ppDisconnect(id) {
+  await fetch('/api/devices/' + id + '/disconnect', {method:'POST'}).catch(() => {})
+}
 </script>
+
+<!-- PawPrints test modal -->
+<div id="pp-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:none;align-items:center;justify-content:center" onclick="if(event.target===this)closePpModal()">
+  <div style="background:#161616;border:1px solid #2a2a2a;border-radius:14px;padding:24px;width:380px;max-width:95vw">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="font-size:14px;font-weight:700">🐾 <span id="pp-modal-name">PawPrints</span></div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="pp-bat-modal" style="font-size:11px;color:#555"></span>
+        <button onclick="closePpModal()" style="background:none;border:none;color:#555;font-size:18px;cursor:pointer;padding:0 4px">×</button>
+      </div>
+    </div>
+    <div class="pp-modal-inner">
+      <div class="pp-tilt" id="pp-tilt-vis">
+        <div class="pp-tilt-cross"></div>
+        <div class="pp-tilt-cross2"></div>
+        <div class="pp-tilt-dot" id="pp-tilt-dot" style="left:50%;top:50%"></div>
+      </div>
+      <div class="pp-btn-row">
+        <div class="pp-btn" id="pp-mb-0">B1</div>
+        <div class="pp-btn" id="pp-mb-1">B2</div>
+        <div class="pp-btn" id="pp-mb-2">B3</div>
+      </div>
+      <div style="width:100%">
+        <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Accel</div>
+        <div class="pp-accel">
+          <div class="pp-axis"><div class="pp-axis-lbl">X</div><div class="pp-axis-val" id="pp-ax-x">0</div></div>
+          <div class="pp-axis"><div class="pp-axis-lbl">Y</div><div class="pp-axis-val" id="pp-ax-y">0</div></div>
+          <div class="pp-axis"><div class="pp-axis-lbl">Z</div><div class="pp-axis-val" id="pp-ax-z">0</div></div>
+        </div>
+        <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px;margin-top:6px">Gyro</div>
+        <div class="pp-accel2">
+          <div class="pp-axis"><div class="pp-axis-lbl">X</div><div class="pp-axis-val" id="pp-gx">0</div></div>
+          <div class="pp-axis"><div class="pp-axis-lbl">Y</div><div class="pp-axis-val" id="pp-gy">0</div></div>
+          <div class="pp-axis"><div class="pp-axis-lbl">Z</div><div class="pp-axis-val" id="pp-gz">0</div></div>
+        </div>
+      </div
+      </div>
+      <div style="width:100%">
+        <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Raw packets</div>
+        <div class="pp-raw" id="pp-raw-log"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

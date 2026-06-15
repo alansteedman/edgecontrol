@@ -17,8 +17,8 @@ if [ -z "$BOX_ID" ] || [ "$BOX_ID" = "xxxx" ]; then
   echo "[firstboot] Could not derive boxId from CPU serial — skipping"
 else
   echo "[firstboot] Setting hostname to $BOX_ID"
-  hostnamectl set-hostname "$BOX_ID"
   echo "$BOX_ID" > /etc/hostname
+  hostname "$BOX_ID"
 
   # Update boxId in config.json
   if [ -f "$APP_DIR/config.json" ]; then

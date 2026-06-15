@@ -1,6 +1,6 @@
 [Unit]
 Description=EdgeController Network Setup
-After=NetworkManager.service NetworkManager-wait-online.service
+After=NetworkManager.service
 Wants=NetworkManager.service
 Before=pm2-alans.service
 

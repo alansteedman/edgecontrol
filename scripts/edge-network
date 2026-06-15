@@ -60,6 +60,8 @@ if [ -n "$CONF_SSID" ]; then
   else
     nmcli dev wifi connect "$CONF_SSID" ifname wlan0 2>&1 | logger -t "$LOG_TAG" || true
   fi
+  # Force 5GHz band to avoid Bluetooth 2.4GHz interference
+  nmcli con modify "$CONF_SSID" 802-11-wireless.band a 2>/dev/null || true
   # Clear credentials from the FAT32 file immediately (don't leave passwords readable)
   sed -i 's/^ssid[ \t]*=.*/ssid =/' "$CONF"
   sed -i 's/^password[ \t]*=.*/password =/' "$CONF"

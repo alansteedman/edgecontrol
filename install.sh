@@ -198,10 +198,8 @@ sudo -u "$APP_USER" pm2 start ecosystem.config.cjs
 sudo -u "$APP_USER" pm2 save
 
 log "Enabling pm2 on boot"
-PM2_STARTUP=$(sudo -u "$APP_USER" pm2 startup systemd -u "$APP_USER" --hp "/home/$APP_USER" 2>&1 | grep "sudo env")
-if [ -n "$PM2_STARTUP" ]; then
-  eval "$PM2_STARTUP"
-fi
+env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u "$APP_USER" --hp "/home/$APP_USER"
+sudo -u "$APP_USER" pm2 save
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""

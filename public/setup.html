@@ -61,6 +61,7 @@ input:focus{border-color:#4fc3f7}
     <h1>EdgeController Setup</h1>
     <div class="sub">WiFi Configuration</div>
     <div class="device-id" id="deviceId">loading...</div>
+    <div style="font-size:10px;color:#666;margin-top:4px" id="appVersion"></div>
   </div>
 
   <div class="step-indicator">
@@ -110,6 +111,7 @@ let deviceBoxId = ''
 fetch('/api/status').then(r=>r.json()).then(d=>{
   deviceBoxId = d.boxId || ''
   document.getElementById('deviceId').textContent = deviceBoxId || 'unknown'
+  if (d.version) document.getElementById('appVersion').textContent = 'v' + d.version
 }).catch(()=>{})
 
 // Auto-scan on load

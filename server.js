@@ -13,6 +13,7 @@ import net from 'net'
 import { EventEmitter } from 'events'
 EventEmitter.defaultMaxListeners = 100
 import { SerialPort } from 'serialport'
+const APP_VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url))).version
 import { ReadlineParser } from '@serialport/parser-readline'
 
 // ── EomWS: minimal custom WebSocket client for ESP32 Edge-o-Matic firmware ────
@@ -1757,7 +1758,7 @@ wss.on('connection', (ws, request) => {
 })
 
 // ── REST API ──────────────────────────────────────────────────────────────────
-app.get('/api/status',  (req,res) => res.json({ ok:true, boxId:config.boxId, uptime:process.uptime(), deviceCount:Object.keys(devices).length }))
+app.get('/api/status',  (req,res) => res.json({ ok:true, boxId:config.boxId, version:APP_VERSION, uptime:process.uptime(), deviceCount:Object.keys(devices).length }))
 app.get('/api/devices', (req,res) => res.json(Object.values(devices).map(d=>d.toJSON())))
 app.post('/api/scan',   (req,res) => { doScan(); res.json({scanning:true}) })
 app.get('/api/serial-ports', async (req,res) => {

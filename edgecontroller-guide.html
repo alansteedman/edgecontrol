@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EdgeController — User Guide</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.6;
+    color: #1a1a1a;
+    background: #fff;
+  }
+
+  /* ── Cover page ── */
+  .cover {
+    page-break-after: always;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 80px 60px;
+    background: #0f0f0f;
+    color: #fff;
+  }
+  .cover-label {
+    font-size: 9pt;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 24px;
+  }
+  .cover h1 {
+    font-size: 48pt;
+    font-weight: 700;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    margin-bottom: 20px;
+  }
+  .cover h1 span { color: #6ee7f7; }
+  .cover p {
+    font-size: 14pt;
+    color: #aaa;
+    max-width: 520px;
+    line-height: 1.6;
+    margin-bottom: 60px;
+  }
+  .cover-version {
+    font-size: 9pt;
+    color: #555;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  /* ── Page layout ── */
+  .page {
+    max-width: 740px;
+    margin: 0 auto;
+    padding: 60px 60px;
+  }
+
+  @media print {
+    .cover { min-height: 100vh; }
+    .page-break { page-break-before: always; }
+    a { color: inherit; text-decoration: none; }
+  }
+
+  /* ── Typography ── */
+  h2 {
+    font-size: 22pt;
+    font-weight: 700;
+    color: #0f0f0f;
+    margin-top: 48px;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #6ee7f7;
+  }
+  h2:first-child { margin-top: 0; }
+
+  h3 {
+    font-size: 13pt;
+    font-weight: 600;
+    color: #0f0f0f;
+    margin-top: 28px;
+    margin-bottom: 10px;
+  }
+
+  h4 {
+    font-size: 11pt;
+    font-weight: 600;
+    color: #333;
+    margin-top: 18px;
+    margin-bottom: 6px;
+  }
+
+  p { margin-bottom: 12px; color: #333; }
+
+  ul, ol {
+    margin: 8px 0 14px 22px;
+    color: #333;
+  }
+  li { margin-bottom: 5px; }
+
+  /* ── Callout boxes ── */
+  .note {
+    background: #f0fbff;
+    border-left: 4px solid #6ee7f7;
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 16px 0;
+    font-size: 10pt;
+    color: #1a4a55;
+  }
+  .tip {
+    background: #f4fdf0;
+    border-left: 4px solid #6ee7a0;
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 16px 0;
+    font-size: 10pt;
+    color: #1a4a2a;
+  }
+  .warning {
+    background: #fff8f0;
+    border-left: 4px solid #f7c06e;
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 16px 0;
+    font-size: 10pt;
+    color: #5a3a10;
+  }
+
+  /* ── Step list ── */
+  .steps { list-style: none; margin: 12px 0 20px 0; }
+  .steps li {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    margin-bottom: 14px;
+  }
+  .steps .num {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #0f0f0f;
+    color: #6ee7f7;
+    font-size: 10pt;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+  }
+  .steps .text { flex: 1; }
+
+  /* ── Device table ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 20px 0;
+    font-size: 10pt;
+  }
+  th {
+    background: #0f0f0f;
+    color: #6ee7f7;
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 9pt;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #eee;
+    color: #333;
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: #fafafa; }
+
+  /* ── Macro block tags ── */
+  .block {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 9pt;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .block-cyan  { background: #e0faff; color: #0a6a80; border: 1px solid #b0eaf7; }
+  .block-purple { background: #f0e8ff; color: #5a1a9a; border: 1px solid #d0b8ff; }
+  .block-green  { background: #e8ffe8; color: #1a6a1a; border: 1px solid #b0e8b0; }
+  .block-gray   { background: #f0f0f0; color: #333; border: 1px solid #ddd; }
+  .block-orange { background: #fff4e0; color: #8a4800; border: 1px solid #f7d090; }
+  .block-red    { background: #ffe8e8; color: #8a1a1a; border: 1px solid #f7b0b0; }
+
+  /* ── Inline code ── */
+  code {
+    background: #f4f4f4;
+    border: 1px solid #e0e0e0;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: 'Menlo', 'Courier New', monospace;
+    font-size: 9pt;
+    color: #c7254e;
+  }
+
+  /* ── Section divider ── */
+  .divider {
+    border: none;
+    border-top: 1px solid #eee;
+    margin: 32px 0;
+  }
+
+  /* ── TOC ── */
+  .toc { margin: 20px 0; }
+  .toc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 5px 0;
+    border-bottom: 1px dotted #ddd;
+    font-size: 10.5pt;
+  }
+  .toc-item .toc-title { color: #1a1a1a; }
+  .toc-item .toc-section { color: #888; font-size: 9pt; }
+
+  /* ── URL styling ── */
+  .url {
+    font-family: 'Menlo', 'Courier New', monospace;
+    font-size: 9.5pt;
+    color: #0066cc;
+  }
+
+  /* ── Icon bullet ── */
+  .icon-list { list-style: none; margin: 10px 0 16px 0; }
+  .icon-list li {
+    padding: 4px 0 4px 28px;
+    position: relative;
+    margin-bottom: 3px;
+  }
+  .icon-list li::before {
+    position: absolute;
+    left: 0;
+    top: 4px;
+    font-size: 12pt;
+    line-height: 1;
+  }
+  .icon-list.check li::before { content: '✓'; color: #2a9a2a; }
+  .icon-list.arrow li::before { content: '→'; color: #6ee7f7; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════ COVER -->
+<div class="cover">
+  <div class="cover-label">User Guide</div>
+  <h1>Edge<span>Controller</span></h1>
+  <p>A self-hosted device controller for Raspberry Pi. Control BLE and USB devices, build automated macro sequences, and connect remotely from anywhere.</p>
+  <div class="cover-version">Version 2.0.0</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ CONTENTS -->
+<div class="page">
+  <h2>Contents</h2>
+  <div class="toc">
+    <div class="toc-item"><span class="toc-title">1. What is EdgeController?</span><span class="toc-section">Overview</span></div>
+    <div class="toc-item"><span class="toc-title">2. What You'll Need</span><span class="toc-section">Requirements</span></div>
+    <div class="toc-item"><span class="toc-title">3. Setting Up Your Device</span><span class="toc-section">First-time setup</span></div>
+    <div class="toc-item"><span class="toc-title">4. Connecting to the Interface</span><span class="toc-section">Local &amp; remote access</span></div>
+    <div class="toc-item"><span class="toc-title">5. Adding Devices</span><span class="toc-section">BLE, USB &amp; network</span></div>
+    <div class="toc-item"><span class="toc-title">6. The Macro Editor</span><span class="toc-section">Building sequences</span></div>
+    <div class="toc-item"><span class="toc-title">7. Macro Block Reference</span><span class="toc-section">All block types</span></div>
+    <div class="toc-item"><span class="toc-title">8. PawPrints Sensor Blocks</span><span class="toc-section">Buttons &amp; tilt</span></div>
+    <div class="toc-item"><span class="toc-title">9. Remote Access</span><span class="toc-section">Web &amp; SSH</span></div>
+    <div class="toc-item"><span class="toc-title">10. Troubleshooting</span><span class="toc-section">Common issues</span></div>
+  </div>
+
+  <!-- ═══ SECTION 1 -->
+  <div class="page-break"></div>
+  <h2>1. What is EdgeController?</h2>
+  <p>EdgeController is a self-hosted controller that runs on a Raspberry Pi 5. It provides a browser-based interface for managing connected BLE and USB devices, building automated macro sequences, and accessing your setup remotely over a secure Cloudflare tunnel.</p>
+  <p>There is no cloud subscription, no app to install, and no accounts to create. Everything runs on the Pi on your local network. Remote access is set up automatically the first time you connect to WiFi.</p>
+
+  <h3>Key Features</h3>
+  <ul class="icon-list check">
+    <li>Web interface — accessible from any browser on your network</li>
+    <li>BLE device management with automatic reconnection</li>
+    <li>Visual macro editor — build complex automated sequences with no coding</li>
+    <li>StreamDeck+ integration — hardware buttons and encoders for live control</li>
+    <li>Secure remote access via Cloudflare tunnel (web + SSH)</li>
+    <li>WiFi onboarding — guided setup via a built-in hotspot</li>
+  </ul>
+
+  <!-- ═══ SECTION 2 -->
+  <h2>2. What You'll Need</h2>
+  <table>
+    <tr><th>Item</th><th>Details</th></tr>
+    <tr><td><strong>Raspberry Pi 5</strong></td><td>4GB or 8GB recommended. Pi 5 is required — earlier models are not officially supported.</td></tr>
+    <tr><td><strong>MicroSD Card</strong></td><td>32GB or larger, Class 10 / A1 rated or better</td></tr>
+    <tr><td><strong>Power Supply</strong></td><td>Official Pi 5 USB-C PSU (5V 5A). Underpowered supplies cause instability.</td></tr>
+    <tr><td><strong>Raspberry Pi Imager</strong></td><td>Free download from <span class="url">raspberrypi.com/software</span></td></tr>
+    <tr><td><strong>Computer with WiFi</strong></td><td>Any Mac, Windows, or Linux machine for initial setup</td></tr>
+    <tr><td><strong>Your devices</strong></td><td>DG-Lab Coyote, PawPrints sensor, E-Stim 2B, Nimble, EOM, or IP camera</td></tr>
+  </table>
+
+  <!-- ═══ SECTION 3 -->
+  <div class="page-break"></div>
+  <h2>3. Setting Up Your Device</h2>
+
+  <h3>Step 1 — Flash the SD card</h3>
+  <ol class="steps">
+    <li><span class="num">1</span><span class="text">Open <strong>Raspberry Pi Imager</strong> on your computer.</span></li>
+    <li><span class="num">2</span><span class="text">Click <strong>Choose OS</strong> and select <strong>Use custom image</strong>. Navigate to the <code>edgecontroller-v2.0.img.gz</code> file you were provided.</span></li>
+    <li><span class="num">3</span><span class="text">Click <strong>Choose Storage</strong> and select your SD card.</span></li>
+    <li><span class="num">4</span><span class="text">Click the <strong>settings icon</strong> (gear). You do not need to set a hostname, username, password, or WiFi — these are all preconfigured in the image. Skip all settings.</span></li>
+    <li><span class="num">5</span><span class="text">Click <strong>Write</strong> and wait for it to complete. This takes 5–10 minutes.</span></li>
+  </ol>
+  <div class="note">Do not eject the card while writing is in progress. Doing so will corrupt the card and you will need to reflash it.</div>
+
+  <h3>Step 2 — First boot</h3>
+  <ol class="steps">
+    <li><span class="num">1</span><span class="text">Insert the SD card into the Pi and power it on.</span></li>
+    <li><span class="num">2</span><span class="text">Wait approximately 60–90 seconds for the first-boot setup to complete. During this time the Pi assigns itself a unique device ID based on its hardware serial number.</span></li>
+    <li><span class="num">3</span><span class="text">The Pi will broadcast a WiFi hotspot named <strong>EdgeController-XXXX</strong> (where XXXX is its device ID).</span></li>
+  </ol>
+
+  <h3>Step 3 — WiFi setup</h3>
+  <ol class="steps">
+    <li><span class="num">1</span><span class="text">On your phone or computer, connect to the <strong>EdgeController-XXXX</strong> WiFi network. The password is <code>edgesetup</code>.</span></li>
+    <li><span class="num">2</span><span class="text">Open any webpage in your browser. You will be automatically redirected to the EdgeController setup page.</span></li>
+    <li><span class="num">3</span><span class="text">Enter your home or venue WiFi network name and password, then click <strong>Connect</strong>.</span></li>
+    <li><span class="num">4</span><span class="text">The Pi will connect to your WiFi and restart. Reconnect your device to your normal WiFi.</span></li>
+    <li><span class="num">5</span><span class="text">After 30–60 seconds, remote access is configured automatically. You will receive your personal device URL.</span></li>
+  </ol>
+  <div class="tip">If you're connecting the Pi via Ethernet instead of WiFi, you can skip the hotspot setup. Access the interface directly on your local network using the device address shown below.</div>
+
+  <!-- ═══ SECTION 4 -->
+  <div class="page-break"></div>
+  <h2>4. Connecting to the Interface</h2>
+
+  <h3>Local access (same network)</h3>
+  <p>Once the Pi is connected to your WiFi, open a browser and go to:</p>
+  <p><code>http://XXXX.local:3000</code></p>
+  <p>Replace <code>XXXX</code> with your device ID (shown at the end of the install, or printed on your device if labelled). Example: <code>http://c4a5.local:3000</code></p>
+
+  <div class="note">
+    <strong>.local addresses</strong> use mDNS (Bonjour). This works automatically on Mac and most phones. On Windows you may need to install Bonjour or use the Pi's IP address instead.
+  </div>
+
+  <h3>Remote access (from anywhere)</h3>
+  <p>After your first WiFi connection, EdgeController automatically sets up a secure Cloudflare tunnel. Your personal remote URL is:</p>
+  <p><code>https://XXXX.kinkcontrol.org</code></p>
+  <p>This URL works from anywhere in the world with no VPN or port forwarding required. It uses end-to-end encryption via Cloudflare.</p>
+
+  <!-- ═══ SECTION 5 -->
+  <h2>5. Adding Devices</h2>
+  <p>Go to <strong>Settings</strong> in the web interface and click <strong>Add Device</strong>. Select the device type and follow the on-screen instructions.</p>
+
+  <h3>Supported Devices</h3>
+  <table>
+    <tr><th>Device</th><th>Type</th><th>Connection</th><th>Notes</th></tr>
+    <tr>
+      <td><strong>DG-Lab Coyote</strong></td>
+      <td>E-stim / haptic</td>
+      <td>Bluetooth (BLE)</td>
+      <td>Put device into pairing mode before connecting</td>
+    </tr>
+    <tr>
+      <td><strong>DG-Lab PawPrints</strong><br><em>(47L120100)</em></td>
+      <td>Motion sensor + buttons</td>
+      <td>Bluetooth (BLE)</td>
+      <td>Hold button for 3+ seconds to enter pairing mode. LED will flash.</td>
+    </tr>
+    <tr>
+      <td><strong>E-Stim 2B</strong></td>
+      <td>E-stim</td>
+      <td>USB Serial</td>
+      <td>Connect via USB cable. Device appears automatically.</td>
+    </tr>
+    <tr>
+      <td><strong>Nimble</strong></td>
+      <td>Motor</td>
+      <td>USB Serial</td>
+      <td>Connect via USB cable. Device appears automatically.</td>
+    </tr>
+    <tr>
+      <td><strong>EOM</strong></td>
+      <td>Arousal sensor</td>
+      <td>Network</td>
+      <td>Enter the EOM's local IP address when adding</td>
+    </tr>
+    <tr>
+      <td><strong>IP Camera</strong></td>
+      <td>Video feed</td>
+      <td>Network (RTSP)</td>
+      <td>Enter the camera's stream URL when adding</td>
+    </tr>
+  </table>
+
+  <h3>BLE Devices — Pairing Tips</h3>
+  <ul>
+    <li>BLE devices must be in pairing/advertising mode when you click Connect. Refer to the device manual for how to activate this.</li>
+    <li>EdgeController reconnects automatically to previously paired BLE devices whenever they come into range and enter advertising mode.</li>
+    <li>If a BLE device fails to connect, the system will automatically retry. If it continues to fail, try power cycling the device.</li>
+    <li>Keep the Pi's WiFi connection on <strong>5GHz</strong> if possible — 2.4GHz WiFi can interfere with Bluetooth. EdgeController configures this automatically during WiFi setup.</li>
+  </ul>
+
+  <!-- ═══ SECTION 6 -->
+  <div class="page-break"></div>
+  <h2>6. The Macro Editor</h2>
+  <p>The macro editor lets you build automated sequences visually. Blocks are connected together to form a flow — when a macro runs, execution passes from block to block following the connections you've drawn.</p>
+
+  <h3>Creating a Macro</h3>
+  <ol class="steps">
+    <li><span class="num">1</span><span class="text">Go to <strong>Macros</strong> in the navigation and click <strong>New Macro</strong>.</span></li>
+    <li><span class="num">2</span><span class="text">Give the macro a name. The editor will open with a blank canvas.</span></li>
+    <li><span class="num">3</span><span class="text">Click anywhere on the canvas to add blocks, or use the block panel on the left.</span></li>
+    <li><span class="num">4</span><span class="text">Connect blocks by dragging from the output port of one block to the input port of another.</span></li>
+    <li><span class="num">5</span><span class="text">Click a block to select it and edit its settings in the panel on the right.</span></li>
+    <li><span class="num">6</span><span class="text">Click <strong>Save</strong>, then <strong>Run</strong> to execute the macro.</span></li>
+  </ol>
+
+  <div class="tip">Every macro must start with a <strong>Start</strong> block. Execution begins there and follows the connections you draw.</div>
+
+  <h3>Running a Macro</h3>
+  <p>Macros can be started from:</p>
+  <ul>
+    <li>The <strong>Macros</strong> page — click Run next to any saved macro</li>
+    <li>A <strong>StreamDeck+</strong> button — assign any macro to a physical button</li>
+    <li>Another macro — use the <strong>Run Macro</strong> block to chain macros together</li>
+  </ul>
+
+  <h3>Stopping a Macro</h3>
+  <p>Click <strong>Stop All</strong> in the top bar to immediately halt all running macros. You can also use a <strong>Stop All</strong> block within a macro to halt everything programmatically.</p>
+
+  <!-- ═══ SECTION 7 -->
+  <div class="page-break"></div>
+  <h2>7. Macro Block Reference</h2>
+
+  <h3>Control Blocks</h3>
+  <table>
+    <tr><th>Block</th><th>What it does</th></tr>
+    <tr>
+      <td><span class="block block-gray">Start</span></td>
+      <td>The entry point of every macro. Execution begins here. Every macro needs exactly one Start block.</td>
+    </tr>
+    <tr>
+      <td><span class="block block-gray">End</span></td>
+      <td>Marks the end of a macro path. When execution reaches End, that branch stops.</td>
+    </tr>
+    <tr>
+      <td><span class="block block-red">Stop All</span></td>
+      <td>Immediately stops all running macros, including the current one.</td>
+    </tr>
+    <tr>
+      <td><span class="block block-gray">Run Macro</span></td>
+      <td>Starts another saved macro. Execution in the current macro continues without waiting.</td>
+    </tr>
+  </table>
+
+  <h3>Timing Blocks</h3>
+  <table>
+    <tr><th>Block</th><th>What it does</th></tr>
+    <tr>
+      <td><span class="block block-gray">Delay</span></td>
+      <td>Pauses execution for a set number of seconds before moving to the next block.</td>
+    </tr>
+    <tr>
+      <td><span class="block block-gray">Ramp</span></td>
+      <td>Smoothly transitions a device's intensity from one level to another over a set duration.</td>
+    </tr>
+  </table>
+
+  <h3>Trigger Blocks</h3>
+  <table>
+    <tr><th>Block</th><th>What it does</th></tr>
+    <tr>
+      <td><span class="block block-cyan">Wait: EOM</span></td>
+      <td>Pauses execution until the EOM arousal sensor reading crosses a set threshold.</td>
+    </tr>
+    <tr>
+      <td><span class="block block-cyan">Wait: Manual</span></td>
+      <td>Pauses execution and shows a button in the UI. Execution continues when the user clicks it.</td>
+    </tr>
+    <tr>
+      <td><span class="block block-cyan">Wait: Paw</span></td>
+      <td>Pauses execution until a PawPrints button is pressed or the sensor tilts past a set angle. See Section 8.</td>
+    </tr>
+  </table>
+
+  <h3>Logic Blocks</h3>
+  <table>
+    <tr><th>Block</th><th>What it does</th></tr>
+    <tr>
+      <td><span class="block block-purple">If/Else: EOM</span></td>
+      <td>Reads the current EOM arousal level. Routes execution to <em>Yes</em> if above threshold, <em>No</em> if below.</td>
+    </tr>
+    <tr>
+      <td><span class="block block-purple">Paw: If/Else</span></td>
+      <td>Checks the current state of a PawPrints button or tilt and routes to <em>Yes</em> or <em>No</em>. See Section 8.</td>
+    </tr>
+    <tr>
+      <td><span class="block block-orange">Loop</span></td>
+      <td>Repeats a section of the macro a set number of times, or indefinitely until stopped.</td>
+    </tr>
+  </table>
+
+  <!-- ═══ SECTION 8 -->
+  <div class="page-break"></div>
+  <h2>8. PawPrints Sensor Blocks</h2>
+  <p>The DG-Lab PawPrints (47L120100) is a wireless motion sensor with three buttons. EdgeController can use it as a trigger or decision point inside macros — waiting for a button press or detecting when the sensor has moved past a set position.</p>
+
+  <h3>Wait: Paw</h3>
+  <p>Pauses the macro until a condition on the PawPrints sensor is met, then lets execution continue.</p>
+
+  <h4>Button mode</h4>
+  <p>Select <strong>Mode: Button</strong> and choose which button to wait for (B1, B2, or B3). The macro will pause until that button is pressed, then continue.</p>
+
+  <h4>Tilt mode</h4>
+  <p>Select <strong>Mode: Tilt</strong> and choose an axis (X, Y, Z, or Any). The macro will pause until the sensor moves significantly away from its calibrated rest position.</p>
+  <p>To set the rest position:</p>
+  <ol>
+    <li>Place the sensor in its natural resting position.</li>
+    <li>Click <strong>Calibrate</strong> in the block settings — this captures the current reading as the baseline.</li>
+    <li>Click <strong>Set Trip Point</strong> to confirm and save the baseline.</li>
+    <li>Adjust the <strong>Sensitivity</strong> value — higher values require more movement before triggering.</li>
+  </ol>
+  <div class="note">The tilt trigger fires when the sensor deviates from the calibrated position by more than the sensitivity value in any direction. A sensitivity of 15 works well for moderate movement.</div>
+
+  <h4>Device selector</h4>
+  <p>If you have more than one PawPrints sensor connected, use the <strong>Device</strong> dropdown to choose which one this block listens to. If only one is connected, this can be left on automatic.</p>
+
+  <hr class="divider">
+
+  <h3>Paw: If/Else</h3>
+  <p>Takes a snapshot of the sensor's current state and routes execution to one of two paths — <em>Yes</em> or <em>No</em> — without waiting.</p>
+  <p>The settings are identical to Wait: Paw (button or tilt, axis, calibration, sensitivity, device selector). The difference is that If/Else does not pause — it checks the state at that moment and immediately routes to the appropriate output.</p>
+
+  <h4>Connections</h4>
+  <ul>
+    <li><strong>Yes</strong> output — button is currently pressed, or sensor is currently outside the calibrated position</li>
+    <li><strong>No</strong> output — button not pressed, or sensor is within the calibrated position</li>
+  </ul>
+
+  <div class="tip">Use Wait: Paw to hold the macro until the user is ready. Use Paw: If/Else to branch a macro based on the sensor's current state without stopping execution.</div>
+
+  <!-- ═══ SECTION 9 -->
+  <div class="page-break"></div>
+  <h2>9. Remote Access</h2>
+
+  <p>After connecting to WiFi for the first time, EdgeController automatically sets up a secure Cloudflare tunnel for your device. No configuration is required.</p>
+
+  <h3>Web interface</h3>
+  <p>Access the full web interface from anywhere:</p>
+  <p><code>https://XXXX.kinkcontrol.org</code></p>
+  <p>Replace XXXX with your device ID. The connection is encrypted end-to-end by Cloudflare.</p>
+
+  <div class="warning">Keep your remote URL private. Anyone with the URL can access your EdgeController web interface. Future versions will include optional password protection.</div>
+
+  <h3>Finding your device ID</h3>
+  <p>Your device ID is a 4-character code derived from the Pi's hardware serial number. It appears:</p>
+  <ul>
+    <li>In the <strong>Settings</strong> page of the web interface, under Box Settings</li>
+    <li>As part of the WiFi hotspot name during setup (<code>EdgeController-XXXX</code>)</li>
+    <li>In the browser address bar when you access the interface locally</li>
+  </ul>
+
+  <!-- ═══ SECTION 10 -->
+  <h2>10. Troubleshooting</h2>
+
+  <table>
+    <tr><th>Problem</th><th>Solution</th></tr>
+    <tr>
+      <td>Can't find the EdgeController-XXXX hotspot</td>
+      <td>Wait 90 seconds after powering on. If it still doesn't appear, try power cycling the Pi. The hotspot only appears when the Pi has no internet connection — if it's connected via Ethernet it won't broadcast.</td>
+    </tr>
+    <tr>
+      <td>XXXX.local not found in browser</td>
+      <td>Try the Pi's IP address instead (find it in your router's device list). On Windows, install Apple Bonjour for .local support.</td>
+    </tr>
+    <tr>
+      <td>BLE device won't connect</td>
+      <td>Make sure the device is in pairing/advertising mode. For PawPrints, hold the button for 3+ seconds until the LED flashes. Try power cycling both the Pi and the device.</td>
+    </tr>
+    <tr>
+      <td>Bluetooth drops or is unreliable</td>
+      <td>Move the Pi to a 5GHz WiFi network if possible. 2.4GHz WiFi shares the same radio band as Bluetooth and can cause interference.</td>
+    </tr>
+    <tr>
+      <td>Macro stops unexpectedly</td>
+      <td>Check that all devices used in the macro are connected. A device disconnecting mid-macro will cause blocks that reference it to fail. Use the device status indicators in the top bar.</td>
+    </tr>
+    <tr>
+      <td>Remote URL not working</td>
+      <td>The tunnel is set up automatically when the Pi first connects to WiFi. If the URL doesn't work, check the tunnel status in Settings. The Pi must have internet access for the tunnel to remain active.</td>
+    </tr>
+    <tr>
+      <td>PawPrints tilt not triggering</td>
+      <td>Recalibrate the sensor in its exact resting position and click Set Trip Point. If it's too sensitive or not sensitive enough, adjust the Sensitivity value.</td>
+    </tr>
+    <tr>
+      <td>Pi not booting / no lights</td>
+      <td>Check the power supply. The Pi 5 requires a 5V 5A USB-C PSU. Underpowered supplies cause boot failures.</td>
+    </tr>
+  </table>
+
+  <hr class="divider">
+  <p style="text-align:center; color:#888; font-size:9pt; margin-top:30px;">EdgeController v2.0.0 &nbsp;·&nbsp; For support contact your device provider</p>
+</div>
+
+</body>
+</html>

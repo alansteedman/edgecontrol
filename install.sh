@@ -146,10 +146,15 @@ log "Installing fan control script"
 cp "$APP_DIR/scripts/fan-control.sh" /usr/local/bin/fan-control.sh
 chmod +x /usr/local/bin/fan-control.sh
 
+log "Installing first-boot script"
+cp "$APP_DIR/scripts/firstboot.sh" /usr/local/bin/edgecontroller-firstboot.sh
+chmod +x /usr/local/bin/edgecontroller-firstboot.sh
+
 # ── Systemd ───────────────────────────────────────────────────────────────────
 log "Installing systemd services"
 cp "$APP_DIR/systemd/edge-network.service" /etc/systemd/system/
 cp "$APP_DIR/systemd/fan-control.service" /etc/systemd/system/
+cp "$APP_DIR/systemd/edgecontroller-firstboot.service" /etc/systemd/system/
 
 PM2_DROP_IN="/etc/systemd/system/pm2-${APP_USER}.service.d"
 mkdir -p "$PM2_DROP_IN"
@@ -158,6 +163,7 @@ cp "$APP_DIR/systemd/pm2-drop-in.conf" "$PM2_DROP_IN/edge-network.conf"
 systemctl daemon-reload
 systemctl enable edge-network.service
 systemctl enable fan-control.service
+systemctl enable edgecontroller-firstboot.service
 
 # ── NetworkManager captive portal ─────────────────────────────────────────────
 log "Configuring NetworkManager captive portal"

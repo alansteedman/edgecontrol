@@ -1,0 +1,12 @@
+[Unit]
+Description=EdgeController first-boot hostname setup
+After=local-fs.target
+Before=network.target avahi-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/edgecontroller-firstboot.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

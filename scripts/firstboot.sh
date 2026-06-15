@@ -20,7 +20,7 @@ else
   echo "$BOX_ID" > /etc/hostname
   hostname "$BOX_ID"
 
-  # Update boxId in config.json
+  # Update boxId and clear tunnel config so this device gets its own tunnel
   if [ -f "$APP_DIR/config.json" ]; then
     python3 -c "
 import json, sys
@@ -28,9 +28,10 @@ path = '$APP_DIR/config.json'
 with open(path) as f:
     c = json.load(f)
 c['boxId'] = '$BOX_ID'
+c['tunnel'] = {'enabled': False, 'token': '', 'hostname': '', 'sshHostname': ''}
 with open(path, 'w') as f:
     json.dump(c, f, indent=2)
-print('[firstboot] Updated config.json boxId to $BOX_ID')
+print('[firstboot] Updated config.json boxId to $BOX_ID, cleared tunnel config')
 "
   fi
 

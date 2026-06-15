@@ -7,6 +7,13 @@
 
 set -euo pipefail
 
+# Stop unattended-upgrades so it doesn't hold the apt lock during install
+systemctl stop unattended-upgrades 2>/dev/null || true
+systemctl stop apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+systemctl kill --kill-who=all apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+# Wait for any running apt/dpkg to finish
+while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 1; done
+
 REPO="https://github.com/alansteedman/edgecontrol"
 APP_DIR="/home/alans/edgecontroller"
 APP_USER="alans"

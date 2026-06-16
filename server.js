@@ -1392,6 +1392,108 @@ class CameraDevice {
   toJSON() { return { id:this.id, type:'camera', name:this.name, ip:this.ip, username:this.username, streamPath:this.streamPath, status:this.status, streamKey:this.streamKey } }
 }
 
+// ── Philips Hue Bridge ────────────────────────────────────────────────────────
+class HueBridge {
+  constructor(id, name, ip, token, selectedLights, selectedGroups, selectedScenes) {
+    this.id=id; this.name=name; this.type='hue'
+    this.ip=ip||''; this.token=token||''
+    this.selectedLights=selectedLights||[]
+    this.selectedGroups=selectedGroups||[]
+    this.selectedScenes=selectedScenes||[]
+    this.status='disconnected'
+    this._lights={}; this._groups={}; this._scenes={}; this._bridgeName=''
+  }
+
+  async connect() {
+    if (!this.ip||!this.token) {
+      this.status='error'
+      broadcast({type:'device:status',id:this.id,status:'error',error:'Bridge not paired'})
+      return
+    }
+    this.status='connecting'
+    broadcast({type:'device:status',id:this.id,status:'connecting'})
+    try {
+      await this.loadInventory()
+      this.status='connected'
+      broadcast({type:'device:status',id:this.id,status:'connected'})
+      broadcast({type:'hue:inventory',id:this.id,...this._inventory()})
+      console.log(`[${this.id}] Hue bridge connected: ${this._bridgeName}`)
+    } catch(err) {
+      this.status='error'
+      broadcast({type:'device:status',id:this.id,status:'error',error:err.message})
+      console.error(`[${this.id}] Hue connect error:`,err.message)
+    }
+  }
+
+  async loadInventory() {
+    const base=`http://${this.ip}/api/${this.token}`
+    const [cfgRes,lightsRes,groupsRes,scenesRes] = await Promise.all([
+      fetch(`${base}/config`), fetch(`${base}/lights`),
+      fetch(`${base}/groups`), fetch(`${base}/scenes`)
+    ])
+    if (!cfgRes.ok) throw new Error(`Bridge returned ${cfgRes.status}`)
+    const cfg=await cfgRes.json()
+    this._bridgeName=cfg.name||'Hue Bridge'
+    this._lights=await lightsRes.json()
+    this._groups=await groupsRes.json()
+    this._scenes=await scenesRes.json()
+  }
+
+  _inventory() { return {lights:this._lights,groups:this._groups,scenes:this._scenes,bridgeName:this._bridgeName} }
+
+  async _put(path,body) {
+    const res=await fetch(`http://${this.ip}/api/${this.token}${path}`,{
+      method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    })
+    return res.json()
+  }
+
+  async setLight(lightId,params) {
+    const state={}
+    if (params.on!==undefined) state.on=params.on
+    if (params.bri!==undefined) state.bri=Math.round(Math.max(1,Math.min(254,params.bri*254/100)))
+    if (params.hue!==undefined) state.hue=params.hue
+    if (params.sat!==undefined) state.sat=params.sat
+    if (params.ct!==undefined) state.ct=params.ct
+    if (params.transitiontime!==undefined) state.transitiontime=params.transitiontime
+    await this._put(`/lights/${lightId}/state`,state)
+    if (this._lights[lightId]) Object.assign(this._lights[lightId].state,state)
+    broadcast({type:'hue:light',id:this.id,lightId,state:this._lights[lightId]?.state})
+  }
+
+  async setGroup(groupId,params) {
+    const action={}
+    if (params.on!==undefined) action.on=params.on
+    if (params.bri!==undefined) action.bri=Math.round(Math.max(1,Math.min(254,params.bri*254/100)))
+    if (params.hue!==undefined) action.hue=params.hue
+    if (params.sat!==undefined) action.sat=params.sat
+    if (params.ct!==undefined) action.ct=params.ct
+    if (params.transitiontime!==undefined) action.transitiontime=params.transitiontime
+    await this._put(`/groups/${groupId}/action`,action)
+    if (this._groups[groupId]) Object.assign(this._groups[groupId].action,action)
+    broadcast({type:'hue:group',id:this.id,groupId,action:this._groups[groupId]?.action})
+  }
+
+  async activateScene(sceneId) {
+    const scene=this._scenes[sceneId]
+    const groupId=scene?.group||'0'
+    await this._put(`/groups/${groupId}/action`,{scene:sceneId})
+    broadcast({type:'hue:scene',id:this.id,sceneId})
+  }
+
+  async disconnect() {
+    this.status='disconnected'
+    broadcast({type:'device:status',id:this.id,status:'disconnected'})
+  }
+
+  toJSON() {
+    return {id:this.id,type:'hue',name:this.name,ip:this.ip,status:this.status,
+            bridgeName:this._bridgeName,selectedLights:this.selectedLights,
+            selectedGroups:this.selectedGroups,selectedScenes:this.selectedScenes,
+            lights:this._lights,groups:this._groups,scenes:this._scenes}
+  }
+}
+
 function rebuildGo2rtcConfig() {
   const cameras = Object.values(devices).filter(d=>d.type==='camera')
   const streams = {}
@@ -1409,6 +1511,7 @@ function createDevice(cfg) {
   if (cfg.type==='nimble') return new NimbleDevice(cfg.id,cfg.name,cfg.ttyPath)
   if (cfg.type==='estim')  return new EstimDevice(cfg.id,cfg.name,cfg.ttyPath)
   if (cfg.type==='camera') return new CameraDevice(cfg.id,cfg.name,cfg.ip,cfg.username,cfg.password,cfg.streamPath)
+  if (cfg.type==='hue')    return new HueBridge(cfg.id,cfg.name,cfg.ip,cfg.token,cfg.selectedLights,cfg.selectedGroups,cfg.selectedScenes)
   throw new Error(`Unknown type: ${cfg.type}`)
 }
 for (const d of config.devices) {
@@ -1416,6 +1519,7 @@ for (const d of config.devices) {
     const dev = createDevice(d)
     devices[d.id] = dev
     if (dev.type === 'coyote') setTimeout(() => dev.connect().catch(() => {}), 3000)
+    if (dev.type === 'hue' && dev.token) setTimeout(() => dev.connect().catch(() => {}), 3000)
   } catch {}
 }
 // Always rebuild go2rtc config on startup so it stays in sync with saved cameras
@@ -1795,6 +1899,7 @@ app.patch('/api/devices/:id', async (req,res) => {
     if (password)   dev.password=password
     if (streamPath) dev.streamPath=streamPath
   }
+  if (dev.type==='hue') { if (ip) dev.ip=ip }
   const cfg=config.devices.find(d=>d.id===req.params.id)
   if (cfg) {
     if (name) cfg.name=name
@@ -1806,6 +1911,7 @@ app.patch('/api/devices/:id', async (req,res) => {
       if (password)   cfg.password=password
       if (streamPath) cfg.streamPath=streamPath
     }
+    if (dev.type==='hue') { if (ip) cfg.ip=ip }
     saveConfig(config)
   }
   if (dev.type==='camera') rebuildGo2rtcConfig()
@@ -1830,6 +1936,79 @@ app.post('/api/devices/:id/connect', (req,res) => {
 app.post('/api/devices/:id/disconnect', async (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
   try{await dev.disconnect();res.json({ok:true})}catch(e){res.status(500).json({error:e.message})}
+})
+
+// ── Hue API ───────────────────────────────────────────────────────────────────
+app.post('/api/hue/discover', async (req,res) => {
+  try {
+    const r=await fetch('https://discovery.meethue.com/')
+    res.json(await r.json())
+  } catch { res.json([]) }
+})
+
+app.post('/api/hue/pair', async (req,res) => {
+  const {ip}=req.body
+  if (!ip) return res.status(400).json({error:'ip required'})
+  const deadline=Date.now()+30000
+  while (Date.now()<deadline) {
+    try {
+      const r=await fetch(`http://${ip}/api`,{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({devicetype:'edgecontroller#pi5'})
+      })
+      const data=await r.json()
+      if (data[0]?.success?.username) return res.json({ok:true,token:data[0].success.username})
+      if (data[0]?.error?.type!==101) return res.status(400).json({error:data[0]?.error?.description||'pairing failed'})
+    } catch(err) { return res.status(500).json({error:err.message}) }
+    await new Promise(r=>setTimeout(r,1000))
+  }
+  res.status(408).json({error:'Timed out — press the button on the bridge and try again'})
+})
+
+app.get('/api/devices/:id/hue/inventory', async (req,res) => {
+  const dev=devices[req.params.id]
+  if (!dev||dev.type!=='hue') return res.status(404).json({error:'not found'})
+  try {
+    await dev.loadInventory()
+    broadcast({type:'hue:inventory',id:dev.id,...dev._inventory()})
+    res.json(dev._inventory())
+  } catch(err) { res.status(500).json({error:err.message}) }
+})
+
+app.post('/api/devices/:id/hue/select', (req,res) => {
+  const dev=devices[req.params.id]
+  if (!dev||dev.type!=='hue') return res.status(404).json({error:'not found'})
+  const {selectedLights,selectedGroups,selectedScenes}=req.body
+  if (selectedLights) dev.selectedLights=selectedLights
+  if (selectedGroups) dev.selectedGroups=selectedGroups
+  if (selectedScenes) dev.selectedScenes=selectedScenes
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.selectedLights=dev.selectedLights; cfg.selectedGroups=dev.selectedGroups; cfg.selectedScenes=dev.selectedScenes; saveConfig(config) }
+  broadcast({type:'device:updated',device:dev.toJSON()})
+  res.json({ok:true})
+})
+
+app.post('/api/devices/:id/hue/light/:lightId', async (req,res) => {
+  const dev=devices[req.params.id]
+  if (!dev||dev.type!=='hue') return res.status(404).json({error:'not found'})
+  try { await dev.setLight(req.params.lightId,req.body); res.json({ok:true}) }
+  catch(err) { res.status(500).json({error:err.message}) }
+})
+
+app.post('/api/devices/:id/hue/group/:groupId', async (req,res) => {
+  const dev=devices[req.params.id]
+  if (!dev||dev.type!=='hue') return res.status(404).json({error:'not found'})
+  try { await dev.setGroup(req.params.groupId,req.body); res.json({ok:true}) }
+  catch(err) { res.status(500).json({error:err.message}) }
+})
+
+app.post('/api/devices/:id/hue/scene', async (req,res) => {
+  const dev=devices[req.params.id]
+  if (!dev||dev.type!=='hue') return res.status(404).json({error:'not found'})
+  const {sceneId}=req.body
+  if (!sceneId) return res.status(400).json({error:'sceneId required'})
+  try { await dev.activateScene(sceneId); res.json({ok:true}) }
+  catch(err) { res.status(500).json({error:err.message}) }
 })
 
 app.post('/api/devices/:id/cmd', (req,res) => {

@@ -1873,9 +1873,9 @@ app.get('/api/serial-ports', async (req,res) => {
 app.get('/api/scan/results', (req,res) => res.json({scanning:isScanning,results:scanResults}))
 
 app.post('/api/devices', async (req,res) => {
-  const {type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath} = req.body
+  const {type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath,token} = req.body
   if (!type||!name) return res.status(400).json({error:'type and name required'})
-  const id=`${type}-${Date.now()}`, cfg={id,type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath}
+  const id=`${type}-${Date.now()}`, cfg={id,type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath,token}
   try {
     const dev=createDevice(cfg); devices[id]=dev; config.devices.push(cfg); saveConfig(config)
     if (type==='camera') rebuildGo2rtcConfig()

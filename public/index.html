@@ -3012,7 +3012,7 @@ function selectDeviceType(dt){
   }
 }
 function showTypeStep(){
-  document.querySelectorAll('#step-ble,#step-wifi,#step-usb,#step-camera').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-ble,#step-wifi,#step-usb,#step-camera,#step-hue').forEach(el=>el.style.display='none')
   document.getElementById('step-type').style.display='block'
 }
 function closeScan(){ document.getElementById('scan-overlay').classList.remove('open') }

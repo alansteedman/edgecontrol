@@ -1093,6 +1093,7 @@ function renderDevList() {
       ${conn
         ?`<button class="btn btn-ghost btn-xs" onclick="discDev('${d.id}')">Disconnect</button>`
         :`<button class="btn btn-primary btn-xs" onclick="connDev('${d.id}')">Connect</button>`}
+      ${d.type==='hue'?`<button class="btn btn-ghost btn-xs" onclick="hueShowSelect('${d.id}')">Configure</button>`:''}
       <button class="btn btn-ghost btn-xs" onclick="editDevice('${d.id}')">✎</button>
       <button class="btn btn-danger btn-xs" onclick="rmDev('${d.id}')">×</button>
     `
@@ -1896,10 +1897,10 @@ function renderHueCards() {
     // Header
     let html=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
       <span class="status-pill ${sc}">${dev.status}</span>
-      <span style="font-size:14px;font-weight:700;color:#e0e0e0">💡 ${dev.name}</span>
+      <img src="/hue-logo.svg" style="width:32px;height:18px">
+      <span style="font-size:14px;font-weight:700;color:#e0e0e0">${dev.name}</span>
       <span style="font-size:11px;color:#444;margin-left:auto">${dev.bridgeName||dev.ip}</span>
       <button class="btn btn-ghost btn-xs" onclick="hueRefreshInventory('${dev.id}')">↻ Refresh</button>
-      <button class="btn btn-ghost btn-xs" onclick="hueShowSelect('${dev.id}')">Configure</button>
     </div>`
 
     // Scenes grid
@@ -1933,26 +1934,8 @@ function renderHueCards() {
       html+=`</div>`
     }
 
-    // Individual lights
-    if (lights.length) {
-      html+=`<div><div style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Lights</div>`
-      for (const [id,lt] of lights) {
-        const on = lt.state?.on
-        const bri = Math.round((lt.state?.bri||254)*100/254)
-        html+=`<div style="display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid #1a1a1a">
-          <span style="font-size:11px;color:#aaa;min-width:120px">${lt.name}</span>
-          <button onclick="hueSetLight('${dev.id}','${id}',{on:${!on}})"
-            style="background:${on?'#4fc3f7':'#222'};border:1px solid ${on?'#4fc3f7':'#333'};color:${on?'#000':'#888'};border-radius:6px;padding:3px 10px;font-size:10px;font-weight:700;cursor:pointer;min-width:40px">${on?'ON':'OFF'}</button>
-          <input type="range" min="1" max="100" value="${bri}" style="flex:1;accent-color:#4fc3f7"
-            oninput="hueSetLight('${dev.id}','${id}',{bri:parseInt(this.value),on:true})">
-          <span style="font-size:11px;color:#555;min-width:32px;text-align:right">${bri}%</span>
-        </div>`
-      }
-      html+=`</div>`
-    }
-
-    if (!scenes.length && !groups.length && !lights.length) {
-      html+=`<div style="color:#555;font-size:12px">No lights or scenes selected — click Configure to choose what to show here.</div>`
+    if (!scenes.length && !groups.length) {
+      html+=`<div style="color:#555;font-size:12px">No rooms or scenes selected — use Configure in Devices to choose what to show here.</div>`
     }
 
     card.innerHTML=html

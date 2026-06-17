@@ -2684,10 +2684,10 @@ function initBandSelector() {
     const x = (e.clientX - rect.left) * (_bandCanvas.width / rect.width)
     const hz = xToFreq(x, _bandCanvas.width)
     if (bandDrag === 'low') {
-      bandLow = Math.max(20, Math.min(hz, bandHigh - 50))
+      bandLow = Math.max(20, Math.min(hz, bandHigh - 1))
       document.getElementById('band-low-lbl').textContent = 'Low cut: ' + fmtHz(bandLow)
     } else {
-      bandHigh = Math.min(20000, Math.max(hz, bandLow + 50))
+      bandHigh = Math.min(20000, Math.max(hz, bandLow + 1))
       document.getElementById('band-high-lbl').textContent = 'High cut: ' + fmtHz(bandHigh)
     }
     document.querySelectorAll('.freq-preset').forEach(b => b.classList.remove('active'))

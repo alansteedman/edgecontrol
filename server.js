@@ -152,7 +152,17 @@ function loadWaveforms() {
     writeFileSync(WAVEFORMS_PATH, JSON.stringify({ custom: [] }, null, 2))
     return { custom: [] }
   }
-  return JSON.parse(readFileSync(WAVEFORMS_PATH, 'utf8'))
+  const store = JSON.parse(readFileSync(WAVEFORMS_PATH, 'utf8'))
+  // Migrate legacy audio frames from {segs:[{f,a},...]} to plain amplitude integers
+  let migrated = false
+  ;(store.custom || []).forEach(w => {
+    if (w.type === 'audio' && Array.isArray(w.frames) && w.frames.length > 0 && typeof w.frames[0] !== 'number') {
+      w.frames = w.frames.map(f => f.segs ? f.segs[0].a : 0)
+      migrated = true
+    }
+  })
+  if (migrated) writeFileSync(WAVEFORMS_PATH, JSON.stringify(store, null, 2))
+  return store
 }
 function saveWaveforms() { writeFileSync(WAVEFORMS_PATH, JSON.stringify(waveformStore, null, 2)) }
 let waveformStore = loadWaveforms()
@@ -411,6 +421,11 @@ function computeWave(wfId, tick, amp, speed=1) {
   if (custom && custom.frames.length > 0) {
     // speed shifts the frame index — faster speed = advance more frames per tick
     const frame = custom.frames[Math.floor(tick * speed) % custom.frames.length]
+    // Audio frames stored as plain amplitude integers; legacy format uses {segs:[...]}
+    if (typeof frame === 'number') {
+      const a = Math.min(100, Math.round(frame * amp / 100))
+      return [[25,a],[25,a],[25,a],[25,a]]
+    }
     const segs = frame.segs || []
     // Ensure exactly 4 sub-pulses — map each slot to the nearest seg
     return Array.from({length:4}, (_,i) => {
@@ -2508,8 +2523,7 @@ app.post('/api/audio', audioUpload.single('file'), async (req,res) => {
     })
     console.log(`[audio] ${amps.length} frames (${Math.round(amps.length/10)}s)`)
     const wfId='audio-'+req.file.filename
-    const frames=amps.map(a=>({segs:[{f:25,a},{f:25,a},{f:25,a},{f:25,a}]}))
-    const wf={id:wfId, name:req.file.originalname, type:'audio', sourceFile:req.file.filename, frames}
+    const wf={id:wfId, name:req.file.originalname, type:'audio', sourceFile:req.file.filename, frames:amps}
     waveformStore.custom.push(wf); saveWaveforms()
     broadcast({type:'audio:progress', name:req.file.originalname, frames:amps.length,
       elapsed:0, done:true, duration:Math.round(amps.length/10)})

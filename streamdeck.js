@@ -1014,6 +1014,8 @@ const BLOCK_META = {
   loop:       { icon:'↺', label:'LOOP',       color:'#818cf8' },
   run_macro:  { icon:'▷', label:'SUB MACRO', color:'#34d399' },
   dev:        { icon:'⚡', label:'SET DEVICE',color:'#ef4444' },
+  hue_set:    { icon:'☀', label:'SET HUE',   color:'#a78bfa' },
+  hue_ramp:   { icon:'☀', label:'HUE RAMP',  color:'#a78bfa' },
 }
 
 function blockSummaryForLcd(type, cfg, macros) {
@@ -1027,6 +1029,8 @@ function blockSummaryForLcd(type, cfg, macros) {
     case 'loop':        return cfg.mode === 'Repeat N times' ? `×${cfg.count ?? 3}` : `EOM ${(cfg.mode||'').includes('>') ? '>' : '<'} ${cfg.thr ?? 75}%`
     case 'run_macro':   { const m = (macros||[]).find(x=>x.id===cfg.macroId); return m ? m.name.slice(0,16) : '?' }
     case 'dev':         return cfg.waveform ? cfg.waveform.slice(0,14) : ''
+    case 'hue_set':     { const p=(cfg.hueTarget||'').split(':'); return p[2]?`${p[1]}:${p[2]}`.slice(0,16):'' }
+    case 'hue_ramp':    return `${cfg.from??20}%→${cfg.to??100}% / ${cfg.dur||30}s`
     default:            return ''
   }
 }
@@ -1082,8 +1086,42 @@ function renderMacroLcd(macros, viewOffset, runningId, waitingId, currentBlock, 
     ctx.font = 'bold 13px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'
     ctx.fillStyle = bi.color; ctx.fillText(bi.label, 76, 18)
 
-    // Ramp animation — special display
-    if (currentBlock.type === 'ramp' && ramp) {
+    // Hue ramp animation — special display
+    if (currentBlock.type === 'hue_ramp' && ramp) {
+      const { value, from, to, elapsed, total } = ramp
+      const pct = Math.max(0, Math.min(1, (value - Math.min(from,to)) / (Math.max(from,to) - Math.min(from,to) || 1)))
+      const isUp = to >= from
+
+      // Current brightness % (large)
+      const valStr = `${Math.round(value)}%`
+      ctx.font = `bold ${valStr.length > 4 ? 22 : 28}px monospace`
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = bi.color
+      ctx.fillText(valStr, 76, 42)
+
+      // From → To
+      ctx.font = '9px monospace'; ctx.fillStyle = '#555'
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top'
+      ctx.fillText(`${from}% → ${to}%`, 76, 22)
+
+      // Elapsed / total time
+      ctx.font = '9px monospace'; ctx.fillStyle = '#444'
+      ctx.textBaseline = 'bottom'; ctx.fillText(`${elapsed.toFixed(1)}s / ${total}s`, 76, 84)
+
+      // Brightness bar (cyan/blue gradient, Hue colours)
+      const barX = 20, barY = 74, barW = 448, barH = 7
+      ctx.fillStyle = '#071520'; ctx.fillRect(barX, barY, barW, barH)
+      if (pct > 0) {
+        const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0)
+        grad.addColorStop(0, isUp ? '#1a3a5c' : '#4fc3f7')
+        grad.addColorStop(1, isUp ? '#4fc3f7' : '#1a3a5c')
+        ctx.fillStyle = grad
+        ctx.fillRect(barX, barY, Math.round(barW * pct), barH)
+      }
+      const markerX = barX + Math.round(barW * pct)
+      ctx.fillStyle = '#a78bfa'; ctx.fillRect(Math.max(barX, markerX - 1), barY - 1, 3, barH + 2)
+
+    // Coyote ramp animation — special display
+    } else if (currentBlock.type === 'ramp' && ramp) {
       const { value, from, to, elapsed, total } = ramp
       const pct = Math.max(0, Math.min(1, (value - Math.min(from,to)) / (Math.max(from,to) - Math.min(from,to) || 1)))
       const isUp = to >= from
@@ -1242,7 +1280,7 @@ function renderHueScenesLcd(hueDev, sceneOffset) {
   visibleScenes.forEach(([id, sc], i) => {
     const grpId = sc.group
     const grp = grpId ? (hueDev?._groups || {})[grpId] : null
-    const on = grp?.action?.on ?? false
+    const on = grpId ? (hueDev?._activeSceneByGroup?.[grpId] === id) : false
     const bri = grp ? Math.round((grp.action?.bri || 254) * 100 / 254) : 100
     const ox = i * 200
 
@@ -1930,15 +1968,10 @@ export class StreamDeckController {
       if (!entry) return
       const [sceneId, sc] = entry
       const grpId = sc.group
-      const grp = grpId ? hue._groups?.[grpId] : null
-      const on = grp?.action?.on ?? false
-      if (on && grpId) {
+      const isActiveScene = grpId ? hue._activeSceneByGroup?.[grpId] === sceneId : false
+      if (isActiveScene && grpId) {
         hue.setGroup(grpId, { on: false })
       } else {
-        // Optimistically mark group on so LCD updates immediately
-        if (grpId && hue._groups?.[grpId]) {
-          hue._groups[grpId].action = Object.assign(hue._groups[grpId].action || {}, { on: true })
-        }
         hue.activateScene(sceneId)
       }
       this._refreshLcd()

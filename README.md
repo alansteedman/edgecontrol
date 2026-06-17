@@ -21,6 +21,7 @@ A self-hosted BLE and USB device controller that runs on a Raspberry Pi 5. Provi
 | Nimble | Motor | USB Serial |
 | EOM | Arousal sensor | Network |
 | IP Camera | Video | Network |
+| Philips Hue | Smart lighting | Network (local bridge) |
 
 ## Macro Blocks
 
@@ -28,7 +29,7 @@ The visual macro editor supports the following block types:
 
 **Control** — Start, End, Stop All, Run Macro
 
-**Timing** — Delay, Ramp (smooth intensity transition over time)
+**Timing** — Delay, Ramp (smooth intensity transition over time), Set Hue (activate a scene or room at a set brightness), Hue Ramp (smoothly ramp scene or room brightness from x% to y% over time)
 
 **Triggers** — Wait: EOM (pause until arousal threshold), Wait: Manual (pause until user clicks continue), Wait: Paw (pause until PawPrints button press or tilt angle)
 
@@ -63,6 +64,7 @@ If you need to connect the Pi to WiFi after a fresh install, the device will bro
 
 ## Versions
 
+- **v2.0.1** — Philips Hue integration: scenes and rooms on Stream Deck LCD with brightness knobs, active scene tracking (per-group), Set Hue and Hue Ramp macro blocks with live ramp display on Stream Deck, macro monitor view support for Hue blocks
 - **v2.0.0** — PawPrints BLE sensor support, new macro blocks (Wait: Paw, Paw: If/Else), streamdeck.js included
 - **v1.0.0** — Initial release
 

@@ -3688,6 +3688,16 @@ const BDef = {
     sc:[{k:'devRef',l:'Device',t:'devsel'},{k:'channel',l:'Channel',t:'chsel'},{k:'from',l:'From (0–200)',t:'num',min:0,max:200},{k:'to',l:'To (0–200)',t:'num',min:0,max:200},{k:'dur',l:'Duration (s)',t:'num',min:1},{k:'block',l:'Wait for ramp to finish',t:'chk'}],
     sm:c=>`${c.from??20}→${c.to??160} over ${c.dur||30}s${c.block?' ⏸':''}`
   },
+  hue_set:  { label:'SET HUE',   icon:'☀', bg:'#12101a', bd:'#a78bfa', tx:'#c4b5fd', ports:{i:['i'],o:['o']},
+    dc:{hueTarget:'',action:'on',bri:80},
+    sc:[{k:'hueTarget',l:'Scene or Room',t:'hueanysel'},{k:'action',l:'Action',t:'sel',opts:['on','off']},{k:'bri',l:'Brightness (%)',t:'range',min:1,max:100}],
+    sm:c=>{const lbl=c.hueTargetName||c.hueTarget||'—'; return c.action==='off'?`${lbl} OFF`:`${lbl} · ${c.bri??80}%`}
+  },
+  hue_ramp: { label:'HUE RAMP',  icon:'↗', bg:'#12101a', bd:'#a78bfa', tx:'#c4b5fd', ports:{i:['i'],o:['o']},
+    dc:{hueTarget:'',from:20,to:100,dur:30,block:false},
+    sc:[{k:'hueTarget',l:'Scene or Room',t:'hueanysel'},{k:'from',l:'From (%)',t:'range',min:0,max:100},{k:'to',l:'To (%)',t:'range',min:0,max:100},{k:'dur',l:'Duration (s)',t:'num',min:1},{k:'block',l:'Wait for ramp to finish',t:'chk'}],
+    sm:c=>`${c.from??20}%→${c.to??100}% over ${c.dur||30}s${c.block?' ⏸':''}`
+  },
   wait_eom: { label:'WAIT: EOM', icon:'◈', bg:'#261500', bd:'#f97316', tx:'#fdba74', ports:{i:['i'],o:['o']},
     dc:{cond:'Arousal >',thr:70,timeout:0},
     sc:[{k:'cond',l:'Condition',t:'sel',opts:['Arousal >','Arousal <']},{k:'thr',l:'Threshold (%)',t:'range',min:0,max:100},{k:'timeout',l:'Timeout (s, 0=none)',t:'num',min:0}],
@@ -4111,6 +4121,26 @@ function renderMeCfg() {
       ;['A','B'].forEach(ch=>h+=`<option value="${ch}"${String(v||'')==ch?' selected':''}>${ch}</option>`)
       h+=`</select>`
     }
+    else if(f.t==='hueanysel') {
+      const allHues=Object.values(S.devices).filter(d=>d.type==='hue')
+      h+=`<select class="mci" onchange="meCfgUp('${b.id}','${f.k}',this.value);meCfgUp('${b.id}','hueTargetName',this.options[this.selectedIndex].text)">`
+      h+=`<option value="">— select target —</option>`
+      allHues.forEach(hue=>{
+        const pfx=allHues.length>1?hue.name+' — ':''
+        const scenes=Object.entries(hue.scenes||{}), groups=Object.entries(hue.groups||{})
+        if(scenes.length){
+          h+=`<optgroup label="${pfx}Scenes">`
+          scenes.forEach(([id,sc])=>{const val=hue.id+':scene:'+id; const lbl=`Scene: ${sc.name||id}`; h+=`<option value="${val}"${v===val?' selected':''}>${lbl}</option>`})
+          h+=`</optgroup>`
+        }
+        if(groups.length){
+          h+=`<optgroup label="${pfx}Rooms">`
+          groups.forEach(([id,grp])=>{const val=hue.id+':group:'+id; const lbl=`Room: ${grp.name||id}`; h+=`<option value="${val}"${v===val?' selected':''}>${lbl}</option>`})
+          h+=`</optgroup>`
+        }
+      })
+      h+=`</select>`
+    }
   })
   h+=`</div>`
   if(ME_HINTS[b.type]) h+=`<div style="padding:0 14px 14px"><div class="mchn">${ME_HINTS[b.type]}</div></div>`
@@ -4153,6 +4183,7 @@ function buildMePalette() {
   const secs=[
     {title:'Control',items:['start','end','stop_all','run_macro']},
     {title:'Timing', items:['delay','ramp']},
+    {title:'Hue',    items:['hue_set','hue_ramp']},
     {title:'Triggers',items:['wait_eom','wait_manual','wait_pawprints']},
     {title:'Logic',  items:['if_else','if_pawprints','loop']},
   ]

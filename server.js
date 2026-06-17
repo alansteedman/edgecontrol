@@ -1419,6 +1419,7 @@ class HueBridge {
     this.selectedScenes=selectedScenes||[]
     this.status='disconnected'
     this._lights={}; this._groups={}; this._scenes={}; this._bridgeName=''
+    this._activeSceneByGroup={}
   }
 
   async connect() {
@@ -1487,15 +1488,18 @@ class HueBridge {
     if (params.ct!==undefined) action.ct=params.ct
     if (params.transitiontime!==undefined) action.transitiontime=params.transitiontime
     if (this._groups[groupId]) Object.assign(this._groups[groupId].action,action)
+    if (params.on===false) delete this._activeSceneByGroup[groupId]
     broadcast({type:'hue:group',id:this.id,groupId,action:this._groups[groupId]?.action})
     this._put(`/groups/${groupId}/action`,action).catch(err=>console.error(`[${this.id}] Hue setGroup:`,err.message))
   }
 
-  async activateScene(sceneId) {
+  activateScene(sceneId) {
     const scene=this._scenes[sceneId]
     const groupId=scene?.group||'0'
-    await this._put(`/groups/${groupId}/action`,{scene:sceneId})
-    broadcast({type:'hue:scene',id:this.id,sceneId})
+    this._activeSceneByGroup[groupId]=sceneId
+    if (this._groups[groupId]) Object.assign(this._groups[groupId].action||(this._groups[groupId].action={}),{on:true})
+    broadcast({type:'hue:scene',id:this.id,sceneId,groupId})
+    this._put(`/groups/${groupId}/action`,{scene:sceneId}).catch(err=>console.error(`[${this.id}] Hue activateScene:`,err.message))
   }
 
   async disconnect() {
@@ -2342,6 +2346,38 @@ class MacroRunner {
         this._applyDev(block)
         await this._sleep(180)
         await this._exec(next(), blockMap, adj, depth); break
+
+      case 'hue_set': {
+        const [devId, targetType, targetId] = (cfg.hueTarget || '').split(':')
+        const hue = devId ? devices[devId] : Object.values(devices).find(d => d.type === 'hue' && d.status === 'connected')
+        if (hue && hue.status === 'connected' && targetType && targetId) {
+          const turnOff = cfg.action === 'off'
+          if (targetType === 'scene') {
+            if (turnOff) {
+              const grpId = hue._scenes?.[targetId]?.group
+              if (grpId) hue.setGroup(grpId, { on: false })
+            } else {
+              hue.activateScene(targetId)
+              if (cfg.bri !== undefined) {
+                const grpId = hue._scenes?.[targetId]?.group
+                if (grpId) setTimeout(() => hue.setGroup(grpId, { bri: cfg.bri }), 300)
+              }
+            }
+          } else if (targetType === 'group') {
+            if (turnOff) hue.setGroup(targetId, { on: false })
+            else hue.setGroup(targetId, { on: true, bri: cfg.bri })
+          }
+        }
+        await this._sleep(350)
+        await this._exec(next(), blockMap, adj, depth); break
+      }
+
+      case 'hue_ramp': {
+        const prom = this._doHueRamp(block)
+        if (cfg.block) { await prom; await this._exec(next(), blockMap, adj, depth) }
+        else { prom.catch(() => {}); await this._exec(next(), blockMap, adj, depth) }
+        break
+      }
     }
   }
 
@@ -2371,6 +2407,56 @@ class MacroRunner {
       if (cfg.mode !== undefined) dev.setMode?.(cfg.mode)
     } else if (dev.type === 'nimble') {
       if (cfg.speed !== undefined && dev.setMotor) dev.setMotor(cfg.speed)
+    } else if (dev.type === 'hue') {
+      const [targetType, targetId] = (block.channel || '').split(':')
+      const turnOff = cfg.action === 'off'
+      if (targetType === 'scene') {
+        if (turnOff) {
+          const grpId = dev._scenes?.[targetId]?.group
+          if (grpId) dev.setGroup(grpId, { on: false })
+        } else {
+          dev.activateScene(targetId)
+          if (cfg.bri !== undefined) {
+            const grpId = dev._scenes?.[targetId]?.group
+            if (grpId) setTimeout(() => dev.setGroup(grpId, { bri: cfg.bri }), 300)
+          }
+        }
+      } else if (targetType === 'group') {
+        if (turnOff) {
+          dev.setGroup(targetId, { on: false })
+        } else {
+          const params = { on: true }
+          if (cfg.bri !== undefined) params.bri = cfg.bri
+          dev.setGroup(targetId, params)
+        }
+      }
+    }
+  }
+
+  async _doHueRamp(block) {
+    const cfg = block.config || {}
+    const [devId, targetType, targetId] = (cfg.hueTarget || '').split(':')
+    if (!targetType || !targetId) return
+    const from = cfg.from ?? 0, to = cfg.to ?? 100, durMs = (cfg.dur || 30) * 1000
+    const steps = Math.max(6, Math.round(durMs / 500))
+    const hue = devId ? devices[devId] : Object.values(devices).find(d => d.type === 'hue' && d.status === 'connected')
+    if (!hue || hue.status !== 'connected') return
+    let groupId
+    if (targetType === 'scene') {
+      groupId = hue._scenes?.[targetId]?.group
+      hue.activateScene(targetId)
+      await this._sleep(300)
+    } else if (targetType === 'group') {
+      groupId = targetId
+    }
+    if (!groupId) return
+    const total = cfg.dur || 30
+    const stepMs = durMs / steps
+    for (let i = 0; i <= steps && !this._abort; i++) {
+      const t = i / steps, val = Math.round(from + (to - from) * t)
+      broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: val, from, to, elapsed: t * total, total })
+      hue.setGroup(groupId, { bri: val, on: true, transitiontime: Math.round(stepMs / 100) })
+      if (i < steps) await this._sleep(stepMs)
     }
   }
 

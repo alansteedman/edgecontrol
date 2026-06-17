@@ -69,6 +69,8 @@ const BD = {
   loop:       {icon:'↺',label:'LOOP',     bg:'#0c0c1a',bd:'#818cf866',tx:'#a5b4fc',ports:{i:['i'],o:['ob','od']}},
   run_macro:  {icon:'▷',label:'RUN MACRO',bg:'#0a1a10',bd:'#34d39966',tx:'#6ee7b7',ports:{i:['i'],o:['o']}},
   dev:        {icon:'⚡',label:'SET DEVICE',bg:'#280d0d',bd:'#ef444466',tx:'#fca5a5',ports:{i:['i'],o:['o']}},
+  hue_set:    {icon:'☀',label:'SET HUE',  bg:'#12101a',bd:'#a78bfa66',tx:'#c4b5fd',ports:{i:['i'],o:['o']}},
+  hue_ramp:   {icon:'↗',label:'HUE RAMP', bg:'#12101a',bd:'#a78bfa66',tx:'#c4b5fd',ports:{i:['i'],o:['o']}},
 }
 const pc = {o:'port-o',oy:'port-oy',on:'port-on',ob:'port-ob',od:'port-od'}
 
@@ -93,6 +95,8 @@ function blockSummary(type, cfg) {
     case 'loop':     return cfg.mode==='Repeat N times'?`×${cfg.count??3}`:`EOM ${(cfg.mode||'').includes('>')?'>':'<'} ${cfg.thr??75}%`
     case 'run_macro':{ const m=macros.find(x=>x.id===cfg.macroId); return m?`▷ ${m.name}`:'' }
     case 'dev':      return cfg.waveform||''
+    case 'hue_set':  return `${cfg.hueTargetName||cfg.hueTarget||'—'} · ${cfg.action==='off'?'OFF':`${cfg.bri??80}%`}`
+    case 'hue_ramp': return `${cfg.hueTargetName||''} ${cfg.from??20}%→${cfg.to??100}% / ${cfg.dur||30}s`
     default: return ''
   }
 }

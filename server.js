@@ -2447,19 +2447,21 @@ app.post('/api/macros/:id/resume', (req, res) => {
 // Returns array of 0-100 amplitude values, one per 100ms
 function extractAmplitudeEnvelope(filePath, lowCut=20, highCut=20000, onProgress=null) {
   return new Promise((resolve, reject) => {
-    const SAMPLE_RATE = 44100
+    // Use lowest sample rate that correctly captures the high cut frequency
+    // Nyquist = 2x highCut, add 4x headroom. Floor at 4000, ceil at 44100.
+    const SAMPLE_RATE = Math.min(44100, Math.max(4000, highCut * 4))
     const CHUNK      = Math.floor(SAMPLE_RATE * 0.1) // 100ms of samples
     const BYTES      = CHUNK * 4                      // f32le = 4 bytes each
     const frames     = []
     let   leftover   = Buffer.alloc(0)
 
     // Build band-pass filter: highpass (low cut) + lowpass (high cut)
-    const ffArgs = ['-i', filePath, '-ar', String(SAMPLE_RATE), '-ac', '1']
     const filters = []
     if (lowCut  >    20) filters.push(`highpass=f=${lowCut}`)
     if (highCut < 20000) filters.push(`lowpass=f=${highCut}`)
+    const ffArgs = ['-i', filePath, '-ac', '1']
     if (filters.length) ffArgs.push('-af', filters.join(','))
-    ffArgs.push('-f', 'f32le', 'pipe:1')
+    ffArgs.push('-ar', String(SAMPLE_RATE), '-f', 'f32le', 'pipe:1')
 
     const ff = spawn('ffmpeg', ffArgs,
       { stdio: ['ignore', 'pipe', 'ignore'] })

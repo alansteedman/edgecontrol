@@ -2891,6 +2891,12 @@ app.delete('/api/audio/:id', (req,res) => {
   res.json({ok:true})
 })
 
+app.get('/api/audio/:id/file', (req,res) => {
+  const wf=(waveformStore.custom||[]).find(w=>w.id===req.params.id&&w.type==='audio')
+  if(!wf) return res.status(404).json({error:'not found'})
+  res.sendFile(join(AUDIO_DIR, wf.sourceFile))
+})
+
 // ── WiFi API ──────────────────────────────────────────────────────────────────
 function nmcli(...args) {
   return new Promise((resolve, reject) => {

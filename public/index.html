@@ -2646,7 +2646,7 @@ function renderAudioList(){
     const safeId='ac-'+w.id.replace(/[^a-z0-9]/gi,'')
     item.innerHTML=`
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="font-size:14px">🎵</span>
+        <button class="btn btn-ghost btn-xs" id="play-btn-${safeId}" onclick="toggleAudioPlayback('${w.id}','${safeId}')" style="font-size:13px;padding:2px 7px;min-width:28px">▶</button>
         <span style="flex:1;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.name}">${w.name}</span>
         <span style="font-size:10px;color:#444;white-space:nowrap">${mins}:${secs} &nbsp; ${frameCount} frames</span>
         <button class="btn btn-danger btn-xs" onclick="deleteAudio('${w.id}')">×</button>
@@ -2955,7 +2955,28 @@ async function uploadAudio(file){
 async function deleteAudio(wfId){
   const w=(S.waveforms.custom||[]).find(w=>w.id===wfId)
   if(!w||!confirm(`Delete "${w.name}"?`)) return
+  stopAudioPlayback()
   await fetch(`/api/audio/${wfId}`,{method:'DELETE'})
+}
+
+let _audioPlayer = null, _audioPlayingId = null
+function stopAudioPlayback() {
+  if (_audioPlayer) { _audioPlayer.pause(); _audioPlayer.src = '' }
+  if (_audioPlayingId) {
+    const btn = document.getElementById('play-btn-' + _audioPlayingId)
+    if (btn) btn.textContent = '▶'
+  }
+  _audioPlayingId = null
+}
+function toggleAudioPlayback(wfId, safeId) {
+  if (_audioPlayingId === safeId) { stopAudioPlayback(); return }
+  stopAudioPlayback()
+  if (!_audioPlayer) { _audioPlayer = new Audio(); _audioPlayer.onended = () => stopAudioPlayback() }
+  _audioPlayer.src = `/api/audio/${wfId}/file`
+  _audioPlayer.play().catch(e => console.error('[audio]', e))
+  _audioPlayingId = safeId
+  const btn = document.getElementById('play-btn-' + safeId)
+  if (btn) btn.textContent = '⏸'
 }
 
 // ── WiFi ─────────────────────────────────────────────────────────────────────

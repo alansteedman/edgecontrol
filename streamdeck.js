@@ -1218,6 +1218,85 @@ function renderMacroLcd(macros, viewOffset, runningId, waitingId, currentBlock, 
   return rgba(canvas)
 }
 
+// ─── Hue scenes LCD strip (800×100) ──────────────────────────────────────
+function renderHueScenesLcd(hueDev, sceneOffset) {
+  const W = 800, H = 100
+  const canvas = createCanvas(W, H)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, W, H)
+
+  const selectedIds = hueDev?.selectedScenes || []
+  const allScenes = Object.entries(hueDev?.scenes || {}).filter(([id]) => selectedIds.includes(id))
+
+  if (!allScenes.length) {
+    ctx.font = '11px monospace'; ctx.fillStyle = '#333'
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillText('No scenes configured — use Configure in the app', W/2, H/2)
+    return rgba(canvas)
+  }
+
+  const visibleScenes = allScenes.slice(sceneOffset, sceneOffset + 4)
+  const hasPrev = sceneOffset > 0
+  const hasNext = sceneOffset + 4 < allScenes.length
+
+  visibleScenes.forEach(([id, sc], i) => {
+    const grpId = sc.group
+    const grp = grpId ? (hueDev?.groups || {})[grpId] : null
+    const on = grp?.action?.on ?? false
+    const bri = grp ? Math.round((grp.action?.bri || 254) * 100 / 254) : 100
+    const ox = i * 200
+
+    if (i > 0) {
+      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(ox, 6); ctx.lineTo(ox, H - 6); ctx.stroke()
+    }
+
+    if (on) { ctx.fillStyle = '#071520'; ctx.fillRect(ox, 0, 200, H) }
+
+    // On/off dot
+    ctx.beginPath(); ctx.arc(ox + 14, 20, 5, 0, Math.PI * 2)
+    ctx.fillStyle = on ? '#4fc3f7' : '#2a2a2a'; ctx.fill()
+
+    // Scene name
+    const name = sc.name || id
+    const trimmed = name.length > 14 ? name.slice(0, 13) + '…' : name
+    ctx.font = `bold ${trimmed.length > 10 ? 10 : 12}px monospace`
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.fillStyle = on ? '#e0e0e0' : '#666'
+    ctx.fillText(trimmed, ox + 26, 20)
+
+    // Brightness value
+    ctx.font = '10px monospace'; ctx.fillStyle = on ? '#4fc3f7' : '#333'
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.fillText(on ? `${bri}%` : 'OFF', ox + 14, 44)
+
+    // Brightness bar
+    const bx = ox + 14, by = 58, bw = 172, bh = 6
+    ctx.fillStyle = '#111'; ctx.fillRect(bx, by, bw, bh)
+    if (on && bri > 0) {
+      const grad = ctx.createLinearGradient(bx, 0, bx + bw, 0)
+      grad.addColorStop(0, '#1a4a60'); grad.addColorStop(1, '#4fc3f7')
+      ctx.fillStyle = grad; ctx.fillRect(bx, by, Math.round(bw * bri / 100), bh)
+    }
+
+    // Tap hint
+    ctx.font = '7px monospace'; ctx.fillStyle = '#222'
+    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'
+    ctx.fillText('TAP TO TOGGLE', ox + 100, H - 3)
+  })
+
+  if (hasPrev) {
+    ctx.font = 'bold 14px monospace'; ctx.fillStyle = '#4fc3f7'
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText('◀', 4, H/2)
+  }
+  if (hasNext) {
+    ctx.font = 'bold 14px monospace'; ctx.fillStyle = '#4fc3f7'
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText('▶', W - 4, H/2)
+  }
+
+  return rgba(canvas)
+}
+
 // ─── Page definitions ─────────────────────────────────────────────────────
 function getActiveDeviceTypes(devices) {
   return DEVICE_TYPE_ORDER.filter(t => Object.values(devices).some(d => d.type === t))
@@ -1422,6 +1501,7 @@ export class StreamDeckController {
     this._estimEncMode = ['power', 'power', 'power', 'power']
     this._estimSelected = false  // true = unit1 channels highlighted for mode assignment
     this._devicePageOffset = 0
+    this._hueSceneOffset = 0
     this._tick = 0
     this._timer = null
     this._ready = false
@@ -1473,6 +1553,7 @@ export class StreamDeckController {
       case 'coyote':  this._coyoteKey(idx);  break
       case 'estim':   this._estimKey(idx);   break
       case 'macro':   this._macroKey(idx);   break
+      case 'hue':     this._hueKey(idx);     break
       default: if (idx === 0) this.setPage('home'); break
     }
   }
@@ -1496,6 +1577,22 @@ export class StreamDeckController {
       if (type) this.setPage(DEVICE_DECK_CONFIG[type].page)
       return
     }
+  }
+
+  _hueKey(idx) {
+    if (idx === 0) { this.setPage('home'); return }
+    if (idx === 2) {
+      const hue = this._findDev('hue')
+      const selectedIds = hue?.selectedScenes || []
+      const total = Object.entries(hue?.scenes || {}).filter(([id]) => selectedIds.includes(id)).length
+      if (total > 4) {
+        const next = this._hueSceneOffset + 4
+        this._hueSceneOffset = next >= total ? 0 : next
+        this._renderKeys(); this._refreshLcd()
+      }
+      return
+    }
+    if (idx === 3) { this._stopAll(); return }
   }
 
   _macroKey(idx) {
@@ -1629,6 +1726,7 @@ export class StreamDeckController {
       case 'eom':    this._eomRotate(idx, ticks);    break
       case 'coyote': this._coyoteRotate(idx, ticks); break
       case 'estim':  this._estimRotate(idx, ticks);  break
+      case 'hue':    this._hueRotate(idx, ticks);    break
     }
   }
 
@@ -1735,6 +1833,23 @@ export class StreamDeckController {
     this._renderEncoders()
   }
 
+  _hueRotate(idx, ticks) {
+    const hue = this._findDev('hue')
+    if (!hue) return
+    const selectedIds = hue.selectedScenes || []
+    const allScenes = Object.entries(hue.scenes || {}).filter(([id]) => selectedIds.includes(id))
+    const entry = allScenes[this._hueSceneOffset + idx]
+    if (!entry) return
+    const [, sc] = entry
+    const grpId = sc.group
+    if (!grpId) return
+    const grp = hue._groups?.[grpId]
+    const curBri = grp ? Math.round((grp.action?.bri || 254) * 100 / 254) : 100
+    const newBri = Math.min(100, Math.max(1, curBri + ticks * 2))
+    hue.setGroup(grpId, { bri: newBri, on: true })
+    this._refreshLcd()
+  }
+
   // ── Encoder press ──────────────────────────────────────────────
   _onEncoderPress(idx) {
     if (this.page === 'macro') {
@@ -1784,6 +1899,35 @@ export class StreamDeckController {
         if (dev?.setJoined) dev.setJoined(!dev.joined)
       }
       this._renderEncoders(); this._renderKeys(); return
+    }
+    if (this.page === 'hue') {
+      const hue = this._findDev('hue')
+      if (!hue) return
+      const selectedIds = hue.selectedScenes || []
+      const allScenes = Object.entries(hue.scenes || {}).filter(([id]) => selectedIds.includes(id))
+      const x = pos?.x ?? 0
+      // Edge scroll
+      if (x < 30 && this._hueSceneOffset > 0) {
+        this._hueSceneOffset = Math.max(0, this._hueSceneOffset - 4)
+        this._renderKeys(); this._refreshLcd(); return
+      }
+      if (x > 770 && this._hueSceneOffset + 4 < allScenes.length) {
+        this._hueSceneOffset += 4
+        this._renderKeys(); this._refreshLcd(); return
+      }
+      // Toggle scene in tapped column
+      const visibleScenes = allScenes.slice(this._hueSceneOffset, this._hueSceneOffset + 4)
+      const col = Math.min(visibleScenes.length - 1, Math.floor(x / 200))
+      const entry = visibleScenes[col]
+      if (!entry) return
+      const [sceneId, sc] = entry
+      const grpId = sc.group
+      const grp = grpId ? hue._groups?.[grpId] : null
+      const on = grp?.action?.on ?? false
+      if (on && grpId) hue.setGroup(grpId, { on: false })
+      else hue.activateScene(sceneId)
+      this._refreshLcd()
+      return
     }
     if (this.page !== 'coyote') return
 
@@ -1907,7 +2051,9 @@ export class StreamDeckController {
   // ── Page navigation ────────────────────────────────────────────
   setPage(page) {
     this.page = page
-    if (page === 'coyote') {
+    if (page === 'hue') {
+      this._hueSceneOffset = 0
+    } else if (page === 'coyote') {
       this._coyoteItems = loadCoyoteItems()
     } else {
       this._encoderSpeedMode = [false, false, false, false]
@@ -2024,6 +2170,26 @@ export class StreamDeckController {
       return
     }
 
+    if (this.page === 'hue') {
+      const hue = this._findDev('hue')
+      const selectedIds = hue?.selectedScenes || []
+      const total = Object.entries(hue?.scenes || {}).filter(([id]) => selectedIds.includes(id)).length
+      const hasScroll = total > 4
+      const curPage = Math.floor(this._hueSceneOffset / 4) + 1
+      const totalPages = Math.ceil(total / 4) || 1
+      const topKeys = [
+        { houseIcon:true, label:'Home',     color:'blue' },
+        { icon:'',        label:'',         color:'dim'  },
+        hasScroll ? { icon:'▶', label:`${curPage}/${totalPages}`, color:'blue' } : { icon:'', label:'', color:'dim' },
+        { stopSign:true,  label:'Stop All', color:'red'  },
+      ]
+      for (let i = 0; i < 4; i++)
+        await this.deck.fillKeyBuffer(i, renderKey(topKeys[i]), { format:'rgba' })
+      for (let i = 0; i < 4; i++)
+        await this.deck.fillKeyBuffer(4 + i, renderKey({ icon:'', label:'', color:'dim' }), { format:'rgba' })
+      return
+    }
+
     let keys
     if (this.page === 'home')      keys = getHomeKeys(this.devices, this._devicePageOffset)
     else if (this.page === 'eom')  keys = getEomKeys(this._findDev('eom'))
@@ -2041,8 +2207,8 @@ export class StreamDeckController {
   async _renderEncoders() {
     if (!this.deck) return
     let encs
-    if (this.page === 'eom') {
-      // EoM uses full-strip LCD render — handled by _refreshLcd
+    if (this.page === 'eom' || this.page === 'hue') {
+      // Full-strip LCD render — handled by _refreshLcd
       return
     } else if (this.page === 'coyote') {
       if (this._groupMode) return  // group mode uses full-strip render via _refreshLcd
@@ -2128,6 +2294,11 @@ export class StreamDeckController {
       if (this.page === 'coyote' || this.page === 'estim') {
         // Individual mode: 4 individual LCD encoder segments
         await this._renderEncoders()
+        return
+      }
+      if (this.page === 'hue') {
+        const buf = renderHueScenesLcd(this._findDev('hue'), this._hueSceneOffset)
+        await this.deck.fillLcd(0, buf, { format:'rgba' })
         return
       }
       let buf

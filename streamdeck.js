@@ -11,6 +11,18 @@ const ICONS_DIR   = join(__dir, 'icons')
 const WAVEFORMS_PATH = join(__dir, 'waveforms.json')
 const AUDIO_DIR   = join(__dir, 'audio')
 
+// ─── Device type display config for home page bottom row ─────────────────────
+const DEVICE_TYPE_ORDER = ['eom', 'nimble', 'coyote', 'estim', 'hue', 'pawprints', 'camera']
+const DEVICE_DECK_CONFIG = {
+  eom:       { label: 'EoM',       color: 'teal',   page: 'eom',       deviceKey: 'eom'    },
+  nimble:    { label: 'Nimble',    color: 'purple', page: 'nimble',    deviceKey: 'nimble' },
+  coyote:    { label: 'Coyote',    color: 'orange', page: 'coyote',    deviceKey: 'coyote' },
+  estim:     { label: 'Estim',     color: 'blue',   page: 'estim',     deviceKey: 'estim'  },
+  hue:       { label: 'Hue',       color: 'teal',   page: 'hue',       icon: '💡'          },
+  pawprints: { label: 'PawPrints', color: 'green',  page: 'pawprints', icon: '🐾'          },
+  camera:    { label: 'Camera',    color: 'blue',   page: 'camera',    icon: '📷'          },
+}
+
 // ─── Built-in waveform definitions (matches server BUILTIN_WAVEFORMS) ────────
 const BUILTIN_WAVEFORMS = [
   { id:'pulse',     name:'Pulse',     type:'builtin' },
@@ -627,62 +639,70 @@ function renderEncoderLcd({ label='', value=0, max=100, unit='%', color='#888', 
 }
 
 // ─── HOME page LCD strip (800×100) — device status ────────────────────────
-function renderHomeLcd(devices) {
+function renderHomeLcd(devices, devicePageOffset) {
   const W = 800, H = 100
   const canvas = createCanvas(W, H)
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, W, H)
 
-  const cols = [
-    { name: 'EoM',    type: 'eom',    color: null },
-    { name: 'Nimble', type: 'nimble', color: null },
-    { name: 'Coyote', type: 'coyote', color: null },
-    { name: 'Estim',  type: 'estim',  color: null },
-  ]
-
-  // Find devices by type
+  const activeTypes = getActiveDeviceTypes(devices)
+  const visibleTypes = activeTypes.slice(devicePageOffset, devicePageOffset + 4)
   const devList = Object.values(devices)
-  cols.forEach(col => {
-    const d = devList.find(d => d.type === col.type)
-    col.status = d ? d.status : 'offline'
-    col.color = col.status === 'connected' ? '#27ae60'
-               : col.status === 'connecting' ? '#f39c12'
-               : col.status === 'error' ? '#c0392b'
-               : '#444'
-  })
 
-  cols.forEach((col, i) => {
-    const x = (W / 4) * i + 12
+  if (!visibleTypes.length) {
+    ctx.font = '11px monospace'; ctx.fillStyle = '#333'
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillText('No devices configured', W/2, H/2)
+    return rgba(canvas)
+  }
 
-    // Dot indicator
-    ctx.beginPath(); ctx.arc(x + 5, 24, 5, 0, Math.PI*2)
-    ctx.fillStyle = col.color; ctx.fill()
-
-    // Name
-    ctx.font = 'bold 11px monospace'; ctx.fillStyle = '#888'
-    ctx.textBaseline = 'middle'; ctx.fillText(col.name, x + 16, 24)
-
-    // Status
-    ctx.font = '10px monospace'; ctx.fillStyle = col.color
-    ctx.fillText(col.status.toUpperCase(), x, 44)
-
-    // Extra info if connected
-    const d = devList.find(d => d.type === col.type)
-    if (d && d.status === 'connected') {
-      ctx.font = '9px monospace'; ctx.fillStyle = '#555'
-      if (col.type === 'eom' && d._mode) ctx.fillText(d._mode.toUpperCase(), x, 60)
-      if (col.type === 'coyote') {
-        ctx.fillText(`A:${d.channels?.A?.intensity||0}%  B:${d.channels?.B?.intensity||0}%`, x, 60)
-      }
-    }
+  visibleTypes.forEach((type, i) => {
+    const cfg = DEVICE_DECK_CONFIG[type]
+    const d = devList.find(d => d.type === type)
+    const status = d ? d.status : 'offline'
+    const dotColor = status === 'connected' ? '#27ae60'
+                   : status === 'connecting' ? '#f39c12'
+                   : status === 'error' ? '#c0392b'
+                   : '#444'
+    const colW = W / Math.min(4, visibleTypes.length)
+    const x = colW * i + 12
 
     // Divider
     if (i > 0) {
       ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
-      ctx.beginPath(); ctx.moveTo((W/4)*i, 8); ctx.lineTo((W/4)*i, H-8)
-      ctx.stroke()
+      ctx.beginPath(); ctx.moveTo(colW * i, 8); ctx.lineTo(colW * i, H - 8); ctx.stroke()
+    }
+
+    // Dot indicator
+    ctx.beginPath(); ctx.arc(x + 5, 24, 5, 0, Math.PI*2)
+    ctx.fillStyle = dotColor; ctx.fill()
+
+    // Name
+    ctx.font = 'bold 11px monospace'; ctx.fillStyle = '#888'
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
+    ctx.fillText(cfg.label, x + 16, 24)
+
+    // Status
+    ctx.font = '10px monospace'; ctx.fillStyle = dotColor
+    ctx.fillText(status.toUpperCase(), x, 44)
+
+    // Extra info if connected
+    if (d && d.status === 'connected') {
+      ctx.font = '9px monospace'; ctx.fillStyle = '#555'
+      if (type === 'eom' && d._mode) ctx.fillText(d._mode.toUpperCase(), x, 60)
+      if (type === 'coyote') ctx.fillText(`A:${d.channels?.A?.intensity||0}%  B:${d.channels?.B?.intensity||0}%`, x, 60)
+      if (type === 'hue') ctx.fillText(d.bridgeName || d.ip || '', x, 60)
     }
   })
+
+  // Page indicator if scrollable
+  if (activeTypes.length > 4) {
+    const curPage = Math.floor(devicePageOffset / 4) + 1
+    const totalPages = Math.ceil(activeTypes.length / 4)
+    ctx.font = '8px monospace'; ctx.fillStyle = '#333'
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top'
+    ctx.fillText(`${curPage}/${totalPages}`, W - 6, 4)
+  }
 
   return rgba(canvas)
 }
@@ -1195,16 +1215,32 @@ function renderMacroLcd(macros, viewOffset, runningId, waitingId, currentBlock, 
 }
 
 // ─── Page definitions ─────────────────────────────────────────────────────
-function getHomeKeys() {
+function getActiveDeviceTypes(devices) {
+  return DEVICE_TYPE_ORDER.filter(t => Object.values(devices).some(d => d.type === t))
+}
+
+function getHomeKeys(devices, devicePageOffset) {
+  const activeTypes = getActiveDeviceTypes(devices)
+  const visibleTypes = activeTypes.slice(devicePageOffset, devicePageOffset + 4)
+  const hasScroll = activeTypes.length > 4
+  const curPage = Math.floor(devicePageOffset / 4) + 1
+  const totalPages = Math.ceil(activeTypes.length / 4)
+
+  const bottomKeys = Array.from({ length: 4 }, (_, i) => {
+    const type = visibleTypes[i]
+    if (!type) return { icon:'', label:'', color:'dim' }
+    const cfg = DEVICE_DECK_CONFIG[type]
+    return { deviceKey: cfg.deviceKey || null, icon: cfg.icon || '', label: cfg.label, color: cfg.color }
+  })
+
   return [
-    { houseIcon:true,  label:'Home',    color:'blue',   active:true },
-    { icon:'▷',        label:'Macros',  color:'teal' },
-    { icon:'',         label:'',        color:'dim' },
-    { stopSign:true,   label:'Stop All',color:'red' },
-    { deviceKey:'eom',    label:'EoM',    color:'teal' },
-    { deviceKey:'nimble', label:'Nimble', color:'purple' },
-    { deviceKey:'coyote', label:'Coyote', color:'orange' },
-    { deviceKey:'estim',  label:'Estim',  color:'blue' },
+    { houseIcon:true, label:'Home',    color:'blue', active:true },
+    { icon:'▷',       label:'Macros',  color:'teal' },
+    hasScroll
+      ? { icon:'▶', label:`${curPage}/${totalPages}`, color:'blue' }
+      : { icon:'',  label:'',                         color:'dim'  },
+    { stopSign:true,  label:'Stop All', color:'red' },
+    ...bottomKeys,
   ]
 }
 
@@ -1381,6 +1417,7 @@ export class StreamDeckController {
     // enc2: U2 Ch A power ↔ U2 Feel  enc3: U2 Ch B power ↔ U2 Rate
     this._estimEncMode = ['power', 'power', 'power', 'power']
     this._estimSelected = false  // true = unit1 channels highlighted for mode assignment
+    this._devicePageOffset = 0
     this._tick = 0
     this._timer = null
     this._ready = false
@@ -1438,11 +1475,23 @@ export class StreamDeckController {
 
   _homeKey(idx) {
     if (idx === 1) { this.setPage('macro'); return }
+    if (idx === 2) {
+      const activeTypes = getActiveDeviceTypes(this.devices)
+      if (activeTypes.length > 4) {
+        const next = this._devicePageOffset + 4
+        this._devicePageOffset = next >= activeTypes.length ? 0 : next
+        this._renderKeys()
+        this._refreshLcd()
+      }
+      return
+    }
     if (idx === 3) { this._stopAll(); return }
-    if (idx === 4) { this.setPage('eom');    return }
-    if (idx === 5) { this.setPage('nimble'); return }
-    if (idx === 6) { this.setPage('coyote'); return }
-    if (idx === 7) { this.setPage('estim'); return }
+    if (idx >= 4 && idx <= 7) {
+      const activeTypes = getActiveDeviceTypes(this.devices)
+      const type = activeTypes[this._devicePageOffset + (idx - 4)]
+      if (type) this.setPage(DEVICE_DECK_CONFIG[type].page)
+      return
+    }
   }
 
   _macroKey(idx) {
@@ -1972,7 +2021,7 @@ export class StreamDeckController {
     }
 
     let keys
-    if (this.page === 'home')      keys = getHomeKeys()
+    if (this.page === 'home')      keys = getHomeKeys(this.devices, this._devicePageOffset)
     else if (this.page === 'eom')  keys = getEomKeys(this._findDev('eom'))
     else {
       keys = Array(8).fill({ icon:'', label:'', color:'dim' })
@@ -2078,7 +2127,7 @@ export class StreamDeckController {
         return
       }
       let buf
-      if (this.page === 'home')      buf = renderHomeLcd(this.devices)
+      if (this.page === 'home')      buf = renderHomeLcd(this.devices, this._devicePageOffset)
       else if (this.page === 'eom')  buf = renderEomLcd(this._findDev('eom'))
       else {
         const W=800, H=100, c=createCanvas(W,H)

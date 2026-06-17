@@ -12,15 +12,13 @@ const WAVEFORMS_PATH = join(__dir, 'waveforms.json')
 const AUDIO_DIR   = join(__dir, 'audio')
 
 // ─── Device type display config for home page bottom row ─────────────────────
-const DEVICE_TYPE_ORDER = ['eom', 'nimble', 'coyote', 'estim', 'hue', 'pawprints', 'camera']
+const DEVICE_TYPE_ORDER = ['eom', 'nimble', 'coyote', 'estim', 'hue']
 const DEVICE_DECK_CONFIG = {
-  eom:       { label: 'EoM',       color: 'teal',   page: 'eom',       deviceKey: 'eom'    },
-  nimble:    { label: 'Nimble',    color: 'purple', page: 'nimble',    deviceKey: 'nimble' },
-  coyote:    { label: 'Coyote',    color: 'orange', page: 'coyote',    deviceKey: 'coyote' },
-  estim:     { label: 'Estim',     color: 'blue',   page: 'estim',     deviceKey: 'estim'  },
-  hue:       { label: 'Hue',       color: 'teal',   page: 'hue',       icon: '💡'          },
-  pawprints: { label: 'PawPrints', color: 'green',  page: 'pawprints', icon: '🐾'          },
-  camera:    { label: 'Camera',    color: 'blue',   page: 'camera',    icon: '📷'          },
+  eom:    { label: 'EoM',    color: 'teal',   page: 'eom',    deviceKey: 'eom'    },
+  nimble: { label: 'Nimble', color: 'purple', page: 'nimble', deviceKey: 'nimble' },
+  coyote: { label: 'Coyote', color: 'orange', page: 'coyote', deviceKey: 'coyote' },
+  estim:  { label: 'Estim',  color: 'blue',   page: 'estim',  deviceKey: 'estim'  },
+  hue:    { label: 'Hue',    color: 'teal',   page: 'hue',    icon: '💡'          },
 }
 
 // ─── Built-in waveform definitions (matches server BUILTIN_WAVEFORMS) ────────

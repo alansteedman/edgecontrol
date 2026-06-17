@@ -1226,7 +1226,7 @@ function renderHueScenesLcd(hueDev, sceneOffset) {
   ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, W, H)
 
   const selectedIds = hueDev?.selectedScenes || []
-  const allScenes = Object.entries(hueDev?.scenes || {}).filter(([id]) => selectedIds.includes(id))
+  const allScenes = Object.entries(hueDev?._scenes || {}).filter(([id]) => selectedIds.includes(id))
 
   if (!allScenes.length) {
     ctx.font = '11px monospace'; ctx.fillStyle = '#333'
@@ -1241,7 +1241,7 @@ function renderHueScenesLcd(hueDev, sceneOffset) {
 
   visibleScenes.forEach(([id, sc], i) => {
     const grpId = sc.group
-    const grp = grpId ? (hueDev?.groups || {})[grpId] : null
+    const grp = grpId ? (hueDev?._groups || {})[grpId] : null
     const on = grp?.action?.on ?? false
     const bri = grp ? Math.round((grp.action?.bri || 254) * 100 / 254) : 100
     const ox = i * 200
@@ -1584,7 +1584,7 @@ export class StreamDeckController {
     if (idx === 2) {
       const hue = this._findDev('hue')
       const selectedIds = hue?.selectedScenes || []
-      const total = Object.entries(hue?.scenes || {}).filter(([id]) => selectedIds.includes(id)).length
+      const total = Object.entries(hue?._scenes || {}).filter(([id]) => selectedIds.includes(id)).length
       if (total > 4) {
         const next = this._hueSceneOffset + 4
         this._hueSceneOffset = next >= total ? 0 : next
@@ -1837,7 +1837,7 @@ export class StreamDeckController {
     const hue = this._findDev('hue')
     if (!hue) return
     const selectedIds = hue.selectedScenes || []
-    const allScenes = Object.entries(hue.scenes || {}).filter(([id]) => selectedIds.includes(id))
+    const allScenes = Object.entries(hue._scenes || {}).filter(([id]) => selectedIds.includes(id))
     const entry = allScenes[this._hueSceneOffset + idx]
     if (!entry) return
     const [, sc] = entry
@@ -1904,7 +1904,7 @@ export class StreamDeckController {
       const hue = this._findDev('hue')
       if (!hue) return
       const selectedIds = hue.selectedScenes || []
-      const allScenes = Object.entries(hue.scenes || {}).filter(([id]) => selectedIds.includes(id))
+      const allScenes = Object.entries(hue._scenes || {}).filter(([id]) => selectedIds.includes(id))
       const x = pos?.x ?? 0
       // Edge scroll
       if (x < 30 && this._hueSceneOffset > 0) {
@@ -2173,7 +2173,7 @@ export class StreamDeckController {
     if (this.page === 'hue') {
       const hue = this._findDev('hue')
       const selectedIds = hue?.selectedScenes || []
-      const total = Object.entries(hue?.scenes || {}).filter(([id]) => selectedIds.includes(id)).length
+      const total = Object.entries(hue?._scenes || {}).filter(([id]) => selectedIds.includes(id)).length
       const hasScroll = total > 4
       const curPage = Math.floor(this._hueSceneOffset / 4) + 1
       const totalPages = Math.ceil(total / 4) || 1

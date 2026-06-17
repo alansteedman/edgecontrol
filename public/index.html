@@ -342,7 +342,7 @@ select.mci{cursor:pointer}
       <span class="side-lbl">Camera</span>
     </button>
     <button class="side-btn" id="nav-hue" style="display:none" onclick="showTab('hue',this)">
-      <span class="side-icon">💡</span>
+      <span class="side-icon"><img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle"></span>
       <span class="side-lbl">Lights</span>
     </button>
   </div>
@@ -2977,7 +2977,7 @@ const DEVICE_TYPES = [
   {type:'estim',  icon:'⚡', label:'E-Stim 2B',    sub:'USB serial',  step:'usb'},
   {type:'camera',    icon:'📷', label:'IP Camera',    sub:'RTSP / ONVIF',step:'camera'},
   {type:'pawprints', icon:'🐾', label:'PawPrints',    sub:'BLE sensor',  step:'ble'},
-  {type:'hue',       icon:'💡', label:'Philips Hue',  sub:'WiFi bridge', step:'hue'},
+  {type:'hue',       icon:'<img src="/hue-logo.svg" style="width:32px;height:18px;vertical-align:middle">', label:'Philips Hue',  sub:'WiFi bridge', step:'hue'},
 ]
 function openScan(){
   document.getElementById('scan-overlay').classList.add('open')

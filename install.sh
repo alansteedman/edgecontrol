@@ -38,7 +38,8 @@ apt-get install -y -qq \
   build-essential \
   libusb-1.0-0-dev libudev-dev \
   libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
-  iptables
+  iptables \
+  ffmpeg
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
 log "Installing Node.js $NODE_VERSION"
@@ -193,6 +194,17 @@ dtparam=fan_temp2=70000,fan_temp2_hyst=5000,fan_temp2_speed=189
 dtparam=fan_temp3=75000,fan_temp3_hyst=5000,fan_temp3_speed=255
 EOF
 fi
+
+# ── Stream Deck udev rule ─────────────────────────────────────────────────────
+log "Installing Stream Deck udev rule"
+echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", MODE="0666"' > /etc/udev/rules.d/50-streamdeck.rules
+udevadm control --reload-rules
+udevadm trigger
+
+# ── Icons ─────────────────────────────────────────────────────────────────────
+log "Creating icons directory"
+mkdir -p "$APP_DIR/icons"
+chown "$APP_USER:$APP_USER" "$APP_DIR/icons"
 
 # ── Runtime directory ─────────────────────────────────────────────────────────
 log "Creating runtime directory"

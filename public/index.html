@@ -2051,6 +2051,16 @@ function buildCoyoteCard(dev) {
 }
 
 function buildCh(devId,ch,c) {
+  const groupName = getUsedChannels().get(devId+':'+ch)
+  if(groupName) return `
+    <div class="ch-block" style="opacity:.5;pointer-events:none">
+      <div class="ch-top">
+        <span class="ch-lbl">Channel ${ch}</span>
+        <span style="font-size:10px;color:#4fc3f7;background:#0d2a38;border:1px solid #1a4a60;border-radius:4px;padding:2px 7px">In group: ${groupName}</span>
+      </div>
+      <input class="ch-slider" type="range" min="0" max="200" value="${c.intensity}" disabled style="opacity:.4"/>
+    </div>
+  `
   const wfName=getWfName(c.waveform)
   const dropId=`drop-${devId}-${ch}`
   let builtins='', customs=''

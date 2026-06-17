@@ -884,7 +884,7 @@ function handle(m) {
       window._handleMacroWS?.(m); break
     case 'device:status':
       if(S.devices[m.id]) S.devices[m.id].status=m.status
-      renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); renderPawPrintsCards(); renderHueCards(); break
+      renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); renderPawPrintsCards(); if(!_hueDragging) renderHueCards(); break
     case 'device:state':
       if(S.devices[m.id]){
         if(m.channels) S.devices[m.id].channels=m.channels
@@ -964,8 +964,8 @@ function handle(m) {
         S.devices[m.devId].lights[m.lightId].state=Object.assign(S.devices[m.devId].lights[m.lightId].state||{}, m.state)
       break
     case 'hue:group':
-      if(S.devices[m.devId]?.groups?.[m.groupId])
-        S.devices[m.devId].groups[m.groupId].action=Object.assign(S.devices[m.devId].groups[m.groupId].action||{}, m.action)
+      if(S.devices[m.id]?.groups?.[m.groupId])
+        S.devices[m.id].groups[m.groupId].action=Object.assign(S.devices[m.id].groups[m.groupId].action||{}, m.action)
       break
   }
 }
@@ -1972,10 +1972,15 @@ async function hueSetLight(devId, lightId, params) {
 }
 
 const _hueSliderTimers = {}
+let _hueDragging = false
 function hueGroupSlider(devId, groupId, val) {
+  _hueDragging = true
   const key = devId+':'+groupId
   clearTimeout(_hueSliderTimers[key])
-  _hueSliderTimers[key] = setTimeout(() => hueSetGroup(devId, groupId, {bri:val, on:true}), 200)
+  _hueSliderTimers[key] = setTimeout(() => {
+    _hueDragging = false
+    hueSetGroup(devId, groupId, {bri:val, on:true})
+  }, 200)
 }
 
 function hueShowSelect(devId) {

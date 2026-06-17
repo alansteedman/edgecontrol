@@ -1465,7 +1465,7 @@ class HueBridge {
     return res.json()
   }
 
-  async setLight(lightId,params) {
+  setLight(lightId,params) {
     const state={}
     if (params.on!==undefined) state.on=params.on
     if (params.bri!==undefined) state.bri=Math.round(Math.max(1,Math.min(254,params.bri*254/100)))
@@ -1473,12 +1473,12 @@ class HueBridge {
     if (params.sat!==undefined) state.sat=params.sat
     if (params.ct!==undefined) state.ct=params.ct
     if (params.transitiontime!==undefined) state.transitiontime=params.transitiontime
-    await this._put(`/lights/${lightId}/state`,state)
     if (this._lights[lightId]) Object.assign(this._lights[lightId].state,state)
     broadcast({type:'hue:light',id:this.id,lightId,state:this._lights[lightId]?.state})
+    this._put(`/lights/${lightId}/state`,state).catch(err=>console.error(`[${this.id}] Hue setLight:`,err.message))
   }
 
-  async setGroup(groupId,params) {
+  setGroup(groupId,params) {
     const action={}
     if (params.on!==undefined) action.on=params.on
     if (params.bri!==undefined) action.bri=Math.round(Math.max(1,Math.min(254,params.bri*254/100)))
@@ -1486,9 +1486,9 @@ class HueBridge {
     if (params.sat!==undefined) action.sat=params.sat
     if (params.ct!==undefined) action.ct=params.ct
     if (params.transitiontime!==undefined) action.transitiontime=params.transitiontime
-    await this._put(`/groups/${groupId}/action`,action)
     if (this._groups[groupId]) Object.assign(this._groups[groupId].action,action)
     broadcast({type:'hue:group',id:this.id,groupId,action:this._groups[groupId]?.action})
+    this._put(`/groups/${groupId}/action`,action).catch(err=>console.error(`[${this.id}] Hue setGroup:`,err.message))
   }
 
   async activateScene(sceneId) {

@@ -505,26 +505,8 @@ select.mci{cursor:pointer}
         <div class="sec-row" style="margin-bottom:10px">
           <div class="sec-label">Audio Files</div>
         </div>
-        <!-- Frequency band selector -->
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:#444;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Frequency Band</div>
-          <div class="freq-presets">
-            <button class="freq-preset active" id="band-preset-full"  onclick="bandPreset(this,20,20000)">Full</button>
-            <button class="freq-preset" onclick="bandPreset(this,20,200)">Sub Bass</button>
-            <button class="freq-preset" onclick="bandPreset(this,60,500)">Bass</button>
-            <button class="freq-preset" onclick="bandPreset(this,200,4000)">Mids</button>
-            <button class="freq-preset" onclick="bandPreset(this,3000,12000)">Highs</button>
-            <button class="freq-preset" onclick="bandPreset(this,8000,20000)">Air</button>
-          </div>
-          <div class="band-wrap">
-            <div class="band-info">
-              <span id="band-low-lbl">Low cut: 20 Hz</span>
-              <span style="color:#555;font-size:9px">drag handles to select band</span>
-              <span id="band-high-lbl">High cut: 20 kHz</span>
-            </div>
-            <canvas id="band-canvas" height="100"></canvas>
-          </div>
-        </div>
+
+        <!-- Step 1: Drop zone -->
         <div id="audio-drop-zone" onclick="document.getElementById('audio-file-input').click()"
           ondragover="event.preventDefault();this.classList.add('audio-drop-hover')"
           ondragleave="this.classList.remove('audio-drop-hover')"
@@ -532,10 +514,50 @@ select.mci{cursor:pointer}
           style="border:2px dashed #222;border-radius:9px;padding:22px;text-align:center;cursor:pointer;transition:border-color .15s;margin-bottom:10px">
           <div style="font-size:20px;margin-bottom:5px">🎵</div>
           <div style="font-size:12px;color:#444">Drop MP3/WAV/OGG here or click to browse</div>
-          <div style="font-size:10px;color:#2e2e2e;margin-top:3px">Audio is analysed on the Pi — works without a browser</div>
+          <div style="font-size:10px;color:#2e2e2e;margin-top:3px">Drop a file to preview its frequency spectrum below</div>
         </div>
-        <input type="file" id="audio-file-input" accept="audio/*" multiple style="display:none" onchange="audioFilePicked(this)"/>
-        <div id="audio-upload-status" style="font-size:11px;color:#555;margin-bottom:8px;display:none"></div>
+        <input type="file" id="audio-file-input" accept="audio/*" style="display:none" onchange="audioFilePicked(this)"/>
+
+        <!-- Step 2: Staged file + band selector — shown after drop -->
+        <div id="audio-staged" style="display:none">
+          <div style="background:#111;border:1px solid #1e1e1e;border-radius:9px;padding:12px;margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <span style="font-size:14px">🎵</span>
+              <span id="staged-file-name" style="flex:1;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+              <button class="btn btn-ghost btn-xs" onclick="clearStaged()" style="color:#555">✕ Clear</button>
+            </div>
+            <div style="margin-bottom:10px">
+              <div style="font-size:10px;color:#444;margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Save as name</div>
+              <input id="staged-name-input" type="text" placeholder="Waveform name…"
+                style="width:100%;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:5px;color:#ccc;padding:5px 9px;font-size:12px;font-family:monospace"/>
+            </div>
+            <!-- Frequency band selector -->
+            <div style="margin-bottom:10px">
+              <div style="font-size:10px;color:#444;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Frequency Band</div>
+              <div class="freq-presets">
+                <button class="freq-preset active" id="band-preset-full" onclick="bandPreset(this,20,20000)">Full</button>
+                <button class="freq-preset" onclick="bandPreset(this,20,200)">Sub Bass</button>
+                <button class="freq-preset" onclick="bandPreset(this,60,500)">Bass</button>
+                <button class="freq-preset" onclick="bandPreset(this,200,4000)">Mids</button>
+                <button class="freq-preset" onclick="bandPreset(this,3000,12000)">Highs</button>
+                <button class="freq-preset" onclick="bandPreset(this,8000,20000)">Air</button>
+              </div>
+              <div class="band-wrap">
+                <div class="band-info">
+                  <span id="band-low-lbl">Low cut: 20 Hz</span>
+                  <span style="color:#555;font-size:9px">drag handles to select band</span>
+                  <span id="band-high-lbl">High cut: 20 kHz</span>
+                </div>
+                <canvas id="band-canvas" height="100"></canvas>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="audio-process-status" style="flex:1;font-size:11px;color:#555"></span>
+              <button class="btn btn-primary btn-sm" onclick="processStaged()">Process &amp; Save</button>
+            </div>
+          </div>
+        </div>
+
         <div id="audio-list"></div>
       </div>
 
@@ -2642,27 +2664,35 @@ function renderAudioList(){
     const dur=Math.round(frameCount/10)
     const mins=Math.floor(dur/60), secs=String(dur%60).padStart(2,'0')
     const item=document.createElement('div')
-    item.style.cssText='background:#111;border:1px solid #1e1e1e;border-radius:9px;padding:10px;margin-bottom:10px'
+    item.style.cssText='background:#111;border:1px solid #1e1e1e;border-radius:9px;padding:14px;margin-bottom:12px'
     const safeId='ac-'+w.id.replace(/[^a-z0-9]/gi,'')
     item.innerHTML=`
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <button class="btn btn-ghost btn-xs" id="play-btn-${safeId}" onclick="toggleAudioPlayback('${w.id}','${safeId}')" style="font-size:13px;padding:2px 7px;min-width:28px">▶</button>
+        <button class="btn btn-ghost btn-xs" id="play-btn-${safeId}" onclick="toggleAudioPlayback('${w.id}','${safeId}')" style="font-size:13px;padding:2px 7px;min-width:28px" title="Play original audio">▶</button>
+        <button class="btn btn-ghost btn-xs" id="synth-btn-${safeId}" onclick="toggleSynthPlayback('${w.id}','${safeId}')" style="font-size:11px;padding:2px 7px;color:#a78bfa" title="Preview processed waveform as audio">⚡</button>
         <span style="flex:1;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.name}">${w.name}</span>
         <span style="font-size:10px;color:#444;white-space:nowrap">${mins}:${secs} &nbsp; ${frameCount} frames</span>
         <button class="btn btn-danger btn-xs" onclick="deleteAudio('${w.id}')">×</button>
       </div>
-      ${Array.isArray(w.frames)?`<div style="overflow-x:auto;border-radius:5px;background:#080808"><canvas id="${safeId}" height="48" style="display:block;min-width:100%"></canvas></div>`:`<div style="font-size:10px;color:#333;padding:4px 0">Loading waveform…</div>`}`
+      ${Array.isArray(w.frames)?`<div style="overflow-x:auto;border-radius:5px;background:#080808"><canvas id="${safeId}" height="48" style="display:block;min-width:100%"></canvas></div>`:`<div style="font-size:10px;color:#333;padding:4px 0">Loading waveform…</div>`}
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+        <span style="font-size:11px;color:#666;white-space:nowrap">Base Hz</span>
+        <input type="range" min="10" max="100" value="${w.baseFreq||25}" style="flex:1;accent-color:#4fc3f7"
+          oninput="document.getElementById('freq-lbl-${safeId}').textContent=this.value+' Hz'"
+          onchange="setAudioBaseFreq('${w.id}',this.value)"/>
+        <span id="freq-lbl-${safeId}" style="font-size:11px;color:#4fc3f7;white-space:nowrap;min-width:44px;text-align:right">${w.baseFreq||25} Hz</span>
+      </div>`
     el.appendChild(item)
     if(Array.isArray(w.frames)) requestAnimationFrame(()=>drawAudioWaveform(safeId, w))
   })
 }
 
-function drawAudioWaveform(canvasId, w){
+function drawAudioWaveform(canvasId, w, progress){
   const cv=document.getElementById(canvasId); if(!cv||!Array.isArray(w.frames)||!w.frames.length) return
   const frames=w.frames
   const PX=Math.max(2, Math.min(4, Math.floor(800/frames.length))) // px per frame
   const W=frames.length*PX, H=48
-  cv.width=W; cv.height=H; cv.style.width=W+'px'
+  if(cv.width!==W){ cv.width=W; cv.height=H; cv.style.width=W+'px' }
   const ctx=cv.getContext('2d')
   ctx.fillStyle='#080808'; ctx.fillRect(0,0,W,H)
   // Time markers every 30s (300 frames)
@@ -2678,6 +2708,34 @@ function drawAudioWaveform(canvasId, w){
     ctx.fillStyle=g
     ctx.fillRect(i*PX, H-bh, Math.max(1,PX-1), bh)
   })
+  // Playhead
+  if(progress!=null && progress>=0 && progress<=1){
+    const x=Math.round(progress*W)
+    ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.lineWidth=1.5
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke()
+  }
+}
+
+let _playheadRaf=null, _playheadSafeId=null, _playheadW=null, _playheadGetProgress=null
+function startPlayheadAnimation(safeId, wfId, getProgress){
+  stopPlayheadAnimation()
+  _playheadSafeId=safeId; _playheadGetProgress=getProgress
+  _playheadW=(S.waveforms.custom||[]).find(w=>w.id===wfId)
+  const tick=()=>{
+    if(!_playheadW||!_playheadSafeId) return
+    const p=_playheadGetProgress()
+    drawAudioWaveform(_playheadSafeId, _playheadW, p)
+    // auto-scroll the canvas wrapper to keep playhead visible
+    const cv=document.getElementById(_playheadSafeId)
+    if(cv){ const wrapper=cv.parentElement; if(wrapper) wrapper.scrollLeft=Math.max(0, p*cv.width - wrapper.clientWidth/2) }
+    _playheadRaf=requestAnimationFrame(tick)
+  }
+  _playheadRaf=requestAnimationFrame(tick)
+}
+function stopPlayheadAnimation(){
+  if(_playheadRaf){ cancelAnimationFrame(_playheadRaf); _playheadRaf=null }
+  if(_playheadSafeId && _playheadW) drawAudioWaveform(_playheadSafeId, _playheadW)
+  _playheadSafeId=null; _playheadW=null; _playheadGetProgress=null
 }
 
 // ─── Frequency band selector ──────────────────────────────────────────────────
@@ -2685,7 +2743,8 @@ const BAND_LOG_MIN = Math.log10(20), BAND_LOG_MAX = Math.log10(20000)
 let bandLow = 20, bandHigh = 20000
 let bandSpectrum = null   // Float32Array of normalised magnitudes (log-scale buckets)
 let bandDrag = null       // 'low' | 'high' | null
-let _bandCanvas = null, _bandCtx = null
+let _bandCanvas = null, _bandCtx = null, _bandSelectorInited = false
+let _stagedFile = null
 
 function freqToX(hz, w) {
   return (Math.log10(Math.max(20,hz)) - BAND_LOG_MIN) / (BAND_LOG_MAX - BAND_LOG_MIN) * w
@@ -2792,10 +2851,11 @@ function initBandSelector() {
   _bandCanvas = document.getElementById('band-canvas')
   if (!_bandCanvas) return
   _bandCtx = _bandCanvas.getContext('2d')
-  // Match canvas pixel width to CSS display width
   const rect = _bandCanvas.getBoundingClientRect()
   if (rect.width > 0) _bandCanvas.width = Math.round(rect.width)
   renderBandCanvas()
+  if (_bandSelectorInited) return
+  _bandSelectorInited = true
 
   _bandCanvas.addEventListener('mousedown', e => {
     const rect = _bandCanvas.getBoundingClientRect()
@@ -2924,33 +2984,61 @@ function audioDrop(e){
   e.preventDefault()
   const files=[...e.dataTransfer.files].filter(f=>f.type.startsWith('audio/'))
   if(!files.length) return alert('Drop audio files only (MP3, WAV, OGG…)')
-  if(files[0]) analyzeFileForSpectrum(files[0])
-  files.forEach(uploadAudio)
+  showStaged(files[0])
 }
 function audioFilePicked(input){
-  const files=[...input.files]
-  if(files[0]) analyzeFileForSpectrum(files[0])
-  files.forEach(uploadAudio)
+  if(input.files[0]) showStaged(input.files[0])
   input.value=''
 }
-async function uploadAudio(file){
-  const status=document.getElementById('audio-upload-status')
-  if(status){ status.style.display='block'; status.textContent=`Analysing ${file.name}… (this may take a few seconds)` }
+function showStaged(file){
+  _stagedFile = file
+  const nameNoExt = file.name.replace(/\.[^.]+$/, '')
+  document.getElementById('staged-file-name').textContent = file.name
+  document.getElementById('staged-name-input').value = nameNoExt
+  document.getElementById('audio-process-status').textContent = ''
+  document.getElementById('audio-staged').style.display = ''
+  // Init band selector now that canvas is visible, then analyse spectrum
+  setTimeout(() => {
+    initBandSelector()
+    analyzeFileForSpectrum(file)
+  }, 50)
+}
+function clearStaged(){
+  _stagedFile = null
+  bandSpectrum = null
+  document.getElementById('audio-staged').style.display = 'none'
+  renderBandCanvas()
+}
+async function processStaged(){
+  if(!_stagedFile) return
+  const name = document.getElementById('staged-name-input').value.trim() || _stagedFile.name
+  const status = document.getElementById('audio-process-status')
+  status.textContent = 'Processing…'
+  const btn = document.querySelector('#audio-staged .btn-primary')
+  if(btn) btn.disabled = true
   try{
-    const fd=new FormData(); fd.append('file',file)
-    fd.append('lowCut',  String(bandLow))
+    const fd=new FormData()
+    fd.append('file', _stagedFile)
+    fd.append('name', name)
+    fd.append('lowCut', String(bandLow))
     fd.append('highCut', String(bandHigh))
     const r=await fetch('/api/audio',{method:'POST',body:fd})
     const d=await r.json()
-    if(d.error) return alert('Upload failed: '+d.error)
-    lg(`Audio "${file.name}" ready — ${d.frames} frames (${d.duration}s)`)
-    if(status) status.style.display='none'
+    if(d.error){ status.textContent='Error: '+d.error; return }
+    lg(`Audio "${name}" ready — ${d.frames} frames (${d.duration}s)`)
+    clearStaged()
   } catch(e){
-    alert('Upload error: '+e.message)
-    if(status) status.style.display='none'
+    status.textContent='Error: '+e.message
+  } finally {
+    if(btn) btn.disabled = false
   }
 }
 
+
+async function setAudioBaseFreq(wfId, hz) {
+  await fetch(`/api/waveforms/${wfId}`, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ baseFreq: parseInt(hz) }) }).catch(()=>{})
+}
 
 async function deleteAudio(wfId){
   const w=(S.waveforms.custom||[]).find(w=>w.id===wfId)
@@ -2960,6 +3048,8 @@ async function deleteAudio(wfId){
 }
 
 let _audioPlayer = null, _audioPlayingId = null
+let _synthSource = null, _synthCtx = null, _synthPlayingId = null
+
 function stopAudioPlayback() {
   if (_audioPlayer) { _audioPlayer.pause(); _audioPlayer.src = '' }
   if (_audioPlayingId) {
@@ -2967,9 +3057,23 @@ function stopAudioPlayback() {
     if (btn) btn.textContent = '▶'
   }
   _audioPlayingId = null
+  stopPlayheadAnimation()
 }
+function stopSynthPlayback() {
+  try { if (_synthSource) { _synthSource.stop(); _synthSource.disconnect() } } catch {}
+  try { if (_synthCtx) _synthCtx.close() } catch {}
+  _synthSource = null; _synthCtx = null
+  if (_synthPlayingId) {
+    const btn = document.getElementById('synth-btn-' + _synthPlayingId)
+    if (btn) btn.textContent = '⚡'
+  }
+  _synthPlayingId = null
+  stopPlayheadAnimation()
+}
+
 function toggleAudioPlayback(wfId, safeId) {
   if (_audioPlayingId === safeId) { stopAudioPlayback(); return }
+  stopSynthPlayback()
   stopAudioPlayback()
   if (!_audioPlayer) { _audioPlayer = new Audio(); _audioPlayer.onended = () => stopAudioPlayback() }
   _audioPlayer.src = `/api/audio/${wfId}/file`
@@ -2977,6 +3081,44 @@ function toggleAudioPlayback(wfId, safeId) {
   _audioPlayingId = safeId
   const btn = document.getElementById('play-btn-' + safeId)
   if (btn) btn.textContent = '⏸'
+  const w = (S.waveforms.custom||[]).find(w=>w.id===wfId)
+  const totalDur = w && Array.isArray(w.frames) ? w.frames.length / 10 : null
+  startPlayheadAnimation(safeId, wfId, () => totalDur && _audioPlayer ? _audioPlayer.currentTime / totalDur : 0)
+}
+
+function toggleSynthPlayback(wfId, safeId) {
+  if (_synthPlayingId === safeId) { stopSynthPlayback(); return }
+  stopAudioPlayback()
+  stopSynthPlayback()
+  const w = (S.waveforms.custom || []).find(w => w.id === wfId)
+  if (!w || !Array.isArray(w.frames) || !w.frames.length) return
+  const frames = w.frames
+  const SR = 44100, CARRIER = 150, FPS = 10
+  const spf = SR / FPS  // samples per frame
+  const total = frames.length * spf
+  _synthCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR })
+  const buf = _synthCtx.createBuffer(1, total, SR)
+  const data = buf.getChannelData(0)
+  for (let f = 0; f < frames.length; f++) {
+    const a0 = frames[f] / 100
+    const a1 = f + 1 < frames.length ? frames[f + 1] / 100 : 0
+    for (let s = 0; s < spf; s++) {
+      const t = (f * spf + s) / SR
+      const amp = a0 + (a1 - a0) * (s / spf)  // linear interpolation between frames
+      data[f * spf + s] = Math.sin(2 * Math.PI * CARRIER * t) * amp
+    }
+  }
+  _synthSource = _synthCtx.createBufferSource()
+  _synthSource.buffer = buf
+  _synthSource.connect(_synthCtx.destination)
+  _synthSource.onended = () => stopSynthPlayback()
+  const synthStart = _synthCtx.currentTime
+  _synthSource.start()
+  _synthPlayingId = safeId
+  const btn = document.getElementById('synth-btn-' + safeId)
+  if (btn) btn.textContent = '⏹'
+  const totalDur = frames.length / 10
+  startPlayheadAnimation(safeId, wfId, () => _synthCtx ? Math.min(1, (_synthCtx.currentTime - synthStart) / totalDur) : 0)
 }
 
 // ── WiFi ─────────────────────────────────────────────────────────────────────

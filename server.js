@@ -427,7 +427,8 @@ function computeWave(wfId, tick, amp, speed=1) {
     // Audio frames stored as plain amplitude integers; legacy format uses {segs:[...]}
     if (typeof frame === 'number') {
       const a = Math.min(100, Math.round(frame * amp / 100))
-      return [[25,a],[25,a],[25,a],[25,a]]
+      const freq = custom.baseFreq || 25
+      return [[freq,a],[freq,a],[freq,a],[freq,a]]
     }
     const segs = frame.segs || []
     // Ensure exactly 4 sub-pulses — map each slot to the nearest seg
@@ -1822,7 +1823,7 @@ function waveformsMeta() {
   return {
     builtin: BUILTIN_WAVEFORMS,
     custom: waveformStore.custom.map(w =>
-      w.type === 'audio' ? { id:w.id, name:w.name, type:'audio', frames:w.frames?.length||0 } : w
+      w.type === 'audio' ? { id:w.id, name:w.name, type:'audio', frames:w.frames?.length||0, baseFreq:w.baseFreq||25 } : w
     )
   }
 }
@@ -2310,9 +2311,10 @@ app.post('/api/waveforms', (req,res) => {
 app.put('/api/waveforms/:id', (req,res) => {
   const idx=waveformStore.custom.findIndex(w=>w.id===req.params.id)
   if (idx===-1) return res.status(404).json({error:'not found'})
-  const {name,frames}=req.body
+  const {name,frames,baseFreq}=req.body
   if (name) waveformStore.custom[idx].name=name
   if (frames) waveformStore.custom[idx].frames=frames
+  if (baseFreq !== undefined) waveformStore.custom[idx].baseFreq = Math.max(10, Math.min(100, parseInt(baseFreq)))
   saveWaveforms()
   broadcast({type:'waveforms:updated',waveforms:waveformsMeta()})
   res.json(waveformStore.custom[idx])
@@ -2859,7 +2861,7 @@ app.post('/api/audio', audioUpload.single('file'), async (req,res) => {
     const highCut = Math.max(50, Math.min(20000, parseInt(req.body.highCut) || 20000))
     if (lowCut > 20 || highCut < 20000) console.log(`[audio] Band-pass: ${lowCut}Hz – ${highCut}Hz`)
     const audioStartTime = Date.now()
-    const audioName = req.file.originalname
+    const audioName = (req.body.name && req.body.name.trim()) ? req.body.name.trim() : req.file.originalname
     broadcast({type:'audio:progress', name:audioName, frames:0, elapsed:0, done:false})
     const amps=await extractAmplitudeEnvelope(filePath, lowCut, highCut, (frames) => {
       const elapsed = Math.round((Date.now() - audioStartTime) / 1000)

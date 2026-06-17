@@ -770,13 +770,18 @@ select.mci{cursor:pointer}
         <button class="btn btn-ghost btn-xs" onclick="showTypeStep()">← Back</button>
         <span style="font-size:13px;font-weight:600">📷 IP Camera</span>
       </div>
-      <div style="margin-bottom:12px">
+
+      <!-- Phase 1: scan -->
+      <div id="cam-phase-scan">
         <button id="cam-scan-btn" class="btn btn-sm btn-outline" style="width:100%" onclick="startCameraScan()">🔍 Scan Network for Cameras</button>
         <div id="cam-scan-status" style="font-size:11px;color:#555;text-align:center;margin-top:5px;display:none"></div>
         <div id="cam-scan-results" style="margin-top:8px;display:flex;flex-direction:column;gap:5px"></div>
+        <button class="btn btn-ghost btn-xs" style="width:100%;margin-top:10px;border:1px dashed #2a2a2a" onclick="showCamSetup(null)">+ Enter IP manually</button>
       </div>
-      <div style="font-size:10px;color:#444;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">— or enter manually —</div>
-      <div style="display:flex;flex-direction:column;gap:10px">
+
+      <!-- Phase 2: configure selected camera -->
+      <div id="cam-phase-setup" style="display:none;flex-direction:column;gap:10px">
+        <button class="btn btn-ghost btn-xs" style="align-self:flex-start" onclick="showCamScan()">← Back to scan</button>
         <div>
           <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Display Name</label>
           <input id="cam-name" type="text" placeholder="e.g. Living Room Cam" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
@@ -794,8 +799,13 @@ select.mci{cursor:pointer}
           <input id="cam-pass" type="password" placeholder="password" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
         </div>
         <div>
-          <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Stream Path <span style="color:#444;font-weight:400;text-transform:none">(leave default for Reolink)</span></label>
-          <input id="cam-path" type="text" placeholder="h264Preview_01_sub" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+            <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;flex:1">Stream</label>
+            <button id="cam-streams-btn" class="btn btn-ghost btn-xs" onclick="loadCamStreams()">🔍 Load Streams</button>
+          </div>
+          <div id="cam-streams-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:8px"></div>
+          <input id="cam-path" type="text" placeholder="h264Preview_01_sub (default)" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+          <div id="cam-ptz-badge" style="display:none;margin-top:6px;font-size:11px;color:#a78bfa;font-weight:600">🕹️ PTZ detected</div>
         </div>
         <button class="btn btn-primary btn-sm" style="width:100%;margin-top:4px" onclick="addCameraDevice()">Add Camera</button>
       </div>
@@ -1086,7 +1096,7 @@ function eomUpdateDenials(id, count) {
 }
 
 // ── Devices tab ───────────────────────────────────────────────────────────────
-const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾', hue:'<img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle">' }
+const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾', camera:'📷', hue:'<img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle">' }
 
 function renderDevList() {
   const el=document.getElementById('dev-list')
@@ -1104,11 +1114,15 @@ function renderDevList() {
         <div class="dev-row-sub">${d.type} · ${d.type==='eom'?(d.ip+':'+d.port):d.type==='camera'?d.ip:(d.bleName||d.mac||d.ttyPath||'')}</div>
       </div>
       <div class="status-dot ${dotClass}"></div>
-      ${conn&&d.type==='pawprints'?`<button class="btn btn-ghost btn-xs" onclick="openPpModal('${d.id}')">Monitor</button>`:''}
-      ${conn
-        ?`<button class="btn btn-ghost btn-xs" onclick="discDev('${d.id}')">Disconnect</button>`
-        :`<button class="btn btn-primary btn-xs" onclick="connDev('${d.id}')">Connect</button>`}
-      ${d.type==='hue'?`<button class="btn btn-ghost btn-xs" onclick="hueShowSelect('${d.id}')">Configure</button>`:''}
+      ${d.type==='camera'
+        ? `<span style="font-size:11px;color:${{connected:'#4ade80',error:'#f87171',connecting:'#facc15'}[d.status]||'#555'}">${{connected:'Streaming',error:'Offline',connecting:'Connecting…'}[d.status]||'Idle'}</span>
+           <button class="btn btn-ghost btn-xs" onclick="showTab('camera',document.querySelector('.side-btn[onclick*=camera]'));closeScan()">View</button>`
+        : `${conn&&d.type==='pawprints'?`<button class="btn btn-ghost btn-xs" onclick="openPpModal('${d.id}')">Monitor</button>`:''}
+           ${conn
+             ?`<button class="btn btn-ghost btn-xs" onclick="discDev('${d.id}')">Disconnect</button>`
+             :`<button class="btn btn-primary btn-xs" onclick="connDev('${d.id}')">Connect</button>`}
+           ${d.type==='hue'?`<button class="btn btn-ghost btn-xs" onclick="hueShowSelect('${d.id}')">Configure</button>`:''}`
+      }
       <button class="btn btn-ghost btn-xs" onclick="editDevice('${d.id}')">✎</button>
       <button class="btn btn-danger btn-xs" onclick="rmDev('${d.id}')">×</button>
     `
@@ -1285,23 +1299,87 @@ async function scanSerialPorts() {
   } catch(e){ sel.innerHTML='<option value="">Error scanning ports</option>' }
 }
 
+let _camSetupOnvif = null  // { hasPTZ, ptzProfileToken } from last ONVIF probe
+
+function showCamScan() {
+  document.getElementById('cam-phase-scan').style.display = ''
+  document.getElementById('cam-phase-setup').style.display = 'none'
+  _camSetupOnvif = null
+}
+
+function showCamSetup(cam) {
+  document.getElementById('cam-phase-scan').style.display = 'none'
+  const setup = document.getElementById('cam-phase-setup')
+  setup.style.display = 'flex'
+  _camSetupOnvif = null
+  document.getElementById('cam-name').value = cam?.name || ''
+  document.getElementById('cam-ip').value = cam?.ip || ''
+  document.getElementById('cam-user').value = 'admin'
+  document.getElementById('cam-pass').value = ''
+  document.getElementById('cam-path').value = ''
+  document.getElementById('cam-streams-list').innerHTML = ''
+  document.getElementById('cam-ptz-badge').style.display = 'none'
+}
+
 async function startCameraScan() {
   try { await fetch('/api/cameras/scan', { method:'POST' }) }
   catch(e) { alert('Scan failed: ' + e.message) }
 }
+
 function addCameraScanResult(cam) {
   const el = document.createElement('button')
   el.className = 'btn btn-ghost btn-xs'
   el.style.cssText = 'width:100%;text-align:left;justify-content:flex-start;gap:6px;padding:6px 8px;border:1px solid #2a2a2a;border-radius:6px'
   el.innerHTML = `<span style="font-size:14px">📷</span><span><strong style="color:#e0e0e0;font-size:12px">${cam.name}</strong><br><span style="color:#555;font-size:10px">${cam.ip}</span></span>`
-  el.onclick = () => prefillCameraFromScan(cam.ip, cam.name)
+  el.onclick = () => showCamSetup(cam)
   document.getElementById('cam-scan-results').appendChild(el)
 }
-function prefillCameraFromScan(ip, name) {
-  document.getElementById('cam-ip').value = ip
-  if (!document.getElementById('cam-name').value) document.getElementById('cam-name').value = name
-  document.getElementById('cam-ip').scrollIntoView({ behavior:'smooth', block:'nearest' })
+
+async function loadCamStreams() {
+  const ip   = document.getElementById('cam-ip').value.trim()
+  const user = document.getElementById('cam-user').value.trim()
+  const pass = document.getElementById('cam-pass').value
+  if (!ip) return alert('Enter IP address first')
+  const btn  = document.getElementById('cam-streams-btn')
+  const list = document.getElementById('cam-streams-list')
+  btn.disabled = true; btn.textContent = 'Loading…'
+  list.innerHTML = '<div style="color:#555;font-size:11px;padding:4px 0">Querying ONVIF…</div>'
+  try {
+    const r = await fetch('/api/cameras/onvif/probe', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ ip, username: user, password: pass }) })
+    const data = await r.json()
+    if (!r.ok) throw new Error(data.error)
+    _camSetupOnvif = { hasPTZ: data.hasPTZ, ptzProfileToken: data.ptzProfileToken || null, ptzServiceUrl: data.ptzServiceUrl || null }
+    document.getElementById('cam-ptz-badge').style.display = data.hasPTZ ? '' : 'none'
+    if (!data.profiles.length) {
+      list.innerHTML = '<div style="color:#f87171;font-size:11px;padding:4px 0">No streams found — enter path manually</div>'
+    } else {
+      list.innerHTML = ''
+      for (const p of data.profiles) {
+        const el = document.createElement('button')
+        el.className = 'btn btn-ghost btn-xs'
+        el.style.cssText = 'width:100%;text-align:left;justify-content:flex-start;gap:8px;padding:7px 10px;border:1px solid #2a2a2a;border-radius:6px'
+        el.innerHTML = `<span style="flex:1;min-width:0">
+          <strong style="color:#e0e0e0;font-size:12px">${p.name}</strong>
+          ${p.hasAudio?'<span style="color:#4ade80;margin-left:6px;font-size:11px">🔊 Audio</span>':''}
+          ${p.hasPtz?'<span style="color:#a78bfa;margin-left:6px;font-size:11px">🕹️ PTZ</span>':''}
+          <br><span style="color:#444;font-size:10px;font-family:monospace">${p.streamPath}</span>
+        </span>`
+        el.onclick = () => {
+          document.querySelectorAll('#cam-streams-list button').forEach(b=>b.style.borderColor='#2a2a2a')
+          el.style.borderColor = '#4fc3f7'
+          document.getElementById('cam-path').value = p.streamPath
+        }
+        list.appendChild(el)
+      }
+    }
+  } catch(e) {
+    _camSetupOnvif = null
+    list.innerHTML = `<div style="color:#f87171;font-size:11px;padding:4px 0">ONVIF: ${e.message} — enter path manually</div>`
+  }
+  btn.disabled = false; btn.textContent = '🔍 Load Streams'
 }
+
 async function addCameraDevice() {
   const name = document.getElementById('cam-name').value.trim()
   const ip   = document.getElementById('cam-ip').value.trim()
@@ -1309,9 +1387,10 @@ async function addCameraDevice() {
   const pass = document.getElementById('cam-pass').value
   const path = document.getElementById('cam-path').value.trim() || 'h264Preview_01_sub'
   if (!name || !ip) return alert('Name and IP address are required')
+  const body = { type:'camera', name, ip, username:user, password:pass, streamPath:path }
+  if (_camSetupOnvif) { body.hasPTZ = _camSetupOnvif.hasPTZ; body.ptzProfileToken = _camSetupOnvif.ptzProfileToken; body.ptzServiceUrl = _camSetupOnvif.ptzServiceUrl }
   try {
-    const r = await fetch('/api/devices', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ type:'camera', name, ip, username:user, password:pass, streamPath:path }) })
+    const r = await fetch('/api/devices', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
     if (!r.ok) throw new Error(await r.text())
     closeScan(); lg('Camera added: ' + name)
   } catch(e) { alert('Error: ' + e.message) }
@@ -3637,21 +3716,57 @@ function renderCameraCards() {
   container.innerHTML = ''
   if (!cams.length) { container.innerHTML = '<div style="color:#444;font-size:13px">No cameras configured — add one from Devices</div>'; return }
   for (const cam of cams) {
+    const hasPTZ = !!cam.hasPTZ
     const card = document.createElement('div')
-    card.style.cssText = 'display:flex;flex-direction:column;gap:12px'
+    card.style.cssText = 'display:flex;flex-direction:column;gap:10px'
     card.innerHTML = `
       <div style="font-size:13px;font-weight:700;color:#e0e0e0;letter-spacing:.3px">${cam.name}</div>
-      <div style="position:relative;width:500px;height:360px;background:#0a0a0a;border-radius:10px;overflow:hidden;border:1px solid #222;cursor:pointer" onclick="cameraPopout('${cam.streamKey}','${cam.name.replace(/'/g,"\\'")}')">
+      <div style="position:relative;width:500px;height:360px;background:#0a0a0a;border-radius:10px;overflow:hidden;border:1px solid #222;cursor:pointer" onclick="cameraPopout('${cam.streamKey}','${cam.name.replace(/'/g,"\\'")}','${cam.id}',${!!cam.hasPTZ})">
         <video id="cam-video-${cam.streamKey}" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover"></video>
         <div id="cam-status-${cam.streamKey}" style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,.65);color:#4fc3f7;font-size:10px;font-weight:700;padding:3px 9px;border-radius:4px;letter-spacing:.5px">CONNECTING…</div>
         <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0">
           <div style="background:rgba(0,0,0,.7);color:#fff;font-size:12px;font-weight:700;padding:8px 18px;border-radius:6px;letter-spacing:.5px;pointer-events:none">⛶ POP OUT</div>
         </div>
         <div style="position:absolute;bottom:10px;right:10px;font-size:10px;color:#555">${cam.ip}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-ghost btn-xs" id="cam-mute-${cam.id}" onclick="toggleCamAudio('${cam.streamKey}','${cam.id}')">🔇 Muted</button>
+        ${hasPTZ ? `<div style="margin-left:auto">
+          <div style="display:grid;grid-template-columns:repeat(3,30px);grid-template-rows:repeat(3,30px);gap:2px">
+            <div></div>
+            <button class="btn btn-ghost btn-xs" style="padding:0;font-size:16px" onmousedown="camPtz('${cam.id}',0,0.5)" onmouseup="camPtzStop('${cam.id}')" onmouseleave="camPtzStop('${cam.id}')">▲</button>
+            <div></div>
+            <button class="btn btn-ghost btn-xs" style="padding:0;font-size:16px" onmousedown="camPtz('${cam.id}',-0.5,0)" onmouseup="camPtzStop('${cam.id}')" onmouseleave="camPtzStop('${cam.id}')">◄</button>
+            <div style="display:flex;align-items:center;justify-content:center;font-size:9px;color:#444">PTZ</div>
+            <button class="btn btn-ghost btn-xs" style="padding:0;font-size:16px" onmousedown="camPtz('${cam.id}',0.5,0)" onmouseup="camPtzStop('${cam.id}')" onmouseleave="camPtzStop('${cam.id}')">►</button>
+            <div></div>
+            <button class="btn btn-ghost btn-xs" style="padding:0;font-size:16px" onmousedown="camPtz('${cam.id}',0,-0.5)" onmouseup="camPtzStop('${cam.id}')" onmouseleave="camPtzStop('${cam.id}')">▼</button>
+            <div></div>
+          </div>
+        </div>` : ''}
       </div>`
     container.appendChild(card)
     if (_cameraActive) _cameraConnect(cam.streamKey)
   }
+}
+
+function toggleCamAudio(streamKey, camId) {
+  const v = document.getElementById(`cam-video-${streamKey}`)
+  if (!v) return
+  v.muted = !v.muted
+  const btn = document.getElementById(`cam-mute-${camId}`)
+  if (btn) btn.textContent = v.muted ? '🔇 Muted' : '🔊 Audio ON'
+}
+
+async function camPtz(camId, pan, tilt) {
+  const r = await fetch(`/api/cameras/${camId}/onvif/ptz`, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ pan, tilt, action:'move' }) }).catch(e => console.error('[ptz]', e))
+  if (r && !r.ok) console.error('[ptz error]', await r.text().catch(()=>'?'))
+}
+
+async function camPtzStop(camId) {
+  fetch(`/api/cameras/${camId}/onvif/ptz`, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'stop' }) }).catch(()=>{})
 }
 
 function cameraStart() { _cameraActive = true; renderCameraCards() }
@@ -3666,7 +3781,7 @@ function cameraStop() {
   })
 }
 
-function cameraPopout(streamKey, name) {
+function cameraPopout(streamKey, name, camId, hasPTZ) {
   if (_cameraPCs[streamKey]) { _cameraPCs[streamKey].close(); delete _cameraPCs[streamKey] }
   _cleanupMse(streamKey)
   const video = document.getElementById(`cam-video-${streamKey}`)
@@ -3675,7 +3790,8 @@ function cameraPopout(streamKey, name) {
   if (status) { status.textContent = '⛶ IN POPUP'; status.style.color = '#a78bfa' }
   const w = Math.round(screen.availWidth / 2), h = Math.round(screen.availHeight / 2)
   const left = Math.round((screen.availWidth-w)/2), top = Math.round((screen.availHeight-h)/2)
-  const win = window.open(`/camera-popup.html?stream=${streamKey}&name=${encodeURIComponent(name)}`,
+  const qs = `stream=${streamKey}&name=${encodeURIComponent(name)}${camId?`&camId=${camId}`:''}${hasPTZ?'&ptz=1':''}`
+  const win = window.open(`/camera-popup.html?${qs}`,
     `cam_${streamKey}`, `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no`)
   const poll = setInterval(() => {
     if (win && win.closed) { clearInterval(poll); if (_cameraActive) _cameraConnect(streamKey) }

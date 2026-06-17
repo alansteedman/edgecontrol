@@ -11,10 +11,14 @@
   #overlay { position:fixed; top:0; left:0; right:0; padding:10px 14px; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(to bottom, rgba(0,0,0,.7), transparent); pointer-events:none }
   #cam-name { font-size:13px; font-weight:700; color:#fff; letter-spacing:.4px }
   #status { font-size:10px; font-weight:700; color:#4fc3f7; background:rgba(0,0,0,.5); padding:3px 9px; border-radius:4px; letter-spacing:.5px }
-  #controls { position:fixed; bottom:0; left:0; right:0; padding:10px 14px; display:flex; gap:8px; justify-content:flex-end; background:linear-gradient(to top, rgba(0,0,0,.7), transparent); opacity:0; transition:opacity .2s }
+  #controls { position:fixed; bottom:0; left:0; right:0; padding:10px 14px; display:flex; gap:8px; align-items:flex-end; justify-content:space-between; background:linear-gradient(to top, rgba(0,0,0,.7), transparent); opacity:0; transition:opacity .2s }
   body:hover #controls { opacity:1 }
   .ctrl-btn { background:rgba(30,30,30,.85); border:1px solid #333; color:#ccc; padding:6px 14px; border-radius:5px; cursor:pointer; font-size:11px; font-family:monospace; letter-spacing:.3px }
   .ctrl-btn:hover { background:#222; color:#fff }
+  #ptz-pad { display:grid; grid-template-columns:repeat(3,36px); grid-template-rows:repeat(3,36px); gap:3px }
+  .ptz-btn { background:rgba(30,30,30,.85); border:1px solid #333; color:#ccc; border-radius:5px; cursor:pointer; font-size:18px; display:flex; align-items:center; justify-content:center; user-select:none }
+  .ptz-btn:hover { background:#222; color:#fff }
+  .ptz-btn:active { background:#333 }
   #play-prompt { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.5); cursor:pointer; z-index:50 }
   #play-prompt div { background:rgba(0,0,0,.75); color:#fff; font-size:14px; font-weight:700; padding:16px 32px; border-radius:8px; letter-spacing:.5px; border:1px solid #333 }
   #play-prompt.hidden { display:none }
@@ -27,8 +31,21 @@
   <span id="status">CONNECTING…</span>
 </div>
 <div id="controls">
-  <button class="ctrl-btn" id="audio-btn" onclick="toggleAudio()">🔇 Muted</button>
-  <button class="ctrl-btn" onclick="document.getElementById('video').requestFullscreen?.()">⛶ Fullscreen</button>
+  <div id="ptz-pad" style="display:none">
+    <div></div>
+    <div class="ptz-btn" onmousedown="ptz(0,0.5)" onmouseup="ptzStop()" onmouseleave="ptzStop()">▲</div>
+    <div></div>
+    <div class="ptz-btn" onmousedown="ptz(-0.5,0)" onmouseup="ptzStop()" onmouseleave="ptzStop()">◄</div>
+    <div style="display:flex;align-items:center;justify-content:center;font-size:9px;color:#555">PTZ</div>
+    <div class="ptz-btn" onmousedown="ptz(0.5,0)" onmouseup="ptzStop()" onmouseleave="ptzStop()">►</div>
+    <div></div>
+    <div class="ptz-btn" onmousedown="ptz(0,-0.5)" onmouseup="ptzStop()" onmouseleave="ptzStop()">▼</div>
+    <div></div>
+  </div>
+  <div style="display:flex;gap:8px;margin-left:auto">
+    <button class="ctrl-btn" id="audio-btn" onclick="toggleAudio()">🔇 Muted</button>
+    <button class="ctrl-btn" onclick="document.getElementById('video').requestFullscreen?.()">⛶ Fullscreen</button>
+  </div>
 </div>
 <div id="play-prompt" class="hidden" onclick="startPlay()">
   <div>▶ Click to play</div>
@@ -37,8 +54,11 @@
   const params = new URLSearchParams(location.search)
   const streamKey = params.get('stream') || 'camera'
   const name = params.get('name') || 'Camera'
+  const camId = params.get('camId') || null
+  const hasPTZ = params.get('ptz') === '1'
   document.getElementById('cam-name').textContent = name
   document.title = name
+  if (hasPTZ && camId) document.getElementById('ptz-pad').style.display = 'grid'
 
   const video  = document.getElementById('video')
   const status = document.getElementById('status')
@@ -213,6 +233,17 @@
   function toggleAudio() {
     video.muted = !video.muted
     document.getElementById('audio-btn').textContent = video.muted ? '🔇 Muted' : '🔊 Audio On'
+  }
+
+  async function ptz(pan, tilt) {
+    if (!camId) return
+    fetch(`/api/cameras/${camId}/onvif/ptz`, { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pan, tilt, action:'move' }) }).catch(()=>{})
+  }
+  async function ptzStop() {
+    if (!camId) return
+    fetch(`/api/cameras/${camId}/onvif/ptz`, { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'stop' }) }).catch(()=>{})
   }
 
   window.addEventListener('beforeunload', () => {

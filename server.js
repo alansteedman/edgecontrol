@@ -1399,15 +1399,16 @@ class EomDevice {
 
 // ── Camera device (RTSP via go2rtc) ──────────────────────────────────────────
 class CameraDevice {
-  constructor(id, name, ip, username, password, streamPath) {
+  constructor(id, name, ip, username, password, streamPath, hasPTZ, ptzProfileToken, ptzServiceUrl) {
     this.id=id; this.name=name; this.type='camera'
     this.ip=ip; this.username=username; this.password=password
     this.streamPath=streamPath||'h264Preview_01_sub'
+    this.hasPTZ=!!hasPTZ; this.ptzProfileToken=ptzProfileToken||null; this.ptzServiceUrl=ptzServiceUrl||null
     this.status='idle'
   }
   get rtspUrl() { return `rtsp://${this.username}:${this.password}@${this.ip}:554/${this.streamPath}` }
   get streamKey() { return this.id.replace(/[^a-z0-9]/gi,'_') }
-  toJSON() { return { id:this.id, type:'camera', name:this.name, ip:this.ip, username:this.username, streamPath:this.streamPath, status:this.status, streamKey:this.streamKey } }
+  toJSON() { return { id:this.id, type:'camera', name:this.name, ip:this.ip, username:this.username, streamPath:this.streamPath, hasPTZ:this.hasPTZ, ptzProfileToken:this.ptzProfileToken, ptzServiceUrl:this.ptzServiceUrl, status:this.status, streamKey:this.streamKey } }
 }
 
 // ── Philips Hue Bridge ────────────────────────────────────────────────────────
@@ -1519,12 +1520,36 @@ class HueBridge {
 function rebuildGo2rtcConfig() {
   const cameras = Object.values(devices).filter(d=>d.type==='camera')
   const streams = {}
-  for (const cam of cameras) streams[cam.streamKey] = cam.rtspUrl
-  const yaml = `api:\n  listen: :1984\n  origin: "*"\n\nstreams:\n${Object.entries(streams).map(([k,v])=>`  ${k}: ${v}`).join('\n')||'  # no cameras configured'}\n\nlog:\n  level: info\n`
+  for (const cam of cameras) { streams[cam.streamKey] = [cam.rtspUrl, `ffmpeg:${cam.rtspUrl}#audio=opus`]; cam.status='connecting'; broadcast({type:'device:status',id:cam.id,status:'connecting'}) }
+  const streamLines = Object.entries(streams).map(([k,v]) => Array.isArray(v)
+    ? `  ${k}:\n    - ${v[0]}\n    - ${v[1]}`
+    : `  ${k}: ${v}`).join('\n') || '  # no cameras configured'
+  const yaml = `api:\n  listen: :1984\n  origin: "*"\n\nstreams:\n${streamLines}\n\nlog:\n  level: info\n`
   writeFileSync(join(__dirname,'..','go2rtc.yaml'), yaml)
   exec('pm2 restart go2rtc', err => { if(err) console.error('[go2rtc] restart error:',err.message) })
   console.log(`[go2rtc] config rebuilt with ${cameras.length} camera(s)`)
+  setTimeout(checkCameraStatus, 8000)
 }
+
+async function checkCameraStatus() {
+  const cameras = Object.values(devices).filter(d=>d.type==='camera')
+  if (!cameras.length) return
+  try {
+    const r = await fetch('http://127.0.0.1:1984/api/streams', { signal: AbortSignal.timeout(3000) })
+    if (!r.ok) return
+    const streams = await r.json()
+    for (const cam of cameras) {
+      const s = streams[cam.streamKey]
+      const newStatus = Array.isArray(s?.producers) && s.producers.length > 0 ? 'connected' : 'error'
+      if (cam.status !== newStatus) {
+        cam.status = newStatus
+        broadcast({ type:'device:status', id:cam.id, status:newStatus })
+      }
+    }
+  } catch {}
+}
+
+setInterval(checkCameraStatus, 12000)
 
 function createDevice(cfg) {
   if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
@@ -1532,7 +1557,7 @@ function createDevice(cfg) {
   if (cfg.type==='eom')    return new EomDevice(cfg.id,cfg.name,cfg.ip,cfg.port)
   if (cfg.type==='nimble') return new NimbleDevice(cfg.id,cfg.name,cfg.ttyPath)
   if (cfg.type==='estim')  return new EstimDevice(cfg.id,cfg.name,cfg.ttyPath)
-  if (cfg.type==='camera') return new CameraDevice(cfg.id,cfg.name,cfg.ip,cfg.username,cfg.password,cfg.streamPath)
+  if (cfg.type==='camera') return new CameraDevice(cfg.id,cfg.name,cfg.ip,cfg.username,cfg.password,cfg.streamPath,cfg.hasPTZ,cfg.ptzProfileToken,cfg.ptzServiceUrl)
   if (cfg.type==='hue')    return new HueBridge(cfg.id,cfg.name,cfg.ip,cfg.token,cfg.selectedLights,cfg.selectedGroups,cfg.selectedScenes)
   throw new Error(`Unknown type: ${cfg.type}`)
 }
@@ -1896,9 +1921,9 @@ app.get('/api/serial-ports', async (req,res) => {
 app.get('/api/scan/results', (req,res) => res.json({scanning:isScanning,results:scanResults}))
 
 app.post('/api/devices', async (req,res) => {
-  const {type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath,token} = req.body
+  const {type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath,token,hasPTZ,ptzProfileToken,ptzServiceUrl} = req.body
   if (!type||!name) return res.status(400).json({error:'type and name required'})
-  const id=`${type}-${Date.now()}`, cfg={id,type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath,token}
+  const id=`${type}-${Date.now()}`, cfg={id,type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath,token,hasPTZ,ptzProfileToken,ptzServiceUrl}
   try {
     const dev=createDevice(cfg); devices[id]=dev; config.devices.push(cfg); saveConfig(config)
     if (type==='camera') rebuildGo2rtcConfig()
@@ -1909,7 +1934,7 @@ app.post('/api/devices', async (req,res) => {
 
 app.patch('/api/devices/:id', async (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
-  const {name,ip,port,ttyPath,username,password,streamPath}=req.body
+  const {name,ip,port,ttyPath,username,password,streamPath,hasPTZ,ptzProfileToken,ptzServiceUrl}=req.body
   if (name) dev.name=name
   if (dev.type==='eom') {
     if (ip)   dev.ip=ip
@@ -1917,10 +1942,13 @@ app.patch('/api/devices/:id', async (req,res) => {
   }
   if ((dev.type==='nimble'||dev.type==='estim') && ttyPath) dev.ttyPath=ttyPath
   if (dev.type==='camera') {
-    if (ip)         dev.ip=ip
-    if (username)   dev.username=username
-    if (password)   dev.password=password
-    if (streamPath) dev.streamPath=streamPath
+    if (ip)                  dev.ip=ip
+    if (username)            dev.username=username
+    if (password)            dev.password=password
+    if (streamPath)          dev.streamPath=streamPath
+    if (hasPTZ !== undefined) dev.hasPTZ=!!hasPTZ
+    if (ptzProfileToken)     dev.ptzProfileToken=ptzProfileToken
+    if (ptzServiceUrl)       dev.ptzServiceUrl=ptzServiceUrl
   }
   if (dev.type==='hue') { if (ip) dev.ip=ip }
   const cfg=config.devices.find(d=>d.id===req.params.id)
@@ -1929,10 +1957,13 @@ app.patch('/api/devices/:id', async (req,res) => {
     if (dev.type==='eom') { if (ip) cfg.ip=ip; if (port) cfg.port=parseInt(port) }
     if ((dev.type==='nimble'||dev.type==='estim') && ttyPath) cfg.ttyPath=ttyPath
     if (dev.type==='camera') {
-      if (ip)         cfg.ip=ip
-      if (username)   cfg.username=username
-      if (password)   cfg.password=password
-      if (streamPath) cfg.streamPath=streamPath
+      if (ip)                  cfg.ip=ip
+      if (username)            cfg.username=username
+      if (password)            cfg.password=password
+      if (streamPath)          cfg.streamPath=streamPath
+      if (hasPTZ !== undefined) cfg.hasPTZ=!!hasPTZ
+      if (ptzProfileToken)     cfg.ptzProfileToken=ptzProfileToken
+      if (ptzServiceUrl)       cfg.ptzServiceUrl=ptzServiceUrl
     }
     if (dev.type==='hue') { if (ip) cfg.ip=ip }
     saveConfig(config)
@@ -2033,6 +2064,155 @@ app.post('/api/cameras/scan', requireAuth, (req, res) => {
   doOnvifScan(msg => {
     for (const ws of wss.clients) if (ws.readyState === 1) ws.send(JSON.stringify(msg))
   })
+})
+
+// ── ONVIF device discovery (features, profiles, PTZ) ─────────────────────────
+function wsSecHeader(user, pass) {
+  const nonce = randomBytes(16)
+  const created = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+  const digest = createHash('sha1')
+    .update(Buffer.concat([nonce, Buffer.from(created), Buffer.from(pass)]))
+    .digest('base64')
+  const nonce64 = nonce.toString('base64')
+  return `<wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd" s:mustUnderstand="false"><wsse:UsernameToken><wsse:Username>${user}</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">${digest}</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">${nonce64}</wsse:Nonce><wsu:Created>${created}</wsu:Created></wsse:UsernameToken></wsse:Security>`
+}
+
+async function onvifPost(url, body, user, pass, ms=4000) {
+  const sec = (user && pass) ? wsSecHeader(user, pass) : ''
+  const soap = `<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><s:Header>${sec}</s:Header><s:Body>${body}</s:Body></s:Envelope>`
+  const ctrl = new AbortController(); const t = setTimeout(()=>ctrl.abort(), ms)
+  try {
+    const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/soap+xml;charset=UTF-8'}, body:soap, signal:ctrl.signal })
+    clearTimeout(t); return await r.text()
+  } finally { clearTimeout(t) }
+}
+
+function xmlFirst(txt, tag) {
+  return txt.match(new RegExp(`<[^:>]*:?${tag}(?:\\s[^>]*)?>([^<]+)<\\/[^:>]*:?${tag}>`))?.[1]?.trim()
+}
+
+async function onvifDiscoverDevice(ip, user, pass) {
+  // Try common ONVIF device service URLs in order
+  const candidates = [
+    `http://${ip}:8000/onvif/device_service`,
+    `http://${ip}/onvif/device_service`,
+    `http://${ip}:8080/onvif/device_service`,
+    `http://${ip}/onvif/device`,
+    `http://${ip}:8899/onvif/device_service`,
+  ]
+  const probe = `<tds:GetCapabilities xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><tds:Category>All</tds:Category></tds:GetCapabilities>`
+  let capXml = null, deviceUrl = null
+  for (const url of candidates) {
+    try {
+      const xml = await onvifPost(url, probe, user, pass, 3000)
+      if (xml && !xml.includes('<s:Fault>') && xml.includes('Capabilities')) { capXml = xml; deviceUrl = url; break }
+      if (xml && xml.includes('Capabilities')) { capXml = xml; deviceUrl = url; break }
+    } catch {}
+  }
+  if (!capXml) throw new Error(`ONVIF not reachable at ${ip} (tried ports 80/8000/8080/8899)`)
+
+  // Derive base URL from the working device service URL so all services use the same port
+  const baseUrl = new URL(deviceUrl).origin
+
+  const mediaUrlMatch = capXml.match(/<[^:>\/]*:?Media\b[^>]*>[\s\S]*?<[^:>\/]*:?XAddr>([^<]+)<\/[^:>\/]*:?XAddr>/)
+  const ptzUrlMatch   = capXml.match(/<[^:>\/]*:?PTZ\b[^>]*>[\s\S]*?<[^:>\/]*:?XAddr>([^<]+)<\/[^:>\/]*:?XAddr>/)
+  const mediaUrl = mediaUrlMatch?.[1]?.trim() || `${baseUrl}/onvif/media_service`
+  const ptzUrl   = ptzUrlMatch?.[1]?.trim()   || null
+
+  // GetProfiles
+  const profXml = await onvifPost(mediaUrl,
+    `<trt:GetProfiles xmlns:trt="http://www.onvif.org/ver10/media/wsdl"/>`,
+    user, pass)
+
+  // Parse each profile block
+  const profileRe = /<[^:>]*:?Profiles[^>]+token="([^"]+)"[^>]*>([\s\S]*?)<\/[^:>]*:?Profiles>/g
+  const rawProfiles = []; let m
+  while ((m = profileRe.exec(profXml)) !== null) rawProfiles.push({ token: m[1], xml: m[2] })
+
+  // GetStreamUri for each profile (parallel)
+  const profiles = await Promise.all(rawProfiles.map(async ({ token, xml }) => {
+    const name     = xmlFirst(xml, 'Name') || token
+    const hasAudio = xml.includes('AudioEncoderConfiguration')
+    const hasPtz   = xml.includes('PTZConfiguration')
+    const venc     = xml.match(/<[^:>]*:?Encoding>([^<]+)<\/[^:>]*:?Encoding>/)?.[1]?.trim()
+
+    let streamPath = null, rtspUri = null
+    try {
+      const uriXml = await onvifPost(mediaUrl,
+        `<trt:GetStreamUri xmlns:trt="http://www.onvif.org/ver10/media/wsdl"><trt:StreamSetup><tt:Stream xmlns:tt="http://www.onvif.org/ver10/schema">RTP-Unicast</tt:Stream><tt:Transport xmlns:tt="http://www.onvif.org/ver10/schema"><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup><trt:ProfileToken>${token}</trt:ProfileToken></trt:GetStreamUri>`,
+        user, pass, 5000)
+      rtspUri = xmlFirst(uriXml, 'Uri')
+      if (rtspUri) {
+        const u = new URL(rtspUri.replace(/^rtsp:\/\//,'http://').replace(/^rtsps:\/\//,'https://'))
+        streamPath = (u.pathname.replace(/^\//,'') + u.search).trim()
+      }
+    } catch(e) { console.error(`[onvif] GetStreamUri ${token}:`, e.message) }
+
+    return { token, name, hasAudio, hasPtz, encoding: venc, streamPath, rtspUri }
+  }))
+
+  const ptzServiceUrl = ptzUrl || `${baseUrl}/onvif/ptz_service`
+  const ptzToken = rawProfiles.find(p => p.xml.includes('PTZConfiguration'))?.token || rawProfiles[0]?.token || null
+  return { profiles: profiles.filter(p => p.streamPath), hasPTZ: !!ptzUrl, ptzServiceUrl, ptzProfileToken: ptzToken }
+}
+
+app.get('/api/cameras/:id/onvif/discover', requireAuth, async (req, res) => {
+  const dev = devices[req.params.id]
+  if (!dev || dev.type !== 'camera') return res.status(404).json({ error: 'not found' })
+  try {
+    const result = await onvifDiscoverDevice(dev.ip, dev.username, dev.password)
+    res.json(result)
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/cameras/onvif/probe', requireAuth, async (req, res) => {
+  const { ip, username, password } = req.body
+  if (!ip) return res.status(400).json({ error: 'ip required' })
+  try {
+    const result = await onvifDiscoverDevice(ip, username || '', password || '')
+    res.json(result)
+  } catch(e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/cameras/:id/onvif/ptz', requireAuth, async (req, res) => {
+  const dev = devices[req.params.id]
+  if (!dev || dev.type !== 'camera') return res.status(404).json({ error: 'not found' })
+  const { pan=0, tilt=0, action='move' } = req.body
+  const ptzUrl = dev.ptzServiceUrl || `http://${dev.ip}:8000/onvif/ptz_service`
+
+  // Auto-discover profile token if not stored (e.g. camera added before ONVIF feature)
+  if (!dev.ptzProfileToken) {
+    try {
+      const mediaUrl = ptzUrl.replace('ptz_service', 'media_service')
+      const profXml = await onvifPost(mediaUrl, `<trt:GetProfiles xmlns:trt="http://www.onvif.org/ver10/media/wsdl"/>`, dev.username, dev.password, 4000)
+      const m = profXml.match(/<[^:>]*:?Profiles[^>]+token="([^"]+)"/)
+      if (m) {
+        dev.ptzProfileToken = m[1]
+        const cfg = config.devices.find(d => d.id === dev.id)
+        if (cfg) { cfg.ptzProfileToken = m[1]; saveConfig(config) }
+        console.log(`[${dev.id}] PTZ profile auto-discovered: ${m[1]}`)
+      }
+    } catch(e) { console.error(`[${dev.id}] PTZ auto-discover failed:`, e.message) }
+  }
+
+  const profileToken = dev.ptzProfileToken
+  if (!profileToken) return res.status(400).json({ error: 'no PTZ profile token' })
+
+  const ptzSoap = (ns, tok, p, t) => action === 'stop' || (p === 0 && t === 0)
+    ? `<tptz:Stop xmlns:tptz="${ns}"><tptz:ProfileToken>${tok}</tptz:ProfileToken><tptz:PanTilt>true</tptz:PanTilt><tptz:Zoom>false</tptz:Zoom></tptz:Stop>`
+    : `<tptz:ContinuousMove xmlns:tptz="${ns}"><tptz:ProfileToken>${tok}</tptz:ProfileToken><tptz:Velocity><tt:PanTilt xmlns:tt="http://www.onvif.org/ver10/schema" x="${p}" y="${t}"/></tptz:Velocity></tptz:ContinuousMove>`
+
+  try {
+    let xml
+    for (const ns of ['http://www.onvif.org/ver20/ptz/wsdl', 'http://www.onvif.org/ver10/ptz/wsdl']) {
+      xml = await onvifPost(ptzUrl, ptzSoap(ns, profileToken, pan, tilt), dev.username, dev.password)
+      if (!xml?.includes('not implemented') && !xml?.includes('namespace not recognized')) break
+      console.log(`[ptz] ns ${ns} not supported, trying next`)
+    }
+    console.log(`[ptz] ${action} token=${profileToken} pan=${pan} tilt=${tilt} → ${xml?.slice(0,200)}`)
+    if (xml?.includes('Fault')) return res.status(500).json({ error: 'ONVIF Fault', detail: xml.slice(0,1000) })
+    res.json({ ok: true })
+  } catch(e) { console.error('[ptz]', e.message); res.status(500).json({ error: e.message }) }
 })
 
 // ── Hue API ───────────────────────────────────────────────────────────────────

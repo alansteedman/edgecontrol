@@ -1912,7 +1912,7 @@ function renderHueCards() {
         const bri = grp ? Math.round((grp.action?.bri||254)*100/254) : 100
         const briPart = grpId
           ? `<input type="range" min="1" max="100" value="${bri}" style="flex:1;accent-color:#b0b8ff"
-              oninput="hueSetGroup('${dev.id}','${grpId}',{bri:parseInt(this.value),on:true})">
+              oninput="hueGroupSlider('${dev.id}','${grpId}',parseInt(this.value))">
              <span style="font-size:11px;color:#555;min-width:32px;text-align:right">${bri}%</span>`
           : ''
         html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #1a1a1a">
@@ -1939,7 +1939,7 @@ function renderHueCards() {
           <button onclick="hueSetGroup('${dev.id}','${id}',{on:false})"
             style="background:${!on?'#e57373':'#1a1a1a'};border:1px solid ${!on?'#e57373':'#333'};color:${!on?'#000':'#666'};border-radius:6px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer">OFF</button>
           <input type="range" min="1" max="100" value="${bri}" style="flex:1;accent-color:#4fc3f7"
-            oninput="hueSetGroup('${dev.id}','${id}',{bri:parseInt(this.value),on:true})">
+            oninput="hueGroupSlider('${dev.id}','${id}',parseInt(this.value))">
           <span style="font-size:11px;color:#555;min-width:32px;text-align:right">${bri}%</span>
         </div>`
       }
@@ -1969,6 +1969,13 @@ async function hueSetGroup(devId, groupId, params) {
 
 async function hueSetLight(devId, lightId, params) {
   await fetch(`/api/devices/${devId}/hue/light/${lightId}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params)}).catch(()=>{})
+}
+
+const _hueSliderTimers = {}
+function hueGroupSlider(devId, groupId, val) {
+  const key = devId+':'+groupId
+  clearTimeout(_hueSliderTimers[key])
+  _hueSliderTimers[key] = setTimeout(() => hueSetGroup(devId, groupId, {bri:val, on:true}), 200)
 }
 
 function hueShowSelect(devId) {

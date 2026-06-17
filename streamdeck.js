@@ -1255,18 +1255,18 @@ function renderHueScenesLcd(hueDev, sceneOffset) {
 
     // On/off dot
     ctx.beginPath(); ctx.arc(ox + 14, 20, 5, 0, Math.PI * 2)
-    ctx.fillStyle = on ? '#4fc3f7' : '#2a2a2a'; ctx.fill()
+    ctx.fillStyle = on ? '#4fc3f7' : '#555'; ctx.fill()
 
     // Scene name
     const name = sc.name || id
     const trimmed = name.length > 14 ? name.slice(0, 13) + '…' : name
     ctx.font = `bold ${trimmed.length > 10 ? 10 : 12}px monospace`
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
-    ctx.fillStyle = on ? '#e0e0e0' : '#666'
+    ctx.fillStyle = '#e0e0e0'
     ctx.fillText(trimmed, ox + 26, 20)
 
     // Brightness value
-    ctx.font = '10px monospace'; ctx.fillStyle = on ? '#4fc3f7' : '#333'
+    ctx.font = '10px monospace'; ctx.fillStyle = on ? '#4fc3f7' : '#888'
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
     ctx.fillText(on ? `${bri}%` : 'OFF', ox + 14, 44)
 
@@ -1924,8 +1924,15 @@ export class StreamDeckController {
       const grpId = sc.group
       const grp = grpId ? hue._groups?.[grpId] : null
       const on = grp?.action?.on ?? false
-      if (on && grpId) hue.setGroup(grpId, { on: false })
-      else hue.activateScene(sceneId)
+      if (on && grpId) {
+        hue.setGroup(grpId, { on: false })
+      } else {
+        // Optimistically mark group on so LCD updates immediately
+        if (grpId && hue._groups?.[grpId]) {
+          hue._groups[grpId].action = Object.assign(hue._groups[grpId].action || {}, { on: true })
+        }
+        hue.activateScene(sceneId)
+      }
       this._refreshLcd()
       return
     }

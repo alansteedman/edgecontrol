@@ -95,7 +95,9 @@ class EomWS extends EventEmitter {
 }
 import { randomBytes, createHash } from 'crypto'
 import session from 'express-session'
+import SessionFileStore from 'session-file-store'
 import bcrypt from 'bcryptjs'
+const FileStore = SessionFileStore(session)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const CONFIG_PATH    = join(__dirname, 'config.json')
@@ -1584,6 +1586,7 @@ const sessionMW = session({
   secret: config.sessionSecret,
   resave: false,
   saveUninitialized: false,
+  store: new FileStore({ path: join(__dirname, 'sessions'), ttl: 7 * 24 * 3600, logFn: ()=>{} }),
   cookie: { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 }
 })
 app.use(sessionMW)

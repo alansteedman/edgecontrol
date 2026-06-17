@@ -1502,6 +1502,7 @@ export class StreamDeckController {
     this._estimSelected = false  // true = unit1 channels highlighted for mode assignment
     this._devicePageOffset = 0
     this._hueSceneOffset = 0
+    this._hueKnobTimers = {}
     this._tick = 0
     this._timer = null
     this._ready = false
@@ -1846,8 +1847,15 @@ export class StreamDeckController {
     const grp = hue._groups?.[grpId]
     const curBri = grp ? Math.round((grp.action?.bri || 254) * 100 / 254) : 100
     const newBri = Math.min(100, Math.max(1, curBri + ticks * 2))
-    hue.setGroup(grpId, { bri: newBri, on: true })
+    // Update local state immediately for responsive LCD
+    if (hue._groups?.[grpId]) {
+      Object.assign(hue._groups[grpId].action || (hue._groups[grpId].action = {}),
+        { bri: Math.round(newBri * 254 / 100), on: true })
+    }
     this._refreshLcd()
+    // Debounce bridge call — only send after 200ms of no movement
+    clearTimeout(this._hueKnobTimers[grpId])
+    this._hueKnobTimers[grpId] = setTimeout(() => hue.setGroup(grpId, { bri: newBri, on: true }), 200)
   }
 
   // ── Encoder press ──────────────────────────────────────────────

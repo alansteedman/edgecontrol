@@ -18,7 +18,7 @@ const DEVICE_DECK_CONFIG = {
   nimble: { label: 'Nimble', color: 'purple', page: 'nimble', deviceKey: 'nimble' },
   coyote: { label: 'Coyote', color: 'orange', page: 'coyote', deviceKey: 'coyote' },
   estim:  { label: 'Estim',  color: 'blue',   page: 'estim',  deviceKey: 'estim'  },
-  hue:    { label: 'Hue',    color: 'teal',   page: 'hue',    icon: '💡'          },
+  hue:    { label: 'Hue',    color: 'teal',   page: 'hue',    deviceKey: 'hue'    },
 }
 
 // ─── Built-in waveform definitions (matches server BUILTIN_WAVEFORMS) ────────
@@ -98,6 +98,12 @@ async function loadDeviceIcons() {
     } catch(e) {
       console.warn(`[deck] icon missing: ${file}`)
     }
+  }
+  try {
+    deviceIcons.hue = await loadImage(join(__dir, 'public', 'hue-logo.svg'))
+    console.log('[deck] icon loaded: hue-logo.svg')
+  } catch(e) {
+    console.warn('[deck] icon missing: hue-logo.svg')
   }
 }
 

@@ -64,7 +64,7 @@ If you need to connect the Pi to WiFi after a fresh install, the device will bro
 
 ## Versions
 
-- **v2.0.2** — IP camera: ONVIF WS-Discovery scan, stream/profile selection, PTZ controls (D-pad, hold to move), audio via ffmpeg OPUS transcoding, PTZ in popout window; audio waveform playback (▶/⏸), synthesised preview (⚡), animated playhead, base frequency slider per audio file
+- **v2.0.2** — IP camera: ONVIF WS-Discovery scan, stream/profile selection, PTZ controls (D-pad, hold to move), audio via ffmpeg OPUS transcoding, PTZ in popout window; audio waveform playback (▶/⏸), synthesised preview (⚡), animated playhead, base frequency slider per audio file; scrolling waveform visualisation for channels and groups (tick-synced to BLE output, fixed builtin waveform seam), ⏮/⏸/▶ playback controls per channel and group, group enable/disable toggle (releases channels for individual control without deleting the group)
 - **v2.0.1** — Philips Hue integration: scenes and rooms on Stream Deck LCD with brightness knobs, active scene tracking (per-group), Set Hue and Hue Ramp macro blocks with live ramp display on Stream Deck, macro monitor view support for Hue blocks
 - **v2.0.0** — PawPrints BLE sensor support, new macro blocks (Wait: Paw, Paw: If/Else), streamdeck.js included
 - **v1.0.0** — Initial release

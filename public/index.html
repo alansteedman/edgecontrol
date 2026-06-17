@@ -903,7 +903,7 @@ function send(m){ if(ws?.readyState===1) ws.send(JSON.stringify(m)) }
 function handle(m) {
   switch(m.type) {
     case 'state':
-      m.devices.forEach(d => S.devices[d.id]=d)
+      m.devices.forEach(d => { d.tickAt=performance.now(); S.devices[d.id]=d })
       if(m.waveforms) S.waveforms=m.waveforms
       if(m.groups)   S.groups=m.groups
       if(m.role) S.role=m.role
@@ -913,13 +913,15 @@ function handle(m) {
       renderAll(); break
     case 'deck:status':
       S.deck={ status:m.status, name:m.name }; renderDeckCard(); break
-    case 'group:added':   S.groups=[...S.groups,m.group]; renderGroups(); break
-    case 'group:updated': S.groups=S.groups.map(g=>g.id===m.group.id?m.group:g); renderGroups(); break
-    case 'group:removed': S.groups=S.groups.filter(g=>g.id!==m.id); renderGroups(); break
+    case 'group:added':   S.groups=[...S.groups,m.group]; renderGroups(); renderCoyoteCards(); break
+    case 'group:updated': S.groups=S.groups.map(g=>g.id===m.group.id?m.group:g); renderGroups(); renderCoyoteCards(); break
+    case 'group:removed': S.groups=S.groups.filter(g=>g.id!==m.id); renderGroups(); renderCoyoteCards(); break
     case 'macro:running': case 'macro:stopped': case 'macro:step':
     case 'macro:wait': case 'macro:countdown':
     case 'macro:added': case 'macro:updated': case 'macro:removed':
       window._handleMacroWS?.(m); break
+    case 'device:tick':
+      if(S.devices[m.id]){ S.devices[m.id].tick=m.tick; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused } break
     case 'device:status':
       if(S.devices[m.id]) S.devices[m.id].status=m.status
       renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); renderPawPrintsCards(); if(!_hueDragging) renderHueCards(); break
@@ -942,7 +944,24 @@ function handle(m) {
         if(m.battery!==undefined)  S.devices[m.id].battery=m.battery
         if(m.firmware!==undefined) S.devices[m.id].firmware=m.firmware
         if(m.joined!==undefined)   S.devices[m.id].joined=m.joined
+        if(m.tick!==undefined){ S.devices[m.id].tick=m.tick; S.devices[m.id].tickAt=performance.now() }
+        if(m.paused!==undefined) S.devices[m.id].paused=m.paused
         if(S.devices[m.id]?.type==='estim') estimSyncUI(m.id, S.devices[m.id])
+        if(m.channels) {
+          for(const grp of S.groups||[]) {
+            const firstCh=grp.channels?.find(c=>c.deviceId===m.id)
+            if(firstCh) {
+              const newInt=m.channels[firstCh.channel]?.intensity
+              if(newInt!==undefined) {
+                if(groupState[grp.id]) groupState[grp.id].intensity=newInt
+                const sl=document.getElementById('gsl-'+grp.id)
+                const cv=document.getElementById('gcv-'+grp.id)
+                if(sl) sl.value=newInt
+                if(cv) cv.textContent=newInt
+              }
+            }
+          }
+        }
       }
       renderCoyoteCards(); renderEomCards(); break
     case 'eom:readings':
@@ -2157,11 +2176,15 @@ async function hueSaveSelect(devId, overlay) {
 
 // ── Coyote tab — Channels ─────────────────────────────────────────────────────
 function renderCoyoteCards() {
+  stopChVizAll()
   const el=document.getElementById('coyote-cards')
   const coyotes=Object.values(S.devices).filter(d=>d.type==='coyote')
   if(!coyotes.length){ el.innerHTML='<div class="empty">No Coyote devices</div>'; return }
   el.innerHTML=''
-  coyotes.forEach(d=>el.appendChild(buildCoyoteCard(d)))
+  coyotes.forEach(d=>{
+    el.appendChild(buildCoyoteCard(d))
+    requestAnimationFrame(()=>{ startChViz(d.id,'A'); startChViz(d.id,'B') })
+  })
 }
 
 function buildCoyoteCard(dev) {
@@ -2214,9 +2237,22 @@ function buildCh(devId,ch,c) {
         <span class="ch-lbl">Channel ${ch}</span>
         <span class="ch-num" id="cv-${devId}${ch}">${c.intensity}</span>
       </div>
-      <input class="ch-slider" id="sl-${devId}${ch}" type="range" min="0" max="200" value="${c.intensity}"
-        oninput="document.getElementById('cv-${devId}${ch}').textContent=this.value"
-        onchange="chSet('${devId}','${ch}',this.value)"/>
+      <div style="display:flex;gap:12px;margin-bottom:6px;align-items:center">
+        <div style="flex:1;min-width:0;display:flex;align-items:center">
+          <input class="ch-slider" id="sl-${devId}${ch}" type="range" min="0" max="200" value="${c.intensity}"
+            style="width:100%;margin-bottom:0"
+            oninput="document.getElementById('cv-${devId}${ch}').textContent=this.value"
+            onchange="chSet('${devId}','${ch}',this.value)"/>
+        </div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px">
+          <canvas id="chviz-${devId}-${ch}" style="width:100%;height:120px;border-radius:4px;background:#080808;display:block"></canvas>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','back')" title="Back to start">⏮</button>
+            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','pause')" title="Pause">⏸</button>
+            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','play')" title="Play">▶</button>
+          </div>
+        </div>
+      </div>
       <div class="qwf-strip">${buildQwfStrip(devId,ch,c.waveform)}</div>
       <div class="wf-sel">
         <button class="wf-sel-btn" onclick="toggleDrop('${dropId}')">
@@ -2236,7 +2272,177 @@ function buildCh(devId,ch,c) {
 }
 
 function stopDev(id){ send({type:'device:stop',deviceId:id}) }
+
+function builtinFrameAmp(wfId, tick, speed=1) {
+  const p = i => (tick*4 + i) * speed
+  switch(wfId) {
+    case 'pulse': { const ph=p(0)%40; const e=ph<8?(1-Math.cos(ph/8*Math.PI))/2:ph<24?1:ph<32?(1+Math.cos((ph-24)/8*Math.PI))/2:0; return Math.round(e*100) }
+    case 'breathe': return Math.round(((Math.sin(p(0)*0.025)+1)/2)*100)
+    case 'tidal': return Math.round((Math.abs(Math.sin(p(0)*0.0125))*0.9+0.05)*100)
+    case 'wave': return Math.round(((Math.sin(p(0)*0.025)+1)/2)*100)
+    case 'thud': { const ph=p(0)%40; const e=ph<12?(1-Math.cos(ph/12*Math.PI))/2:ph<20?1-(ph-12)/8:0; return Math.max(0,Math.round(e*100)) }
+    case 'flutter': return p(0)%8<4?100:0
+    case 'ramp': { const ph=p(0)%80; const e=ph<72?ph/72:(80-ph)/8*Math.cos((ph-72)/8*Math.PI*0.5); return Math.max(0,Math.round(e*100)) }
+    case 'heartbeat': { const f=p(0)%32; return f===0?100:f===4?50:f===8?70:f===12?30:0 }
+    case 'steps': return [25,50,75,100][Math.floor((p(0)%80)/20)]
+    case 'buzz': return 100
+    default: return 0
+  }
+}
+
+const _chViz = {}
+
+function stopChVizAll() {
+  Object.values(_chViz).forEach(s=>{ if(s.rafId){ cancelAnimationFrame(s.rafId); s.rafId=null } })
+}
+
+const _grpViz = {}
+
+function stopGrpVizAll() {
+  Object.values(_grpViz).forEach(s=>{ if(s.rafId){ cancelAnimationFrame(s.rafId); s.rafId=null } })
+}
+
+function startGrpViz(grpId) {
+  if(!_grpViz[grpId]) _grpViz[grpId] = { phase:0 }
+  const state = _grpViz[grpId]
+  if(state.rafId){ cancelAnimationFrame(state.rafId); state.rafId=null }
+  const cv = document.getElementById('gviz-'+grpId)
+  if(!cv) return
+  const dpr = window.devicePixelRatio||1
+  const W = cv.clientWidth||cv.offsetWidth||400
+  const H = 120
+  cv.width=W*dpr; cv.height=H*dpr
+  const ctx = cv.getContext('2d')
+  ctx.scale(dpr,dpr)
+  const colorTop = '#e9d5ff'
+  const colorBot = 'rgba(167,139,250,.7)'
+  let lastTs = null, lastWfId = null
+
+  function draw(ts) {
+    if(!document.getElementById('gviz-'+grpId)){ state.rafId=null; return }
+    lastTs = ts
+    ctx.fillStyle='#080808'; ctx.fillRect(0,0,W,H)
+    // Read live state from the first connected channel in the group
+    const grp = S.groups?.find(g=>g.id===grpId)
+    const firstCh = grp?.channels?.find(({deviceId})=>S.devices?.[deviceId]?.status==='connected')
+    let intensity, wfId, speed
+    if(firstCh) {
+      const chData = S.devices[firstCh.deviceId]?.channels?.[firstCh.channel]||{}
+      intensity = Math.min(chData.intensity||0, 100)
+      wfId = chData.waveform||'pulse'
+      speed = chData.speed||1
+    } else {
+      const st = groupState?.[grpId]||{intensity:0,waveform:'pulse'}
+      intensity = Math.min(st.intensity||0, 100)
+      wfId = st.waveform||'pulse'
+      speed = 1
+    }
+    const wf = [...(S.waveforms?.builtin||[]),...(S.waveforms?.custom||[])].find(w=>w.id===wfId)
+    if(!wf){ state.rafId=requestAnimationFrame(draw); return }
+    const isBuiltin = !Array.isArray(wf.frames)
+    const fLen = isBuiltin ? 480 : wf.frames.length
+    if(wfId!==lastWfId){ lastWfId=wfId }
+    // Sync phase to the first channel's server tick; freeze when paused
+    const tickDev = firstCh ? S.devices[firstCh.deviceId] : null
+    if(tickDev?.paused) state.phase = tickDev.tick||0
+    else state.phase = tickDev?.tickAt!=null ? (tickDev.tick||0) + (ts - tickDev.tickAt)/100 : state.phase + 1/60
+    const PLAY_X = Math.floor(W*0.3)
+    const curFrame = Math.floor(state.phase)
+    const g = ctx.createLinearGradient(0,0,0,H)
+    g.addColorStop(0,colorTop); g.addColorStop(1,colorBot)
+    for(let px=0;px<W;px++){
+      const rawTick = curFrame + (px - PLAY_X)
+      let amp
+      if(isBuiltin){
+        amp=builtinFrameAmp(wfId,rawTick,speed)
+      } else {
+        const tick=((rawTick%fLen)+fLen)%fLen
+        const fi=Math.floor(tick*speed)%fLen
+        const f=wf.frames[fi]
+        amp=typeof f==='number'?f:(f?.segs?.[0]?.a??0)
+      }
+      const bh=Math.max(1,Math.round(amp*intensity/100/100*(H-2)))
+      ctx.fillStyle=px<PLAY_X?colorBot:g
+      ctx.fillRect(px,H-bh,1,bh)
+    }
+    ctx.strokeStyle='rgba(255,255,255,0.85)'; ctx.lineWidth=1.5
+    ctx.beginPath(); ctx.moveTo(PLAY_X,0); ctx.lineTo(PLAY_X,H); ctx.stroke()
+    state.rafId=requestAnimationFrame(draw)
+  }
+  state.rafId=requestAnimationFrame(draw)
+}
+
+function startChViz(devId, ch) {
+  const key = devId+':'+ch
+  if(!_chViz[key]) _chViz[key] = { phase:0 }
+  const state = _chViz[key]
+  if(state.rafId){ cancelAnimationFrame(state.rafId); state.rafId=null }
+  const cv = document.getElementById('chviz-'+devId+'-'+ch)
+  if(!cv) return
+  const dpr = window.devicePixelRatio||1
+  const W = cv.clientWidth||cv.offsetWidth||400
+  const H = 120
+  cv.width=W*dpr; cv.height=H*dpr
+  const ctx = cv.getContext('2d')
+  ctx.scale(dpr,dpr)
+  const colorTop = ch==='A' ? '#a5f3fc' : '#fde68a'
+  const colorBot = ch==='A' ? 'rgba(79,195,247,.7)' : 'rgba(251,191,36,.7)'
+  let lastTs = null, lastWfId = null, lastFLen = 0
+
+  function draw(ts) {
+    lastTs = ts
+    ctx.fillStyle='#080808'; ctx.fillRect(0,0,W,H)
+    const dev = S.devices?.[devId]
+    if(!dev || dev.status!=='connected'){
+      ctx.fillStyle='#1c1c1c'; ctx.fillRect(0,H-1,W,1)
+      state.rafId=null; return
+    }
+    const chData = dev.channels?.[ch]||{}
+    const intensity = Math.min(chData.intensity||0, 100)
+    const wfId = chData.waveform||'pulse'
+    const speed = chData.speed||1
+    const wf = [...(S.waveforms?.builtin||[]),...(S.waveforms?.custom||[])].find(w=>w.id===wfId)
+    if(!wf){ state.rafId=requestAnimationFrame(draw); return }
+    const isBuiltin = !Array.isArray(wf.frames)
+    const fLen = isBuiltin ? 480 : wf.frames.length
+    if(wfId!==lastWfId){ lastWfId=wfId }
+    lastFLen=fLen
+    // Sync phase to server tick; freeze when paused
+    if(dev.paused) state.phase = dev.tick||0
+    else state.phase = dev.tickAt!=null ? (dev.tick||0) + (ts - dev.tickAt)/100 : state.phase + 1/60
+    // Fixed playhead position — waveform scrolls past it
+    const PLAY_X = Math.floor(W*0.3)
+    const curFrame = Math.floor(state.phase)
+    const g = ctx.createLinearGradient(0,0,0,H)
+    g.addColorStop(0,colorTop); g.addColorStop(1,colorBot)
+    for(let px=0;px<W;px++){
+      // For builtins pass raw tick (no modulo — sin handles arbitrary values, avoids wrap seam)
+      // For custom use safe modulo to index into frames array
+      const rawTick = curFrame + (px - PLAY_X)
+      let amp
+      if(isBuiltin){
+        amp=builtinFrameAmp(wfId,rawTick,speed)
+      } else {
+        const tick=((rawTick%fLen)+fLen)%fLen
+        const fi=Math.floor(tick*speed)%fLen
+        const f=wf.frames[fi]
+        amp=typeof f==='number'?f:(f?.segs?.[0]?.a??0)
+      }
+      const bh=Math.max(1,Math.round(amp*intensity/100/100*(H-2)))
+      ctx.fillStyle=px<PLAY_X?colorBot:g
+      ctx.fillRect(px,H-bh,1,bh)
+    }
+    // Fixed playhead line
+    ctx.strokeStyle='rgba(255,255,255,0.85)'; ctx.lineWidth=1.5
+    ctx.beginPath(); ctx.moveTo(PLAY_X,0); ctx.lineTo(PLAY_X,H); ctx.stroke()
+    state.rafId=requestAnimationFrame(draw)
+  }
+  state.rafId=requestAnimationFrame(draw)
+}
 function chSet(devId,ch,v){ send({type:'device:setChannel',deviceId:devId,channel:ch,params:{intensity:parseInt(v)}}) }
+function chPlayback(devId,action){ send({type:'device:playback',deviceId:devId,action}) }
+function grpPlayback(grpId,action){ send({type:'group:playback',groupId:grpId,action}) }
+function toggleGroupEnabled(grpId,enabled){ send({type:'group:setEnabled',groupId:grpId,enabled}) }
 function getWfName(id){ return [...(S.waveforms.builtin||[]),...(S.waveforms.custom||[])].find(w=>w.id===id)?.name||id }
 
 function toggleDrop(id) {
@@ -2477,18 +2683,21 @@ function getUsedChannels(editGroupId=null) {
   const used = new Map()
   for(const grp of S.groups) {
     if(grp.id===editGroupId) continue
+    if(grp.enabled===false) continue
     for(const {deviceId,channel} of grp.channels||[]) used.set(deviceId+':'+channel, grp.name)
   }
   return used
 }
 
 function renderGroups() {
+  stopGrpVizAll()
   const el=document.getElementById('group-cards'); if(!el) return
   if(!S.groups.length){ el.innerHTML='<div class="empty">No groups — create one to control individual Coyote channels together</div>'; return }
   el.innerHTML=''
   S.groups.forEach(g=>{
     if(!groupState[g.id]) groupState[g.id]={intensity:0,waveform:'pulse'}
     el.appendChild(buildGroupCard(g))
+    requestAnimationFrame(()=>startGrpViz(g.id))
   })
 }
 
@@ -2506,6 +2715,7 @@ function buildGroupCard(grp) {
     const nm=(d?.name||'?').substring(0,12)
     return `<span style="display:inline-block;font-size:10px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:4px;padding:2px 7px;margin:2px 3px 2px 0;color:#aaa">${nm}·${channel}</span>`
   }).join('')
+  const isEnabled=grp.enabled!==false
   const st=groupState[grp.id]
   const wfName=getWfName(st.waveform)
   const dropId='gdrop-'+grp.id
@@ -2529,19 +2739,36 @@ function buildGroupCard(grp) {
       </div>
       <div class="coy-right">
         <span class="status-pill ${sc}">${allConn?'all connected':anyConn?'partial':'offline'}</span>
+        <button class="btn btn-ghost btn-xs" onclick="toggleGroupEnabled('${grp.id}',${!isEnabled})"
+          style="${isEnabled?'color:#4fc3f7':'color:#555'}" title="${isEnabled?'Disable group (release channels)':'Enable group (lock channels)'}">
+          ${isEnabled?'● Group On':'○ Group Off'}
+        </button>
         <button class="btn btn-ghost btn-xs" onclick="openGroupModal('${grp.id}')">Edit</button>
         <button class="btn btn-ghost btn-xs" onclick="stopGroup('${grp.id}')">Stop</button>
         <button class="btn btn-danger btn-xs" onclick="deleteGroup('${grp.id}')">×</button>
       </div>
     </div>
-    <div class="ch-block">
+    <div class="ch-block" style="${isEnabled?'':'opacity:.4;pointer-events:none'}">
       <div class="ch-top">
         <span class="ch-lbl">Intensity</span>
         <span class="ch-num" id="gcv-${grp.id}">${st.intensity}</span>
       </div>
-      <input class="ch-slider" id="gsl-${grp.id}" type="range" min="0" max="200" value="${st.intensity}"
-        oninput="document.getElementById('gcv-${grp.id}').textContent=this.value"
-        onchange="groupSetIntensity('${grp.id}',this.value)"/>
+      <div style="display:flex;gap:12px;margin-bottom:6px;align-items:center">
+        <div style="flex:1;min-width:0;display:flex;align-items:center">
+          <input class="ch-slider" id="gsl-${grp.id}" type="range" min="0" max="200" value="${st.intensity}"
+            style="width:100%;margin-bottom:0"
+            oninput="document.getElementById('gcv-${grp.id}').textContent=this.value"
+            onchange="groupSetIntensity('${grp.id}',this.value)"/>
+        </div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px">
+          <canvas id="gviz-${grp.id}" style="width:100%;height:120px;border-radius:4px;background:#080808;display:block"></canvas>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-xs" onclick="grpPlayback('${grp.id}','back')" title="Back to start">⏮</button>
+            <button class="btn btn-ghost btn-xs" onclick="grpPlayback('${grp.id}','pause')" title="Pause">⏸</button>
+            <button class="btn btn-ghost btn-xs" onclick="grpPlayback('${grp.id}','play')" title="Play">▶</button>
+          </div>
+        </div>
+      </div>
       <div class="qwf-strip">${qwfStrip}</div>
       <div class="wf-sel">
         <button class="wf-sel-btn" onclick="toggleDrop('${dropId}')">

@@ -486,7 +486,7 @@ class CoyoteDevice {
     this.gattServer=null; this.writeChar=null; this.notifyChar=null
     this.channels={ A:{intensity:0,waveform:'pulse',speed:1}, B:{intensity:0,waveform:'pulse',speed:1} }
     this._smoothA=0; this._smoothB=0  // smoothed intensity (0-200), lerped toward target each packet
-    this._tick=0; this._interval=null; this._device=null; this._connectLock=false
+    this._tick=0; this._paused=false; this._interval=null; this._device=null; this._connectLock=false
     this._connectedAddr=null  // actual BLE address we connected to
     this._retryDelay=5000  // exponential backoff on repeated failures
   }
@@ -606,7 +606,14 @@ class CoyoteDevice {
     if (intensity!==undefined) this.channels[ch].intensity=Math.max(0,Math.min(200,intensity))
     if (waveform!==undefined)  this.channels[ch].waveform=waveform
     if (speed!==undefined)     this.channels[ch].speed=Math.max(0.25,Math.min(4,speed))
-    broadcast({ type:'device:state', id:this.id, channels:this.channels })
+    broadcast({ type:'device:state', id:this.id, channels:this.channels, tick:this._tick, paused:this._paused })
+  }
+
+  setPlayback(action) {
+    if(action==='pause') this._paused=true
+    else if(action==='play') this._paused=false
+    else if(action==='back') { this._tick=0; this._paused=false }
+    broadcast({type:'device:state', id:this.id, channels:this.channels, tick:this._tick, paused:this._paused})
   }
 
   _buildPacket() {
@@ -644,7 +651,8 @@ class CoyoteDevice {
       if (this.writeChar && this.status === 'connected') {
         try {
           await this.writeChar.writeValue(this._buildPacket(), { type:'command' })
-          this._tick++
+          broadcast({ type:'device:tick', id:this.id, tick:this._tick, paused:this._paused })
+          if(!this._paused) this._tick++
         } catch(e) {
           console.error(`[${this.id}] send:`, e.message)
           this._sendActive = false; this.status = 'disconnected'
@@ -666,7 +674,7 @@ class CoyoteDevice {
   }
 
   toJSON() {
-    return { id:this.id, type:'coyote', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, channels:this.channels }
+    return { id:this.id, type:'coyote', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, channels:this.channels, tick:this._tick, paused:this._paused }
   }
 }
 
@@ -1892,7 +1900,7 @@ wss.on('connection', (ws, request) => {
       // group:set — apply intensity/waveform to every individual channel in the group
       if (msg.type==='group:set') {
         const grp=(config.groups||[]).find(g=>g.id===msg.groupId)
-        if(grp) for(const {deviceId,channel} of grp.channels||[]){
+        if(grp && grp.enabled!==false) for(const {deviceId,channel} of grp.channels||[]){
           const dev=devices[deviceId]; if(dev?.setChannel) dev.setChannel(channel,msg.params)
         }
       }
@@ -1901,6 +1909,22 @@ wss.on('connection', (ws, request) => {
         if(grp) for(const {deviceId,channel} of grp.channels||[]){
           const dev=devices[deviceId]; if(dev?.setChannel) dev.setChannel(channel,{intensity:0})
         }
+      }
+      if (msg.type==='device:playback') {
+        devices[msg.deviceId]?.setPlayback?.(msg.action)
+      }
+      if (msg.type==='group:playback') {
+        const grp=(config.groups||[]).find(g=>g.id===msg.groupId)
+        if(grp && grp.enabled!==false) {
+          const seen=new Set()
+          for(const {deviceId} of grp.channels||[]) {
+            if(!seen.has(deviceId)){ seen.add(deviceId); devices[deviceId]?.setPlayback?.(msg.action) }
+          }
+        }
+      }
+      if (msg.type==='group:setEnabled') {
+        const grp=(config.groups||[]).find(g=>g.id===msg.groupId)
+        if(grp) { grp.enabled=msg.enabled; saveConfig(config); broadcast({type:'group:updated',group:grp}) }
       }
       if (msg.type==='deck:connect') {
         if (!streamDeck) initStreamDeck()

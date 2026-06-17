@@ -2699,6 +2699,13 @@ function initBandSelector() {
     const r = _bandCanvas.getBoundingClientRect()
     if (r.width > 0) { _bandCanvas.width = Math.round(r.width); renderBandCanvas() }
   })
+  new ResizeObserver(() => {
+    if (!_bandCanvas) return
+    const r = _bandCanvas.getBoundingClientRect()
+    if (r.width > 0 && _bandCanvas.width !== Math.round(r.width)) {
+      _bandCanvas.width = Math.round(r.width); renderBandCanvas()
+    }
+  }).observe(_bandCanvas)
 }
 
 function bandPreset(btn, low, high) {

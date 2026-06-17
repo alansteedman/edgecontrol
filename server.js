@@ -10,6 +10,7 @@ import { createBluetooth } from 'node-ble'
 import multer from 'multer'
 import { exec, execSync, spawn } from 'child_process'
 import net from 'net'
+import dgram from 'dgram'
 import { EventEmitter } from 'events'
 EventEmitter.defaultMaxListeners = 100
 import { SerialPort } from 'serialport'
@@ -1958,6 +1959,80 @@ app.post('/api/devices/:id/connect', (req,res) => {
 app.post('/api/devices/:id/disconnect', async (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
   try{await dev.disconnect();res.json({ok:true})}catch(e){res.status(500).json({error:e.message})}
+})
+
+// ── ONVIF camera scan ─────────────────────────────────────────────────────────
+async function getOnvifDeviceInfo(xaddr) {
+  const soap = `<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
+  <s:Body>
+    <tds:GetDeviceInformation xmlns:tds="http://www.onvif.org/ver10/device/wsdl"/>
+  </s:Body>
+</s:Envelope>`
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 2000)
+    const r = await fetch(xaddr, { method:'POST', headers:{'Content-Type':'application/soap+xml'}, body:soap, signal:ctrl.signal })
+    clearTimeout(t)
+    const txt = await r.text()
+    const mfr = txt.match(/<[^:>]*:?Manufacturer>([^<]+)<\/[^:>]*:?Manufacturer>/)?.[1]?.trim()
+    const mdl = txt.match(/<[^:>]*:?Model>([^<]+)<\/[^:>]*:?Model>/)?.[1]?.trim()
+    return (mfr || mdl) ? { manufacturer: mfr||'', model: mdl||'' } : null
+  } catch { return null }
+}
+
+async function doOnvifScan(broadcast) {
+  const PROBE = `<?xml version="1.0" encoding="UTF-8"?>
+<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+            xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
+            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+  <e:Header>
+    <w:MessageID>uuid:onvif-scan-1</w:MessageID>
+    <w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>
+    <w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action>
+  </e:Header>
+  <e:Body>
+    <d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe>
+  </e:Body>
+</e:Envelope>`
+
+  const seen = new Set()
+  const sock = dgram.createSocket({ type:'udp4', reuseAddr:true })
+  broadcast({ type:'camera:scan:start' })
+
+  await new Promise((resolve) => {
+    sock.on('message', async (msg) => {
+      const txt = msg.toString()
+      const xaddrMatch = txt.match(/<[^:>]*:?XAddrs>([^<]+)<\/[^:>]*:?XAddrs>/)
+      if (!xaddrMatch) return
+      const xaddr = xaddrMatch[1].trim().split(/\s+/)[0]
+      if (!xaddr || seen.has(xaddr)) return
+      seen.add(xaddr)
+      const ipMatch = xaddr.match(/https?:\/\/([\d.]+)/)
+      const ip = ipMatch?.[1]
+      if (!ip) return
+      const info = await getOnvifDeviceInfo(xaddr)
+      const name = info ? `${info.manufacturer} ${info.model}`.trim() : `Camera ${ip}`
+      broadcast({ type:'camera:scan:found', ip, name, xaddr })
+    })
+    sock.bind(0, () => {
+      sock.setBroadcast(true)
+      sock.setMulticastTTL(4)
+      const buf = Buffer.from(PROBE)
+      sock.send(buf, 0, buf.length, 3702, '239.255.255.250')
+      setTimeout(resolve, 4000)
+    })
+  })
+  sock.close()
+  broadcast({ type:'camera:scan:done', count: seen.size })
+}
+
+app.post('/api/cameras/scan', requireAuth, (req, res) => {
+  res.json({ ok: true })
+  doOnvifScan(msg => {
+    for (const ws of wss.clients) if (ws.readyState === 1) ws.send(JSON.stringify(msg))
+  })
 })
 
 // ── Hue API ───────────────────────────────────────────────────────────────────

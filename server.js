@@ -3233,7 +3233,31 @@ app.get('/api/audio/:id/frames', (req,res) => {
 })
 
 // ── Community share proxy ─────────────────────────────────────────────────────
-const COMMUNITY_URL = 'https://community.kinkcontrol.org'
+import https from 'https'
+const COMMUNITY_HOST = 'community.kinkcontrol.org'
+const COMMUNITY_URL  = `https://${COMMUNITY_HOST}`
+
+function communityPost(path, token, body) {
+  const payload = JSON.stringify(body)
+  return new Promise((resolve, reject) => {
+    const req2 = https.request({ hostname:COMMUNITY_HOST, port:443, path, method:'POST',
+      headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload),Authorization:`Bearer ${token}`}
+    }, res2 => { let d=''; res2.on('data',c=>d+=c); res2.on('end',()=>{ try{resolve(JSON.parse(d))}catch{reject(new Error('Bad JSON: '+d.slice(0,120)))} }) })
+    req2.on('error', reject); req2.end(payload)
+  })
+}
+
+function communityStreamMp3(path, token, filePath, fileSize) {
+  return new Promise((resolve, reject) => {
+    const req2 = https.request({ hostname:COMMUNITY_HOST, port:443, path, method:'POST',
+      headers:{'Content-Type':'audio/mpeg','Content-Length':fileSize,Authorization:`Bearer ${token}`}
+    }, res2 => { let d=''; res2.on('data',c=>d+=c); res2.on('end',()=>{ try{resolve(JSON.parse(d))}catch{reject(new Error('Bad JSON: '+d.slice(0,120)))} }) })
+    req2.on('error', reject)
+    const fileStream = createReadStream(filePath)
+    fileStream.on('error', reject)
+    fileStream.pipe(req2)
+  })
+}
 
 app.post('/api/community/share', express.json(), async (req, res) => {
   const { wfId, name, description, token } = req.body
@@ -3242,26 +3266,12 @@ app.post('/api/community/share', express.json(), async (req, res) => {
   if (!wf?.sourceFile) return res.status(404).json({error:'Waveform not found'})
   const frames = (wf.frames||[]).map(f => typeof f==='object' ? (f.segs?.[0]?.a??0) : f)
   try {
-    // Step 1 — POST metadata + frames (small JSON) to community
-    const initR = await fetch(`${COMMUNITY_URL}/api/waveforms/init`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json', Authorization:`Bearer ${token}`},
-      body: JSON.stringify({name, description:description||'', frames,
-        duration_secs:Math.round(frames.length/10), frame_count:frames.length})
-    })
-    const initData = await initR.json()
+    const initData = await communityPost('/api/waveforms/init', token,
+      {name, description:description||'', frames, duration_secs:Math.round(frames.length/10), frame_count:frames.length})
     if (initData.error) return res.status(400).json(initData)
-    // Step 2 — Stream MP3 from disk directly to community (no browser memory involved)
     const mp3Path = join(AUDIO_DIR, wf.sourceFile)
     const fileSize = statSync(mp3Path).size
-    const webStream = Readable.toWeb(createReadStream(mp3Path))
-    const mp3R = await fetch(`${COMMUNITY_URL}/api/waveforms/${initData.id}/mp3`, {
-      method: 'POST',
-      headers: {'Content-Type':'audio/mpeg', 'Content-Length':String(fileSize), Authorization:`Bearer ${token}`},
-      body: webStream,
-      duplex: 'half'
-    })
-    const mp3Data = await mp3R.json()
+    const mp3Data = await communityStreamMp3(`/api/waveforms/${initData.id}/mp3`, token, mp3Path, fileSize)
     if (mp3Data.error) return res.status(400).json(mp3Data)
     res.json({id:initData.id, name})
   } catch(e) {

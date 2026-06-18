@@ -193,7 +193,7 @@ const audioUpload = multer({
     destination: AUDIO_DIR,
     filename: (req, file, cb) => cb(null, `af-${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g,'_')}`)
   }),
-  limits: { fileSize: 150 * 1024 * 1024 }
+  limits: { fileSize: 500 * 1024 * 1024 }
 })
 
 function loadAudioList() {
@@ -3137,7 +3137,11 @@ app.get('/api/audio', (req,res) => {
   })))
 })
 
-app.post('/api/audio', audioUpload.single('file'), async (req,res) => {
+app.post('/api/audio', (req, res, next) => audioUpload.single('file')(req, res, (err) => {
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({error:'File too large — maximum upload size is 500 MB'})
+  if (err) return res.status(400).json({error: err.message})
+  next()
+}), async (req,res) => {
   if(!req.file) return res.status(400).json({error:'No file uploaded'})
   const filePath=join(AUDIO_DIR,req.file.filename)
   try {

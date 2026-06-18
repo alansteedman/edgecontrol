@@ -12,13 +12,14 @@ const WAVEFORMS_PATH = join(__dir, 'waveforms.json')
 const AUDIO_DIR   = join(__dir, 'audio')
 
 // ─── Device type display config for home page bottom row ─────────────────────
-const DEVICE_TYPE_ORDER = ['eom', 'nimble', 'coyote', 'estim', 'hue']
+const DEVICE_TYPE_ORDER = ['eom', 'nimble', 'coyote', 'estim', 'hue', 'shelly']
 const DEVICE_DECK_CONFIG = {
   eom:    { label: 'EoM',    color: 'teal',   page: 'eom',    deviceKey: 'eom'    },
   nimble: { label: 'Nimble', color: 'purple', page: 'nimble', deviceKey: 'nimble' },
   coyote: { label: 'Coyote', color: 'orange', page: 'coyote', deviceKey: 'coyote' },
   estim:  { label: 'Estim',  color: 'blue',   page: 'estim',  deviceKey: 'estim'  },
   hue:    { label: 'Hue',    color: 'teal',   page: 'hue',    deviceKey: 'hue'    },
+  shelly: { label: 'I/O',    color: 'amber',  page: 'shelly', deviceKey: 'shelly' },
 }
 
 // ─── Built-in waveform definitions (matches server BUILTIN_WAVEFORMS) ────────
@@ -105,6 +106,12 @@ async function loadDeviceIcons() {
   } catch(e) {
     console.warn('[deck] icon missing: hue-logo.svg')
   }
+  try {
+    deviceIcons.shelly = await loadImage(join(__dir, 'public', 'icons', 'shelly.svg'))
+    console.log('[deck] icon loaded: shelly.svg')
+  } catch(e) {
+    console.warn('[deck] icon missing: shelly.svg')
+  }
 }
 
 // ─── Colour palette ───────────────────────────────────────────────────────
@@ -115,6 +122,7 @@ const THEME = {
   purple: { bg: '#1a0a3d', accent: '#8e44ad' },
   orange: { bg: '#3d1a00', accent: '#d35400' },
   teal:   { bg: '#0a2e2e', accent: '#16a085' },
+  amber:  { bg: '#2a1e00', accent: '#f0c040' },
   dim:    { bg: '#0d0d0d', accent: '#333' },
 }
 
@@ -1541,6 +1549,7 @@ export class StreamDeckController {
     this._devicePageOffset = 0
     this._hueSceneOffset = 0
     this._hueKnobTimers = {}
+    this._shellyPageOffset = 0
     this._tick = 0
     this._timer = null
     this._ready = false
@@ -1593,6 +1602,7 @@ export class StreamDeckController {
       case 'estim':   this._estimKey(idx);   break
       case 'macro':   this._macroKey(idx);   break
       case 'hue':     this._hueKey(idx);     break
+      case 'shelly':  this._shellyKey(idx);  break
       default: if (idx === 0) this.setPage('home'); break
     }
   }
@@ -1632,6 +1642,49 @@ export class StreamDeckController {
       return
     }
     if (idx === 3) { this._stopAll(); return }
+  }
+
+  _getShellyItems() {
+    const items = []
+    for (const dev of Object.values(this.devices).filter(d => d.type === 'shelly')) {
+      for (const [key, state] of Object.entries(dev.components || {})) {
+        const [type, idxStr] = key.split(':')
+        if (type !== 'switch' && type !== 'light') continue
+        const i = parseInt(idxStr)
+        const on = type === 'switch' ? state.output === true : (state.output === true || state.ison === true)
+        const rawLabel = dev.name || 'Shelly'
+        const label = rawLabel.length > 10 ? rawLabel.slice(0, 9) + '…' : rawLabel
+        items.push({ devId: dev.id, key, type, idx: i, on, label })
+      }
+    }
+    return items
+  }
+
+  _shellyKey(idx) {
+    if (idx === 0) { this.setPage('home'); return }
+    if (idx === 2) {
+      const items = this._getShellyItems()
+      if (items.length > 4) {
+        const next = this._shellyPageOffset + 4
+        this._shellyPageOffset = next >= items.length ? 0 : next
+        this._renderKeys()
+      }
+      return
+    }
+    if (idx === 3) { this._stopAll(); return }
+    if (idx >= 4 && idx <= 7) {
+      const items = this._getShellyItems()
+      const item = items[this._shellyPageOffset + (idx - 4)]
+      if (!item) return
+      this._macroCallbacks.shellySet?.({ devId: item.devId, component: item.type, idx: item.idx, params: { on: !item.on } })
+      // Optimistically flip state so next render tick reflects it immediately
+      const dev = this.devices[item.devId]
+      if (dev?.components?.[item.key]) {
+        if (item.type === 'switch') dev.components[item.key].output = !item.on
+        else { dev.components[item.key].output = !item.on; dev.components[item.key].ison = !item.on }
+      }
+      this._renderKeys()
+    }
   }
 
   _macroKey(idx) {
@@ -2099,6 +2152,9 @@ export class StreamDeckController {
   // ── Page navigation ────────────────────────────────────────────
   setPage(page) {
     this.page = page
+    if (page === 'shelly') {
+      this._shellyPageOffset = 0
+    }
     if (page === 'hue') {
       this._hueSceneOffset = 0
     } else if (page === 'coyote') {
@@ -2212,6 +2268,29 @@ export class StreamDeckController {
         const modeIdx = this._estimModeOffset + i
         const buf = modeIdx < ESTIM_MODES.length
           ? renderEstimModeKey(ESTIM_MODES[modeIdx], modeIdx === curMode)
+          : renderKey({ icon:'', label:'', color:'dim' })
+        await this.deck.fillKeyBuffer(4 + i, buf, { format:'rgba' })
+      }
+      return
+    }
+
+    if (this.page === 'shelly') {
+      const items = this._getShellyItems()
+      const hasScroll = items.length > 4
+      const curPage = Math.floor(this._shellyPageOffset / 4) + 1
+      const totalPages = Math.ceil(items.length / 4) || 1
+      const topKeys = [
+        { houseIcon:true, label:'Home',     color:'blue' },
+        { icon:'',        label:'',         color:'dim'  },
+        hasScroll ? { icon:'▶', label:`${curPage}/${totalPages}`, color:'amber' } : { icon:'', label:'', color:'dim' },
+        { stopSign:true,  label:'Stop All', color:'red'  },
+      ]
+      for (let i = 0; i < 4; i++)
+        await this.deck.fillKeyBuffer(i, renderKey(topKeys[i]), { format:'rgba' })
+      for (let i = 0; i < 4; i++) {
+        const item = items[this._shellyPageOffset + i]
+        const buf = item
+          ? renderKey({ label: item.label, color: item.on ? 'green' : 'dim', active: item.on, icon: item.on ? '●' : '○', bg: item.on ? '#0a2010' : '#000' })
           : renderKey({ icon:'', label:'', color:'dim' })
         await this.deck.fillKeyBuffer(4 + i, buf, { format:'rgba' })
       }

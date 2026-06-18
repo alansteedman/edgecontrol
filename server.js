@@ -3297,6 +3297,10 @@ async function initStreamDeck() {
       },
       stop:   (id) => macroRunners[id]?.stop(),
       resume: (id) => macroRunners[id]?.resume(),
+      shellySet: ({devId, component, idx, params}) => {
+        const dev = devices[devId]
+        if (dev?.type === 'shelly') dev.rpc(component === 'switch' ? 'Switch.Set' : 'Light.Set', {id: idx, ...params}).catch(e => console.error(`[${devId}] deck:shelly:set`, e.message))
+      },
     }
     streamDeck = new StreamDeckController(devices, broadcast, config.groups || [], macroCallbacks)
     const ok = await streamDeck.init()

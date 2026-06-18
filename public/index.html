@@ -3542,24 +3542,30 @@ function renderAudioList(){
 function drawAudioWaveform(canvasId, w, progress){
   const cv=document.getElementById(canvasId); if(!cv||!Array.isArray(w.frames)||!w.frames.length) return
   const frames=w.frames
-  const PX=Math.max(2, Math.min(4, Math.floor(800/frames.length))) // px per frame
-  const W=frames.length*PX, H=48
+  const BAR_PX=2, MAX_BARS=600  // cap at 1200px regardless of file length
+  const totalBars=Math.min(frames.length, MAX_BARS)
+  const step=frames.length/totalBars  // frames per bar (>=1, may be fractional)
+  const W=totalBars*BAR_PX, H=48
   if(cv.width!==W){ cv.width=W; cv.height=H; cv.style.width=W+'px' }
   const ctx=cv.getContext('2d')
   ctx.fillStyle='#080808'; ctx.fillRect(0,0,W,H)
-  // Time markers every 30s (300 frames)
+  // Time markers every 30s (300 frames), mapped to bar positions
   ctx.strokeStyle='#181818'; ctx.lineWidth=1
-  for(let i=300;i<frames.length;i+=300){
-    ctx.beginPath(); ctx.moveTo(i*PX,0); ctx.lineTo(i*PX,H); ctx.stroke()
+  for(let f=300;f<frames.length;f+=300){
+    const x=Math.round((f/frames.length)*W)
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke()
   }
-  frames.forEach((f,i)=>{
-    const amp=f.segs?f.segs[0].a:f
-    const bh=Math.max(1,Math.round((amp/100)*(H-2)))
-    const g=ctx.createLinearGradient(0,H-bh,0,H)
-    g.addColorStop(0,'#4fc3f7'); g.addColorStop(1,'rgba(79,195,247,.2)')
-    ctx.fillStyle=g
-    ctx.fillRect(i*PX, H-bh, Math.max(1,PX-1), bh)
-  })
+  // Single gradient shared across all bars
+  const g=ctx.createLinearGradient(0,0,0,H)
+  g.addColorStop(0,'#4fc3f7'); g.addColorStop(1,'rgba(79,195,247,.2)')
+  ctx.fillStyle=g
+  for(let b=0;b<totalBars;b++){
+    const s=Math.floor(b*step), e=Math.min(frames.length,Math.floor((b+1)*step)||s+1)
+    let peak=0
+    for(let i=s;i<e;i++){ const v=frames[i]?.segs?frames[i].segs[0].a:frames[i]; if(v>peak) peak=v }
+    const bh=Math.max(1,Math.round((peak/100)*(H-2)))
+    ctx.fillRect(b*BAR_PX, H-bh, BAR_PX-1, bh)
+  }
   // Playhead
   if(progress!=null && progress>=0 && progress<=1){
     const x=Math.round(progress*W)

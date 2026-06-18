@@ -921,7 +921,7 @@ function handle(m) {
     case 'macro:added': case 'macro:updated': case 'macro:removed':
       window._handleMacroWS?.(m); break
     case 'device:tick':
-      if(S.devices[m.id]){ S.devices[m.id].tick=m.tick; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused } break
+      if(S.devices[m.id]){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused } break
     case 'device:status':
       if(S.devices[m.id]) S.devices[m.id].status=m.status
       renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); renderPawPrintsCards(); if(!_hueDragging) renderHueCards(); break
@@ -944,7 +944,7 @@ function handle(m) {
         if(m.battery!==undefined)  S.devices[m.id].battery=m.battery
         if(m.firmware!==undefined) S.devices[m.id].firmware=m.firmware
         if(m.joined!==undefined)   S.devices[m.id].joined=m.joined
-        if(m.tick!==undefined){ S.devices[m.id].tick=m.tick; S.devices[m.id].tickAt=performance.now() }
+        if(m.ticks!==undefined){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now() }
         if(m.paused!==undefined) S.devices[m.id].paused=m.paused
         if(S.devices[m.id]?.type==='estim') estimSyncUI(m.id, S.devices[m.id])
         if(m.channels) {
@@ -963,6 +963,7 @@ function handle(m) {
           }
         }
       }
+      syncAudioToDeviceState(m)
       renderCoyoteCards(); renderEomCards(); break
     case 'eom:readings':
       if(S.devices[m.id]){ S.devices[m.id].readings=m.readings; eomUpdateReadings(m.id,m.readings) } break
@@ -2185,6 +2186,7 @@ function renderCoyoteCards() {
     el.appendChild(buildCoyoteCard(d))
     requestAnimationFrame(()=>{ startChViz(d.id,'A'); startChViz(d.id,'B') })
   })
+  requestAnimationFrame(restoreAudioBtns)
 }
 
 function buildCoyoteCard(dev) {
@@ -2247,9 +2249,11 @@ function buildCh(devId,ch,c) {
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px">
           <canvas id="chviz-${devId}-${ch}" style="width:100%;height:120px;border-radius:4px;background:#080808;display:block"></canvas>
           <div style="display:flex;gap:6px">
-            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','back')" title="Back to start">⏮</button>
-            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','pause')" title="Pause">⏸</button>
-            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','play')" title="Play">▶</button>
+            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','${ch}','back')" title="Back to start">⏮</button>
+            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','${ch}','pause')" title="Pause">⏸</button>
+            <button class="btn btn-ghost btn-xs" onclick="chPlayback('${devId}','${ch}','play')" title="Play">▶</button>
+            <button class="btn btn-ghost btn-xs" id="aud-btn-${devId}-${ch}" onclick="toggleChAudio('${devId}','${ch}')" title="Play MP3 in sync with waveform">🔇</button>
+            <button class="btn btn-ghost btn-xs" id="sync-ch-${devId}-${ch}" onclick="toggleSync('ch:${devId}:${ch}')" title="Sync waveform with other synced cards">Sync</button>
           </div>
         </div>
       </div>
@@ -2342,10 +2346,11 @@ function startGrpViz(grpId) {
     const isBuiltin = !Array.isArray(wf.frames)
     const fLen = isBuiltin ? 480 : wf.frames.length
     if(wfId!==lastWfId){ lastWfId=wfId }
-    // Sync phase to the first channel's server tick; freeze when paused
+    // Sync phase to per-channel server tick; freeze when paused
     const tickDev = firstCh ? S.devices[firstCh.deviceId] : null
-    if(tickDev?.paused) state.phase = tickDev.tick||0
-    else state.phase = tickDev?.tickAt!=null ? (tickDev.tick||0) + (ts - tickDev.tickAt)/100 : state.phase + 1/60
+    const grpChTick = tickDev?.ticks?.[firstCh?.channel]||0
+    if(tickDev?.paused?.[firstCh?.channel]) state.phase = grpChTick
+    else state.phase = tickDev?.tickAt!=null ? grpChTick + (ts - tickDev.tickAt)/100 : state.phase + 1/60
     const PLAY_X = Math.floor(W*0.3)
     const curFrame = Math.floor(state.phase)
     const g = ctx.createLinearGradient(0,0,0,H)
@@ -2407,9 +2412,10 @@ function startChViz(devId, ch) {
     const fLen = isBuiltin ? 480 : wf.frames.length
     if(wfId!==lastWfId){ lastWfId=wfId }
     lastFLen=fLen
-    // Sync phase to server tick; freeze when paused
-    if(dev.paused) state.phase = dev.tick||0
-    else state.phase = dev.tickAt!=null ? (dev.tick||0) + (ts - dev.tickAt)/100 : state.phase + 1/60
+    // Sync phase to per-channel server tick; freeze when paused
+    const chTick = dev.ticks?.[ch]||0
+    if(dev.paused?.[ch]) state.phase = chTick
+    else state.phase = dev.tickAt!=null ? chTick + (ts - dev.tickAt)/100 : state.phase + 1/60
     // Fixed playhead position — waveform scrolls past it
     const PLAY_X = Math.floor(W*0.3)
     const curFrame = Math.floor(state.phase)
@@ -2440,9 +2446,215 @@ function startChViz(devId, ch) {
   state.rafId=requestAnimationFrame(draw)
 }
 function chSet(devId,ch,v){ send({type:'device:setChannel',deviceId:devId,channel:ch,params:{intensity:parseInt(v)}}) }
-function chPlayback(devId,action){ send({type:'device:playback',deviceId:devId,action}) }
-function grpPlayback(grpId,action){ send({type:'group:playback',groupId:grpId,action}) }
+function chPlayback(devId,ch,action){
+  send({type:'device:playback',deviceId:devId,channel:ch,action})
+  propagateSyncPlayback('ch:'+devId+':'+ch, action)
+}
+function grpPlayback(grpId,action){
+  send({type:'group:playback',groupId:grpId,action})
+  propagateSyncPlayback('grp:'+grpId, action)
+}
 function toggleGroupEnabled(grpId,enabled){ send({type:'group:setEnabled',groupId:grpId,enabled}) }
+
+// ── Audio sync ────────────────────────────────────────────────────────────────
+const _chAudio = {}   // 'devId:ch' → {audio, syncInterval}
+const _grpAudio = {}  // grpId → {audio, syncInterval}
+
+function _calcAudioTime(tick, tickAt, speed, fLen, duration) {
+  const phase = tickAt != null ? tick + (performance.now() - tickAt)/100 : tick
+  const fi = fLen > 0 ? ((Math.floor(phase * speed) % fLen) + fLen) % fLen : 0
+  return duration > 0 ? (fi / 10) % duration : fi / 10
+}
+
+function stopChAudio(devId, ch) {
+  const key = devId+':'+ch
+  const s = _chAudio[key]; if(!s) return
+  clearInterval(s.syncInterval)
+  try { s.audio.pause(); s.audio.src='' } catch {}
+  delete _chAudio[key]
+}
+function stopGrpAudio(grpId) {
+  const s = _grpAudio[grpId]; if(!s) return
+  clearInterval(s.syncInterval)
+  try { s.audio.pause(); s.audio.src='' } catch {}
+  delete _grpAudio[grpId]
+}
+
+function restoreAudioBtns() {
+  for(const key of Object.keys(_chAudio)){
+    const [devId,ch]=key.split(':')
+    const btn=document.getElementById('aud-btn-'+devId+'-'+ch)
+    if(btn){ btn.textContent='🔊'; btn.style.color='#4fc3f7' }
+  }
+  for(const grpId of Object.keys(_grpAudio)){
+    const btn=document.getElementById('aud-btn-grp-'+grpId)
+    if(btn){ btn.textContent='🔊'; btn.style.color='#4fc3f7' }
+  }
+  restoreSyncBtns()
+}
+
+// ── Waveform sync ─────────────────────────────────────────────────────────────
+const _syncEnabled = new Set()  // 'ch:devId:ch' | 'grp:grpId'
+
+function _syncBtn(cardId) {
+  if(cardId.startsWith('grp:')) return document.getElementById('sync-grp-'+cardId.slice(4))
+  const [,devId,ch]=cardId.split(':')
+  return document.getElementById('sync-ch-'+devId+'-'+ch)
+}
+
+function _syncWfId(cardId) {
+  if(cardId.startsWith('grp:')) {
+    const grpId=cardId.slice(4)
+    const grp=S.groups?.find(g=>g.id===grpId)
+    const fc=grp?.channels?.find(({deviceId})=>S.devices?.[deviceId]?.status==='connected')
+    return fc ? S.devices[fc.deviceId]?.channels?.[fc.channel]?.waveform : groupState[grpId]?.waveform
+  }
+  const [,devId,ch]=cardId.split(':')
+  return S.devices[devId]?.channels?.[ch]?.waveform
+}
+
+function _applySyncWf(cardId, wfId) {
+  if(!wfId) return
+  if(cardId.startsWith('grp:')) { pickGroupWf(cardId.slice(4), wfId) }
+  else { const [,devId,ch]=cardId.split(':'); pickWf(devId,ch,wfId) }
+}
+
+function propagateSyncWf(sourceId, wfId) {
+  if(!_syncEnabled.has(sourceId)) return
+  for(const targetId of _syncEnabled) {
+    if(targetId!==sourceId && _syncWfId(targetId)!==wfId) _applySyncWf(targetId, wfId)
+  }
+}
+
+let _syncPlaybackPropagating = false
+function propagateSyncPlayback(sourceId, action) {
+  if(_syncPlaybackPropagating || !_syncEnabled.has(sourceId)) return
+  _syncPlaybackPropagating = true
+  for(const targetId of _syncEnabled) {
+    if(targetId===sourceId) continue
+    if(targetId.startsWith('grp:')) grpPlayback(targetId.slice(4), action)
+    else { const [,devId,ch]=targetId.split(':'); chPlayback(devId,ch,action) }
+  }
+  _syncPlaybackPropagating = false
+}
+
+function toggleSync(cardId) {
+  const btn=_syncBtn(cardId)
+  if(_syncEnabled.has(cardId)) {
+    _syncEnabled.delete(cardId)
+    if(btn){ btn.style.color=''; btn.style.fontWeight='' }
+    return
+  }
+  _syncEnabled.add(cardId)
+  if(btn){ btn.style.color='#4fc3f7'; btn.style.fontWeight='600' }
+  // Adopt waveform from first other synced card
+  const source=[..._syncEnabled].find(id=>id!==cardId)
+  if(source) _applySyncWf(cardId, _syncWfId(source))
+}
+
+function restoreSyncBtns() {
+  for(const cardId of _syncEnabled){
+    const btn=_syncBtn(cardId)
+    if(btn){ btn.style.color='#4fc3f7'; btn.style.fontWeight='600' }
+  }
+}
+
+function syncAudioToDeviceState(m) {
+  // Channel audio
+  for(const [key,s] of Object.entries(_chAudio)){
+    const [dId,ch]=key.split(':')
+    if(dId!==m.id) continue
+    const chPaused=m.paused?.[ch]
+    if(chPaused===true && !s.audio.paused) s.audio.pause()
+    else if(chPaused===false && s.audio.paused) s.audio.play().catch(()=>{})
+    if(m.ticks?.[ch]===0) {
+      const dev=S.devices[dId]; const chData=dev?.channels?.[ch]
+      const wf=(S.waveforms.custom||[]).find(w=>w.id===chData?.waveform&&w.type==='audio')
+      if(wf) s.audio.currentTime=_calcAudioTime(0,null,chData?.speed||1,
+        Array.isArray(wf.frames)?wf.frames.length:(wf.frames||0), s.audio.duration)
+    }
+  }
+  // Group audio
+  for(const [grpId,s] of Object.entries(_grpAudio)){
+    const grp=S.groups?.find(g=>g.id===grpId)
+    const fc=grp?.channels?.find(({deviceId})=>deviceId===m.id)
+    if(!fc) continue
+    const chPaused=m.paused?.[fc.channel]
+    if(chPaused===true && !s.audio.paused) s.audio.pause()
+    else if(chPaused===false && s.audio.paused) s.audio.play().catch(()=>{})
+    if(m.ticks?.[fc.channel]===0) s.audio.currentTime=0
+  }
+}
+
+async function toggleChAudio(devId, ch) {
+  const key=devId+':'+ch
+  const btn=document.getElementById('aud-btn-'+devId+'-'+ch)
+  if(_chAudio[key]){ stopChAudio(devId,ch); if(btn){btn.textContent='🔇';btn.style.color=''} return }
+  const dev=S.devices[devId]; if(!dev) return
+  const c=dev.channels?.[ch]; if(!c) return
+  const wf=(S.waveforms.custom||[]).find(w=>w.id===c.waveform&&w.type==='audio')
+  if(!wf){ if(btn){btn.style.color='#c0392b';setTimeout(()=>{if(btn)btn.style.color=''},800)} return }
+  const speed=c.speed||1
+  const fLen=Array.isArray(wf.frames)?wf.frames.length:(wf.frames||0)
+  const audio=new Audio(`/api/audio/${wf.id}/file`)
+  audio.loop=true
+  audio.playbackRate=Math.min(Math.max(speed,0.25),4)
+  audio.addEventListener('loadedmetadata',()=>{
+    audio.currentTime=_calcAudioTime(dev.ticks?.[ch]||0,dev.tickAt,speed,fLen,audio.duration)
+    if(!dev.paused?.[ch]) audio.play().catch(()=>{})
+  })
+  const syncInterval=setInterval(()=>{
+    const d=S.devices[devId]
+    if(!d){ stopChAudio(devId,ch); return }
+    const chData=d.channels?.[ch]
+    if((S.waveforms.custom||[]).find(w=>w.id===chData?.waveform&&w.type==='audio')?.id!==wf.id){
+      stopChAudio(devId,ch); const b=document.getElementById('aud-btn-'+devId+'-'+ch); if(b){b.textContent='🔇';b.style.color=''} return
+    }
+    if(d.paused?.[ch]){ if(!audio.paused) audio.pause(); return }
+    if(audio.paused) audio.play().catch(()=>{})
+    const expected=_calcAudioTime(d.ticks?.[ch]||0,d.tickAt,speed,fLen,audio.duration)
+    if(Math.abs(audio.currentTime-expected)>0.5) audio.currentTime=expected
+  },2000)
+  _chAudio[key]={audio,syncInterval}
+  if(btn){ btn.textContent='🔊'; btn.style.color='#4fc3f7' }
+}
+
+async function toggleGrpAudio(grpId) {
+  const btn=document.getElementById('aud-btn-grp-'+grpId)
+  if(_grpAudio[grpId]){ stopGrpAudio(grpId); if(btn){btn.textContent='🔇';btn.style.color=''} return }
+  const grp=S.groups?.find(g=>g.id===grpId); if(!grp) return
+  const firstCh=grp.channels?.find(({deviceId})=>S.devices?.[deviceId]?.status==='connected')
+  const wfId=firstCh?S.devices[firstCh.deviceId]?.channels?.[firstCh.channel]?.waveform:groupState[grpId]?.waveform
+  const wf=(S.waveforms.custom||[]).find(w=>w.id===wfId&&w.type==='audio')
+  if(!wf){ if(btn){btn.style.color='#c0392b';setTimeout(()=>{if(btn)btn.style.color=''},800)} return }
+  const dev=firstCh?S.devices[firstCh.deviceId]:null
+  const fch=firstCh?.channel
+  const chData=fch?dev?.channels?.[fch]:null
+  const speed=chData?.speed||1
+  const fLen=Array.isArray(wf.frames)?wf.frames.length:(wf.frames||0)
+  const audio=new Audio(`/api/audio/${wf.id}/file`)
+  audio.loop=true
+  audio.playbackRate=Math.min(Math.max(speed,0.25),4)
+  audio.addEventListener('loadedmetadata',()=>{
+    audio.currentTime=_calcAudioTime(dev?.ticks?.[fch]||0,dev?.tickAt,speed,fLen,audio.duration)
+    if(!dev?.paused?.[fch]) audio.play().catch(()=>{})
+  })
+  const syncInterval=setInterval(()=>{
+    const g=S.groups?.find(g=>g.id===grpId)
+    const fc=g?.channels?.find(({deviceId})=>S.devices?.[deviceId]?.status==='connected')
+    const d=fc?S.devices[fc.deviceId]:null; if(!d) return
+    const currentWfId=d.channels?.[fc.channel]?.waveform||groupState[grpId]?.waveform
+    if(currentWfId!==wf.id){
+      stopGrpAudio(grpId); const b=document.getElementById('aud-btn-grp-'+grpId); if(b){b.textContent='🔇';b.style.color=''} return
+    }
+    if(d.paused?.[fc.channel]){ if(!audio.paused) audio.pause(); return }
+    if(audio.paused) audio.play().catch(()=>{})
+    const expected=_calcAudioTime(d.ticks?.[fc.channel]||0,d.tickAt,speed,fLen,audio.duration)
+    if(Math.abs(audio.currentTime-expected)>0.5) audio.currentTime=expected
+  },2000)
+  _grpAudio[grpId]={audio,syncInterval}
+  if(btn){ btn.textContent='🔊'; btn.style.color='#4fc3f7' }
+}
 function getWfName(id){ return [...(S.waveforms.builtin||[]),...(S.waveforms.custom||[])].find(w=>w.id===id)?.name||id }
 
 function toggleDrop(id) {
@@ -2496,6 +2708,7 @@ function pickWf(devId,ch,wfId) {
   const sl=document.getElementById('sl-'+devId+ch)
   const strip=sl?.closest('.ch-block')?.querySelector('.qwf-strip')
   if(strip) strip.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
+  propagateSyncWf('ch:'+devId+':'+ch, wfId)
 }
 
 // ── Waveforms sub-tab ─────────────────────────────────────────────────────────
@@ -2699,6 +2912,7 @@ function renderGroups() {
     el.appendChild(buildGroupCard(g))
     requestAnimationFrame(()=>startGrpViz(g.id))
   })
+  requestAnimationFrame(restoreAudioBtns)
 }
 
 function buildGroupCard(grp) {
@@ -2766,6 +2980,8 @@ function buildGroupCard(grp) {
             <button class="btn btn-ghost btn-xs" onclick="grpPlayback('${grp.id}','back')" title="Back to start">⏮</button>
             <button class="btn btn-ghost btn-xs" onclick="grpPlayback('${grp.id}','pause')" title="Pause">⏸</button>
             <button class="btn btn-ghost btn-xs" onclick="grpPlayback('${grp.id}','play')" title="Play">▶</button>
+            <button class="btn btn-ghost btn-xs" id="aud-btn-grp-${grp.id}" onclick="toggleGrpAudio('${grp.id}')" title="Play MP3 in sync with waveform">🔇</button>
+            <button class="btn btn-ghost btn-xs" id="sync-grp-${grp.id}" onclick="toggleSync('grp:${grp.id}')" title="Sync waveform with other synced cards">Sync</button>
           </div>
         </div>
       </div>
@@ -2812,6 +3028,7 @@ function quickGroupWf(grpId,wfId){
   if(groupState[grpId]){ groupState[grpId].waveform=wfId; groupState[grpId].intensity=0 }
   send({type:'group:set',groupId:grpId,params:{waveform:wfId,intensity:0}})
   document.getElementById('gc-'+grpId)?.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
+  propagateSyncWf('grp:'+grpId, wfId)
 }
 function pickGroupWf(grpId,wfId){
   const nm=document.getElementById('gwfn-'+grpId); if(nm) nm.textContent=getWfName(wfId)
@@ -2819,6 +3036,7 @@ function pickGroupWf(grpId,wfId){
   if(groupState[grpId]) groupState[grpId].waveform=wfId
   send({type:'group:set',groupId:grpId,params:{waveform:wfId}})
   document.getElementById('gc-'+grpId)?.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
+  propagateSyncWf('grp:'+grpId, wfId)
 }
 
 // ── Group modal (new + edit) ──────────────────────────────────────────────────
@@ -2899,6 +3117,7 @@ function renderAudioList(){
         <button class="btn btn-ghost btn-xs" id="synth-btn-${safeId}" onclick="toggleSynthPlayback('${w.id}','${safeId}')" style="font-size:11px;padding:2px 7px;color:#a78bfa" title="Preview processed waveform as audio">⚡</button>
         <span style="flex:1;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.name}">${w.name}</span>
         <span style="font-size:10px;color:#444;white-space:nowrap">${mins}:${secs} &nbsp; ${frameCount} frames</span>
+        <button class="btn btn-ghost btn-xs" onclick="reEditAudio('${w.id}')">Edit</button>
         <button class="btn btn-danger btn-xs" onclick="deleteAudio('${w.id}')">×</button>
       </div>
       ${Array.isArray(w.frames)?`<div style="overflow-x:auto;border-radius:5px;background:#080808"><canvas id="${safeId}" height="48" style="display:block;min-width:100%"></canvas></div>`:`<div style="font-size:10px;color:#333;padding:4px 0">Loading waveform…</div>`}
@@ -3261,6 +3480,21 @@ async function processStaged(){
   }
 }
 
+
+async function reEditAudio(wfId) {
+  const w = (S.waveforms.custom||[]).find(w=>w.id===wfId)
+  if (!w) return
+  // Restore previous band settings before showStaged triggers renderBandCanvas
+  bandLow  = w.lowCut  || 20
+  bandHigh = w.highCut || 20000
+  const resp = await fetch(`/api/audio/${wfId}/file`)
+  const blob = await resp.blob()
+  const file = new File([blob], w.originalName || w.name, {type: blob.type})
+  showStaged(file)
+  // Override name with the saved waveform name (showStaged sets it from filename)
+  document.getElementById('staged-name-input').value = w.name
+  document.getElementById('audio-staged').scrollIntoView({behavior:'smooth', block:'start'})
+}
 
 async function setAudioBaseFreq(wfId, hz) {
   await fetch(`/api/waveforms/${wfId}`, { method:'PUT', headers:{'Content-Type':'application/json'},

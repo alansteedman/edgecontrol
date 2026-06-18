@@ -486,7 +486,7 @@ class CoyoteDevice {
     this.gattServer=null; this.writeChar=null; this.notifyChar=null
     this.channels={ A:{intensity:0,waveform:'pulse',speed:1}, B:{intensity:0,waveform:'pulse',speed:1} }
     this._smoothA=0; this._smoothB=0  // smoothed intensity (0-200), lerped toward target each packet
-    this._tick=0; this._paused=false; this._interval=null; this._device=null; this._connectLock=false
+    this._ticks={A:0,B:0}; this._paused={A:false,B:false}; this._interval=null; this._device=null; this._connectLock=false
     this._connectedAddr=null  // actual BLE address we connected to
     this._retryDelay=5000  // exponential backoff on repeated failures
   }
@@ -606,32 +606,33 @@ class CoyoteDevice {
     if (intensity!==undefined) this.channels[ch].intensity=Math.max(0,Math.min(200,intensity))
     if (waveform!==undefined)  this.channels[ch].waveform=waveform
     if (speed!==undefined)     this.channels[ch].speed=Math.max(0.25,Math.min(4,speed))
-    broadcast({ type:'device:state', id:this.id, channels:this.channels, tick:this._tick, paused:this._paused })
+    broadcast({ type:'device:state', id:this.id, channels:this.channels, ticks:this._ticks, paused:this._paused })
   }
 
-  setPlayback(action) {
-    if(action==='pause') this._paused=true
-    else if(action==='play') this._paused=false
-    else if(action==='back') { this._tick=0; this._paused=false }
-    broadcast({type:'device:state', id:this.id, channels:this.channels, tick:this._tick, paused:this._paused})
+  setPlayback(channel, action) {
+    if(action==='pause') this._paused[channel]=true
+    else if(action==='play') this._paused[channel]=false
+    else if(action==='back') { this._ticks[channel]=0; this._paused[channel]=false }
+    broadcast({type:'device:state', id:this.id, channels:this.channels, ticks:this._ticks, paused:this._paused})
   }
 
   _buildPacket() {
-    const t=this._tick
+    const tickA=this._ticks.A, tickB=this._ticks.B
+    const t=tickA  // used for packet sequence nibble only
 
     // Smooth intensity toward target: slow rise (~1s), faster fall (~400ms), fast to zero
-    const tA=this.channels.A.intensity, tB=this.channels.B.intensity
-    const rateA = tA > this._smoothA ? 0.18 : (tA===0 ? 0.45 : 0.22)
-    const rateB = tB > this._smoothB ? 0.18 : (tB===0 ? 0.45 : 0.22)
-    this._smoothA += (tA - this._smoothA) * rateA
-    this._smoothB += (tB - this._smoothB) * rateB
-    if (Math.abs(this._smoothA - tA) < 0.4) this._smoothA = tA
-    if (Math.abs(this._smoothB - tB) < 0.4) this._smoothB = tB
+    const iA=this.channels.A.intensity, iB=this.channels.B.intensity
+    const rateA = iA > this._smoothA ? 0.18 : (iA===0 ? 0.45 : 0.22)
+    const rateB = iB > this._smoothB ? 0.18 : (iB===0 ? 0.45 : 0.22)
+    this._smoothA += (iA - this._smoothA) * rateA
+    this._smoothB += (iB - this._smoothB) * rateB
+    if (Math.abs(this._smoothA - iA) < 0.4) this._smoothA = iA
+    if (Math.abs(this._smoothB - iB) < 0.4) this._smoothB = iB
 
     const aAmp=Math.min(100,Math.round(this._smoothA/2))
     const bAmp=Math.min(100,Math.round(this._smoothB/2))
-    const aW=computeWave(this.channels.A.waveform,t,aAmp,this.channels.A.speed||1)
-    const bW=computeWave(this.channels.B.waveform,t,bAmp,this.channels.B.speed||1)
+    const aW=computeWave(this.channels.A.waveform,tickA,aAmp,this.channels.A.speed||1)
+    const bW=computeWave(this.channels.B.waveform,tickB,bAmp,this.channels.B.speed||1)
     const buf=Buffer.alloc(20)
     buf[0]=0xB0; buf[1]=((t%16)<<4)|0x0F
     buf[2]=Math.min(200,Math.round(this._smoothA))
@@ -651,8 +652,9 @@ class CoyoteDevice {
       if (this.writeChar && this.status === 'connected') {
         try {
           await this.writeChar.writeValue(this._buildPacket(), { type:'command' })
-          broadcast({ type:'device:tick', id:this.id, tick:this._tick, paused:this._paused })
-          if(!this._paused) this._tick++
+          broadcast({ type:'device:tick', id:this.id, ticks:this._ticks, paused:this._paused })
+          if(!this._paused.A) this._ticks.A++
+          if(!this._paused.B) this._ticks.B++
         } catch(e) {
           console.error(`[${this.id}] send:`, e.message)
           this._sendActive = false; this.status = 'disconnected'
@@ -674,7 +676,7 @@ class CoyoteDevice {
   }
 
   toJSON() {
-    return { id:this.id, type:'coyote', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, channels:this.channels, tick:this._tick, paused:this._paused }
+    return { id:this.id, type:'coyote', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, channels:this.channels, ticks:this._ticks, paused:this._paused }
   }
 }
 
@@ -1911,14 +1913,13 @@ wss.on('connection', (ws, request) => {
         }
       }
       if (msg.type==='device:playback') {
-        devices[msg.deviceId]?.setPlayback?.(msg.action)
+        devices[msg.deviceId]?.setPlayback?.(msg.channel, msg.action)
       }
       if (msg.type==='group:playback') {
         const grp=(config.groups||[]).find(g=>g.id===msg.groupId)
         if(grp && grp.enabled!==false) {
-          const seen=new Set()
-          for(const {deviceId} of grp.channels||[]) {
-            if(!seen.has(deviceId)){ seen.add(deviceId); devices[deviceId]?.setPlayback?.(msg.action) }
+          for(const {deviceId,channel} of grp.channels||[]) {
+            devices[deviceId]?.setPlayback?.(channel, msg.action)
           }
         }
       }
@@ -2893,7 +2894,7 @@ app.post('/api/audio', audioUpload.single('file'), async (req,res) => {
     })
     console.log(`[audio] ${amps.length} frames (${Math.round(amps.length/10)}s)`)
     const wfId='audio-'+req.file.filename
-    const wf={id:wfId, name:req.file.originalname, type:'audio', sourceFile:req.file.filename, frames:amps}
+    const wf={id:wfId, name:audioName, type:'audio', sourceFile:req.file.filename, originalName:req.file.originalname, lowCut, highCut, frames:amps}
     waveformStore.custom.push(wf); saveWaveforms()
     broadcast({type:'audio:progress', name:req.file.originalname, frames:amps.length,
       elapsed:0, done:true, duration:Math.round(amps.length/10)})

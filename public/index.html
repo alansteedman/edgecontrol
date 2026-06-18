@@ -1992,29 +1992,15 @@ window.commDoShare = async function() {
   const prog  = document.getElementById('comm-share-progress')
   const btn   = document.getElementById('comm-share-btn')
   if (!wfId || !name) return
-  const wf = (S.waveforms.custom||[]).find(w=>w.id===wfId)
-  if (!wf) { if(prog) prog.textContent='Waveform not found'; return }
   if (btn) { btn.disabled=true; btn.textContent='Uploading…' }
-  if (prog) prog.textContent = 'Fetching audio file…'
+  if (prog) prog.textContent = 'Uploading… (Pi is streaming file to community)'
   try {
-    const [mp3R, framesR] = await Promise.all([
-      fetch(`/api/audio/${wfId}/file`),
-      fetch(`/api/audio/${wfId}/frames`)
-    ])
-    if (!mp3R.ok) throw new Error('Could not fetch audio file')
-    if (!framesR.ok) throw new Error('Could not fetch frames')
-    const [mp3Blob, frames] = await Promise.all([mp3R.blob(), framesR.json()])
-    if (!Array.isArray(frames) || !frames.length) throw new Error('No frames data')
-    if (prog) prog.textContent = 'Uploading to community…'
-    const fd = new FormData()
-    fd.append('mp3', mp3Blob, wf.originalName || name + '.mp3')
-    fd.append('frames', new Blob([JSON.stringify(frames)], {type:'application/json'}), 'frames.json')
-    fd.append('name', name)
-    fd.append('description', desc)
-    fd.append('duration_secs', String(Math.round((frames.length||0)/10)))
-    fd.append('frame_count', String(frames.length||0))
-    const token = CS.token
-    const r = await fetch(`${COMM_URL}/api/waveforms`, { method:'POST', body:fd, headers: token?{Authorization:`Bearer ${token}`}:{} })
+    // Pi streams the MP3 directly from disk — browser never holds the file in memory
+    const r = await fetch('/api/community/share', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({wfId, name, description:desc, token:CS.token})
+    })
     const d = await r.json()
     if (d.error) throw new Error(d.error)
     if (prog) prog.textContent = '✓ Shared successfully!'

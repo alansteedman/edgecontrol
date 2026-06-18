@@ -3,7 +3,8 @@ import { createProxyMiddleware } from 'http-proxy-middleware'
 import { StreamDeckController } from './streamdeck.js'
 import { WebSocket, WebSocketServer } from 'ws'
 import { createServer } from 'http'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, open as fsOpen, read as fsRead, write as fsWrite, close as fsClose } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, open as fsOpen, read as fsRead, write as fsWrite, close as fsClose, createReadStream, statSync } from 'fs'
+import { Readable } from 'stream'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { networkInterfaces } from 'os'
@@ -3229,6 +3230,44 @@ app.get('/api/audio/:id/frames', (req,res) => {
   if(!wf) return res.status(404).json({error:'not found'})
   const frames = (wf.frames||[]).map(f => typeof f === 'object' ? (f.segs?.[0]?.a ?? 0) : f)
   res.json(frames)
+})
+
+// ── Community share proxy ─────────────────────────────────────────────────────
+const COMMUNITY_URL = 'https://community.kinkcontrol.org'
+
+app.post('/api/community/share', express.json(), async (req, res) => {
+  const { wfId, name, description, token } = req.body
+  if (!token) return res.status(400).json({error:'Not authenticated'})
+  const wf = (waveformStore.custom||[]).find(w=>w.id===wfId&&w.type==='audio')
+  if (!wf?.sourceFile) return res.status(404).json({error:'Waveform not found'})
+  const frames = (wf.frames||[]).map(f => typeof f==='object' ? (f.segs?.[0]?.a??0) : f)
+  try {
+    // Step 1 — POST metadata + frames (small JSON) to community
+    const initR = await fetch(`${COMMUNITY_URL}/api/waveforms/init`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', Authorization:`Bearer ${token}`},
+      body: JSON.stringify({name, description:description||'', frames,
+        duration_secs:Math.round(frames.length/10), frame_count:frames.length})
+    })
+    const initData = await initR.json()
+    if (initData.error) return res.status(400).json(initData)
+    // Step 2 — Stream MP3 from disk directly to community (no browser memory involved)
+    const mp3Path = join(AUDIO_DIR, wf.sourceFile)
+    const fileSize = statSync(mp3Path).size
+    const webStream = Readable.toWeb(createReadStream(mp3Path))
+    const mp3R = await fetch(`${COMMUNITY_URL}/api/waveforms/${initData.id}/mp3`, {
+      method: 'POST',
+      headers: {'Content-Type':'audio/mpeg', 'Content-Length':String(fileSize), Authorization:`Bearer ${token}`},
+      body: webStream,
+      duplex: 'half'
+    })
+    const mp3Data = await mp3R.json()
+    if (mp3Data.error) return res.status(400).json(mp3Data)
+    res.json({id:initData.id, name})
+  } catch(e) {
+    console.error('[community:share]', e.message)
+    res.status(500).json({error:e.message})
+  }
 })
 
 // ── WiFi API ──────────────────────────────────────────────────────────────────

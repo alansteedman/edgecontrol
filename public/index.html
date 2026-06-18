@@ -1065,6 +1065,15 @@ function handle(m) {
       if(m.done) audioProgressHide()
       else if(m.frames>0) audioProgressUpdate(m.frames, m.elapsed)
       break
+    case 'community:share:progress': {
+      const _bar = document.getElementById('comm-share-bar')
+      const _pct = document.getElementById('comm-share-bar-pct')
+      const _prog = document.getElementById('comm-share-progress')
+      if (_bar) _bar.style.width = m.pct + '%'
+      if (_pct) _pct.textContent = m.pct + '%'
+      if (_prog) _prog.textContent = `Uploading… ${m.pct}%`
+      break
+    }
     case 'waveforms:updated':
       S.waveforms=m.waveforms; renderWfTab(); renderAudioList(); renderCoyoteCards()
       // Re-fetch full waveforms to get audio frame data (stripped from WS broadcast)
@@ -1973,7 +1982,13 @@ window.commShareWaveform = function() {
         <label style="font-size:11px;color:#888;display:block;margin-bottom:4px">Description (optional)</label>
         <textarea id="comm-share-desc" placeholder="e.g. Great bass-heavy track for drum and bass sessions…" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:9px 12px;color:#e0e0e0;font-size:12px;resize:vertical;min-height:70px;outline:none"></textarea>
       </div>
-      <div id="comm-share-progress" style="font-size:11px;color:#888;min-height:16px;margin-bottom:8px"></div>
+      <div id="comm-share-progress" style="font-size:11px;color:#888;min-height:16px;margin-bottom:4px"></div>
+      <div id="comm-share-bar-wrap" style="display:none;margin-bottom:10px">
+        <div style="background:#1a1a1a;border-radius:4px;height:6px;overflow:hidden">
+          <div id="comm-share-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#1d4ed8,#4fc3f7);border-radius:4px;transition:width .3s ease"></div>
+        </div>
+        <div id="comm-share-bar-pct" style="font-size:10px;color:#555;text-align:right;margin-top:2px">0%</div>
+      </div>
       <button onclick="commDoShare()" id="comm-share-btn" style="background:#1d4ed8;color:#fff;border:none;border-radius:7px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer">Share</button>`}
     </div>`
   // Pre-fill name from selected waveform
@@ -1993,7 +2008,9 @@ window.commDoShare = async function() {
   const btn   = document.getElementById('comm-share-btn')
   if (!wfId || !name) return
   if (btn) { btn.disabled=true; btn.textContent='Uploading…' }
-  if (prog) prog.textContent = 'Uploading… (Pi is streaming file to community)'
+  if (prog) prog.textContent = 'Preparing upload…'
+  const barWrap = document.getElementById('comm-share-bar-wrap')
+  if (barWrap) barWrap.style.display = 'block'
   try {
     // Pi streams the MP3 directly from disk — browser never holds the file in memory
     const r = await fetch('/api/community/share', {
@@ -2003,10 +2020,15 @@ window.commDoShare = async function() {
     })
     const d = await r.json()
     if (d.error) throw new Error(d.error)
+    const bar = document.getElementById('comm-share-bar')
+    const pct = document.getElementById('comm-share-bar-pct')
+    if (bar) bar.style.width = '100%'
+    if (pct) pct.textContent = '100%'
     if (prog) prog.textContent = '✓ Shared successfully!'
     if (btn) btn.textContent = 'Shared!'
-    setTimeout(() => setCommPage('waveforms'), 1200)
+    setTimeout(() => setCommPage('waveforms'), 1400)
   } catch(e) {
+    if (barWrap) barWrap.style.display = 'none'
     if (prog) prog.textContent = 'Error: ' + e.message
     if (btn) { btn.disabled=false; btn.textContent='Share' }
   }

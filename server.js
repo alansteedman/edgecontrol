@@ -3253,7 +3253,13 @@ function communityStreamMp3(path, token, filePath, fileSize) {
       headers:{'Content-Type':'audio/mpeg','Content-Length':fileSize,Authorization:`Bearer ${token}`}
     }, res2 => { let d=''; res2.on('data',c=>d+=c); res2.on('end',()=>{ try{resolve(JSON.parse(d))}catch{reject(new Error('Bad JSON: '+d.slice(0,120)))} }) })
     req2.on('error', reject)
+    let bytesSent = 0, lastPct = -1
     const fileStream = createReadStream(filePath)
+    fileStream.on('data', chunk => {
+      bytesSent += chunk.length
+      const pct = Math.min(99, Math.round(bytesSent / fileSize * 100))
+      if (pct !== lastPct) { lastPct = pct; broadcast({type:'community:share:progress', pct}) }
+    })
     fileStream.on('error', reject)
     fileStream.pipe(req2)
   })

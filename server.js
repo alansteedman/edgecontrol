@@ -2020,7 +2020,7 @@ app.delete('/api/devices/:id', async (req,res) => {
 
 app.post('/api/devices/:id/connect', (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
-  dev.connect().catch(e=>console.error(`[${dev.id}]`,e.message)); res.json({ok:true})
+  const r=dev.connect(); if(r?.catch) r.catch(e=>console.error(`[${dev.id}]`,e.message)); res.json({ok:true})
 })
 
 app.post('/api/devices/:id/disconnect', async (req,res) => {

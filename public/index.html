@@ -995,7 +995,7 @@ function handle(m) {
     case 'device:tick':
       if(S.devices[m.id]){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused } break
     case 'device:status':
-      if(S.devices[m.id]) S.devices[m.id].status=m.status
+      if(S.devices[m.id]){ S.devices[m.id].status=m.status; if(S.devices[m.id].type==='shelly') renderShellyCards() }
       renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); renderPawPrintsCards(); if(!_hueDragging) renderHueCards(); break
     case 'device:state':
       if(S.devices[m.id]){
@@ -1349,6 +1349,7 @@ async function addShellyDevice(){
     const data=await r.json()
     if(!r.ok) throw new Error(data.error)
     closeScan()
+    showTab('shelly', document.getElementById('nav-shelly'))
   } catch(e){alert('Add failed: '+e.message)}
 }
 
@@ -1405,8 +1406,8 @@ function renderShellyCards(){
     }).join('')
     return `<div class="device-card" style="margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:16px">🔌</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <img src="/shelly-logo.svg" style="height:22px;width:auto">
           <div>
             <div style="font-size:13px;font-weight:600">${dev.name}</div>
             <div style="font-size:10px;color:#555">${dev.ip}</div>
@@ -1540,7 +1541,7 @@ function eomUpdateDenials(id, count) {
 }
 
 // ── Devices tab ───────────────────────────────────────────────────────────────
-const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾', camera:'📷', hue:'<img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle">' }
+const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾', camera:'📷', hue:'<img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle">', shelly:'<img src="/shelly-logo.svg" style="width:44px;height:18px;vertical-align:middle">' }
 
 function renderDevList() {
   const el=document.getElementById('dev-list')

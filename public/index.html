@@ -4877,6 +4877,11 @@ const BDef = {
     sc:[{k:'hueTarget',l:'Scene or Room',t:'hueanysel'},{k:'action',l:'Action',t:'sel',opts:['on','off']},{k:'bri',l:'Brightness (%)',t:'range',min:1,max:100}],
     sm:c=>{const lbl=c.hueTargetName||c.hueTarget||'—'; return c.action==='off'?`${lbl} OFF`:`${lbl} · ${c.bri??80}%`}
   },
+  io_set:   { label:'I/O SET',   icon:'⚡', bg:'#1a1400', bd:'#f0c040', tx:'#f0c040', ports:{i:['i'],o:['o']},
+    dc:{ioTarget:'',action:'on'},
+    sc:[{k:'ioTarget',l:'Switch / Light',t:'iosel'},{k:'action',l:'Action',t:'sel',opts:['on','off']}],
+    sm:c=>{const lbl=c.ioTargetName||c.ioTarget||'—'; return `${lbl} ${c.action==='off'?'OFF':'ON'}`}
+  },
   hue_ramp: { label:'HUE RAMP',  icon:'↗', bg:'#12101a', bd:'#a78bfa', tx:'#c4b5fd', ports:{i:['i'],o:['o']},
     dc:{hueTarget:'',from:20,to:100,dur:30,block:false},
     sc:[{k:'hueTarget',l:'Scene or Room',t:'hueanysel'},{k:'from',l:'From (%)',t:'range',min:0,max:100},{k:'to',l:'To (%)',t:'range',min:0,max:100},{k:'dur',l:'Duration (s)',t:'num',min:1},{k:'block',l:'Wait for ramp to finish',t:'chk'}],
@@ -5305,6 +5310,21 @@ function renderMeCfg() {
       ;['A','B'].forEach(ch=>h+=`<option value="${ch}"${String(v||'')==ch?' selected':''}>${ch}</option>`)
       h+=`</select>`
     }
+    else if(f.t==='iosel') {
+      const shellys=Object.values(S.devices).filter(d=>d.type==='shelly')
+      h+=`<select class="mci" onchange="meCfgUp('${b.id}','${f.k}',this.value);meCfgUp('${b.id}','ioTargetName',this.options[this.selectedIndex].text)">`
+      h+=`<option value="">— select device —</option>`
+      shellys.forEach(dev=>{
+        Object.entries(dev.components||{}).forEach(([key,state])=>{
+          const [type,idx]= key.split(':')
+          if(type!=='switch'&&type!=='light') return
+          const val=dev.id+':'+key
+          const lbl=`${dev.name} — ${type} ${idx}`
+          h+=`<option value="${val}"${v===val?' selected':''}>${lbl}</option>`
+        })
+      })
+      h+=`</select>`
+    }
     else if(f.t==='hueanysel') {
       const allHues=Object.values(S.devices).filter(d=>d.type==='hue')
       h+=`<select class="mci" onchange="meCfgUp('${b.id}','${f.k}',this.value);meCfgUp('${b.id}','hueTargetName',this.options[this.selectedIndex].text)">`
@@ -5368,6 +5388,7 @@ function buildMePalette() {
     {title:'Control',items:['start','end','stop_all','run_macro']},
     {title:'Timing', items:['delay','ramp']},
     {title:'Hue',    items:['hue_set','hue_ramp']},
+    {title:'I/O',    items:['io_set']},
     {title:'Triggers',items:['wait_eom','wait_manual','wait_pawprints']},
     {title:'Logic',  items:['if_else','if_pawprints','loop']},
   ]

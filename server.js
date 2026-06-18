@@ -2920,6 +2920,18 @@ class MacroRunner {
         else { prom.catch(() => {}); await this._exec(next(), blockMap, adj, depth) }
         break
       }
+
+      case 'io_set': {
+        const [devId, compType, compIdx] = (cfg.ioTarget || '').split(':')
+        const dev = devId ? devices[devId] : null
+        if (dev?.type === 'shelly' && compType && compIdx !== undefined) {
+          const method = compType === 'switch' ? 'Switch.Set' : 'Light.Set'
+          dev.rpc(method, { id: parseInt(compIdx), on: cfg.action !== 'off' })
+            .catch(e => console.error('[macro] io_set:', e.message))
+        }
+        await this._sleep(350)
+        await this._exec(next(), blockMap, adj, depth); break
+      }
     }
   }
 

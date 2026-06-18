@@ -791,12 +791,9 @@ select.mci{cursor:pointer}
       <!-- Network path -->
       <div id="shelly-net-phase" style="display:none;flex-direction:column;gap:8px">
         <button class="btn btn-ghost btn-xs" style="align-self:flex-start" onclick="showShellyPath()">← Back</button>
-        <div>
-          <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">IP Address or Hostname</label>
-          <input id="shelly-net-ip" type="text" placeholder="192.168.1.x or shelly1minig4-xxxx.local" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
-        </div>
-        <button id="shelly-net-btn" class="btn btn-primary btn-sm" style="width:100%" onclick="probeShellyDevice()">Connect →</button>
-        <div id="shelly-net-status" style="font-size:11px;color:#f87171"></div>
+        <button id="shelly-net-scan-btn" class="btn btn-primary btn-sm" style="width:100%" onclick="startShellyNetScan()">🔍 Scan Network</button>
+        <div id="shelly-net-scan-status" style="font-size:11px;color:#555;text-align:center"></div>
+        <div id="shelly-net-results" style="display:flex;flex-direction:column;gap:5px"></div>
         <div id="shelly-net-found" style="display:none;flex-direction:column;gap:8px">
           <div id="shelly-net-info" style="font-size:11px;color:#4fc3f7;background:#0a1a2a;padding:8px;border-radius:6px;border:1px solid #1a3a5a"></div>
           <div>
@@ -805,6 +802,14 @@ select.mci{cursor:pointer}
           </div>
           <button class="btn btn-primary btn-sm" style="width:100%" onclick="addShellyDevice()">Add Shelly</button>
         </div>
+        <details style="margin-top:4px">
+          <summary style="font-size:10px;color:#444;cursor:pointer">Enter IP manually</summary>
+          <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+            <input id="shelly-net-ip" type="text" placeholder="192.168.1.x or shelly1minig4-xxxx.local" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+            <button id="shelly-net-btn" class="btn btn-outline btn-sm" style="width:100%" onclick="probeShellyDevice()">Connect →</button>
+            <div id="shelly-net-status" style="font-size:11px;color:#f87171"></div>
+          </div>
+        </details>
       </div>
     </div>
     <!-- Step 2: BLE scan (Coyote) -->
@@ -1089,9 +1094,40 @@ function handle(m) {
       if(el){el.style.display='block';el.style.color='#4fc3f7';el.textContent=m.msg}; break }
     case 'shelly:provision:done': {
       const el=document.getElementById('shelly-prov-status')
-      if(el){el.style.color='#4ade80';el.textContent='✓ WiFi configured — device rebooting'}
+      if(el){el.style.color='#4ade80';el.textContent='✓ WiFi configured — connecting…'}
       const pp=document.getElementById('shelly-post-prov')
-      if(pp){pp.style.display='block';pp.innerHTML=`<div style="font-size:11px;color:#555;margin-bottom:6px">Enter the IP once the device appears on your network:</div><input id="shelly-post-ip" type="text" placeholder="${m.hostname||'192.168.1.x'}" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px;margin-bottom:8px"/><button class="btn btn-primary btn-sm" style="width:100%" onclick="shellyPostProvProbe()">Add Device →</button>`}; break }
+      if(pp){
+        pp.style.display='block'
+        pp.innerHTML=`<div id="shelly-autoprov-status" style="font-size:11px;color:#4fc3f7;text-align:center">Waiting for device to come online…</div>`
+        // Auto-probe the mDNS hostname — retry every 5s for up to 60s
+        const hostname=m.hostname
+        let attempts=0
+        const tryProbe=async()=>{
+          attempts++
+          try {
+            const r=await fetch('/api/shelly/probe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:hostname})})
+            const data=await r.json()
+            if(r.ok){
+              _shellyNetProbed={ip:hostname,...data}
+              const st=document.getElementById('shelly-autoprov-status')
+              if(st) st.style.display='none'
+              document.getElementById('shelly-net-info').innerHTML=`<strong>${data.info?.name||'Shelly'}</strong> · ${data.info?.model||''}<br><span style="color:#888">${hostname}</span>`
+              document.getElementById('shelly-net-name').value=data.info?.name||'Shelly'
+              if(pp) pp.innerHTML=`<button class="btn btn-primary btn-sm" style="width:100%" onclick="addShellyDevice()">Add Device →</button>`
+              return
+            }
+          } catch {}
+          if(attempts<12){
+            const st=document.getElementById('shelly-autoprov-status')
+            if(st) st.textContent=`Waiting for device… (${attempts*5}s)`
+            setTimeout(tryProbe,5000)
+          } else {
+            // Give up — show manual entry
+            if(pp) pp.innerHTML=`<div style="font-size:11px;color:#555;margin-bottom:6px">Device not found automatically. Enter IP:</div><input id="shelly-post-ip" type="text" placeholder="${hostname}" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px;margin-bottom:8px"/><button class="btn btn-primary btn-sm" style="width:100%" onclick="shellyPostProvProbe()">Add Device →</button>`
+          }
+        }
+        setTimeout(tryProbe,8000)
+      }; break }
     case 'shelly:provision:error': {
       const el=document.getElementById('shelly-prov-status')
       if(el){el.style.color='#f87171';el.textContent='✗ '+m.error}
@@ -1105,6 +1141,18 @@ function handle(m) {
         }
         updateShellyCard(m.id,m.params)
       }; break
+    case 'shelly:net:start':
+      document.getElementById('shelly-net-scan-btn').disabled=true
+      document.getElementById('shelly-net-scan-btn').textContent='Scanning…'
+      document.getElementById('shelly-net-results').innerHTML=''
+      document.getElementById('shelly-net-found').style.display='none'
+      document.getElementById('shelly-net-scan-status').textContent='Probing network…'; break
+    case 'shelly:net:found': addShellyNetResult(m.device); break
+    case 'shelly:net:done': {
+      const b=document.getElementById('shelly-net-scan-btn')
+      if(b){b.disabled=false;b.textContent='🔍 Scan Again'}
+      const st=document.getElementById('shelly-net-scan-status')
+      if(st) st.textContent=m.count?`Found ${m.count} device${m.count>1?'s':''}`:m.error||'No Shelly devices found'; break }
     case 'shelly:event':
       if(S.devices[m.id]) { /* future: macro triggers */ }; break
     case 'hue:inventory':
@@ -1167,7 +1215,48 @@ function showShellyNet(){
   document.getElementById('shelly-path').style.display='none'
   document.getElementById('shelly-net-phase').style.display='flex'
   document.getElementById('shelly-net-found').style.display='none'
-  document.getElementById('shelly-net-status').textContent=''
+  document.getElementById('shelly-net-results').innerHTML=''
+  document.getElementById('shelly-net-scan-status').textContent=''
+  const st=document.getElementById('shelly-net-status'); if(st) st.textContent=''
+}
+
+function startShellyNetScan(){
+  _shellyNetProbed=null
+  document.getElementById('shelly-net-results').innerHTML=''
+  document.getElementById('shelly-net-found').style.display='none'
+  fetch('/api/shelly/network-scan',{method:'POST'}).catch(()=>{})
+}
+
+function addShellyNetResult(dev){
+  const el=document.createElement('button')
+  el.className='btn btn-ghost btn-xs'
+  el.style.cssText='width:100%;text-align:left;display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #2a2a2a;border-radius:7px'
+  el.innerHTML=`<span style="font-size:16px">🔌</span><span><strong style="color:#e0e0e0;font-size:12px">${dev.name}</strong> <span style="color:#555;font-size:10px">${dev.model||''}</span><br><span style="color:#555;font-size:10px">${dev.ip}</span></span>`
+  el.onclick=async()=>{
+    document.querySelectorAll('#shelly-net-results button').forEach(b=>b.style.borderColor='#2a2a2a')
+    el.style.borderColor='#4fc3f7'
+    const btn=document.getElementById('shelly-net-scan-btn')
+    btn.disabled=true; btn.textContent='Connecting…'
+    try {
+      const r=await fetch('/api/shelly/probe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:dev.ip})})
+      const data=await r.json()
+      if(!r.ok) throw new Error(data.error)
+      _shellyNetProbed={ip:dev.ip,...data}
+      const switchCount=(data.components||[]).filter(c=>c.key.startsWith('switch')).length
+      const lightCount=(data.components||[]).filter(c=>c.key.startsWith('light')).length
+      const parts=[]
+      if(switchCount) parts.push(`${switchCount} switch${switchCount>1?'es':''}`)
+      if(lightCount)  parts.push(`${lightCount} dimmer${lightCount>1?'s':''}`)
+      document.getElementById('shelly-net-info').innerHTML=`<strong>${data.info?.name||dev.name}</strong> · ${data.info?.model||''}<br><span style="color:#888">${dev.ip} · ${parts.join(', ')||'No controllable components'}</span>`
+      document.getElementById('shelly-net-name').value=data.info?.name||dev.name
+      document.getElementById('shelly-net-found').style.display='flex'
+    } catch(e){
+      el.style.borderColor='#f87171'
+      const st=document.getElementById('shelly-net-scan-status'); if(st) st.textContent='Error: '+e.message
+    }
+    btn.disabled=false; btn.textContent='🔍 Scan Again'
+  }
+  document.getElementById('shelly-net-results').appendChild(el)
 }
 
 function startShellyBLEScan(){
@@ -1202,7 +1291,7 @@ function startShellyProvision(){
   document.getElementById('shelly-prov-status').style.display='block'
   document.getElementById('shelly-prov-status').textContent='Starting…'
   fetch('/api/shelly/provision',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({mac:_shellyBLEPick.mac,ssid,pass})}).catch(()=>{})
+    body:JSON.stringify({mac:_shellyBLEPick.mac,bleName:_shellyBLEPick.name,ssid,pass})}).catch(()=>{})
 }
 
 function shellyPostProvProbe(){

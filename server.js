@@ -6,6 +6,7 @@ import { createServer } from 'http'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, open as fsOpen, read as fsRead, write as fsWrite, close as fsClose } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
+import { networkInterfaces } from 'os'
 import { createBluetooth } from 'node-ble'
 import multer from 'multer'
 import { exec, execSync, spawn } from 'child_process'
@@ -2148,7 +2149,7 @@ async function doShellyBLEScan() {
 }
 
 // BLE provision: connect to unconfigured Shelly via BLE, call Wifi.SetConfig
-async function doShellyBLEProvision(mac,ssid,pass) {
+async function doShellyBLEProvision(mac,bleName,ssid,pass) {
   broadcast({type:'shelly:provision:status',msg:'Stopping scan…'})
   const adp=await getAdapter()
   while (_bleConnecting>0) await new Promise(r=>setTimeout(r,1000))
@@ -2200,9 +2201,9 @@ async function doShellyBLEProvision(mac,ssid,pass) {
     await device.disconnect().catch(()=>{})
     _bleConnecting--
     await adp.startDiscovery().catch(()=>{})
-    // Derive expected hostname from BLE device name (lowercased, no spaces)
-    const hostname=`${mac.replace(/:/g,'').toLowerCase()}.local`
-    broadcast({type:'shelly:provision:done',mac,hostname})
+    // Derive mDNS hostname from BLE device name (e.g. "Shelly1MiniG4-E4B063738B84" → "shelly1minig4-e4b063738b84.local")
+    const hostname=bleName ? `${bleName.toLowerCase()}.local` : `${mac.replace(/:/g,'').toLowerCase()}.local`
+    broadcast({type:'shelly:provision:done',mac,hostname,bleName})
   } catch(e) {
     if(_bleConnecting>0)_bleConnecting--
     console.error('[shelly-provision]',e.message)
@@ -2210,6 +2211,36 @@ async function doShellyBLEProvision(mac,ssid,pass) {
     const adp2=await getAdapter().catch(()=>null)
     if(adp2) await adp2.startDiscovery().catch(()=>{})
   }
+}
+
+// Subnet scan — probe all IPs in the /24 for Shelly devices
+async function doShellyNetworkScan() {
+  broadcast({type:'shelly:net:start'})
+  const nets=networkInterfaces()
+  let subnet=null
+  for (const iface of Object.values(nets)) {
+    for (const addr of iface) {
+      if (!addr.internal && addr.family==='IPv4') { subnet=addr.address.split('.').slice(0,3).join('.'); break }
+    }
+    if (subnet) break
+  }
+  if (!subnet) { broadcast({type:'shelly:net:done',count:0,error:'Cannot determine local subnet'}); return }
+  const ips=Array.from({length:254},(_,i)=>`${subnet}.${i+1}`)
+  let found=0
+  for (let i=0;i<ips.length;i+=20) {
+    await Promise.allSettled(ips.slice(i,i+20).map(async ip=>{
+      const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),1500)
+      try {
+        const r=await fetch(`http://${ip}/rpc/Shelly.GetDeviceInfo`,{signal:ctrl.signal})
+        if (!r.ok) return
+        const info=await r.json()
+        if (!info.model) return
+        found++
+        broadcast({type:'shelly:net:found',device:{ip,name:info.name||info.id||'Shelly',model:info.model,id:info.id}})
+      } catch {} finally { clearTimeout(t) }
+    }))
+  }
+  broadcast({type:'shelly:net:done',count:found})
 }
 
 // Probe a Shelly on the network — returns device info + component list
@@ -2298,10 +2329,14 @@ app.post('/api/shelly/ble-scan', requireAuth, (req,res) => {
   doShellyBLEScan()
 })
 app.post('/api/shelly/provision', requireAuth, (req,res) => {
-  const {mac,ssid,pass}=req.body
+  const {mac,bleName,ssid,pass}=req.body
   if (!mac||!ssid) return res.status(400).json({error:'mac and ssid required'})
   res.json({ok:true})
-  doShellyBLEProvision(mac,ssid,pass)
+  doShellyBLEProvision(mac,bleName||'',ssid,pass)
+})
+app.post('/api/shelly/network-scan', requireAuth, (req,res) => {
+  res.json({ok:true})
+  doShellyNetworkScan()
 })
 app.post('/api/shelly/probe', requireAuth, async (req,res) => {
   const {ip}=req.body

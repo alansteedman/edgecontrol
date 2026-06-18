@@ -3875,7 +3875,10 @@ async function processStaged(){
     fd.append('lowCut', String(bandLow))
     fd.append('highCut', String(bandHigh))
     const r=await fetch('/api/audio',{method:'POST',body:fd})
-    const d=await r.json()
+    if(r.status===413||(r.status>=400&&!r.headers.get('content-type')?.includes('json'))){
+      status.textContent='Error: File too large — Cloudflare limits uploads to ~100 MB when accessing remotely. Connect on the local network to upload larger files.'; return
+    }
+    const d=await r.json().catch(()=>({error:`Upload failed (HTTP ${r.status})`}))
     if(d.error){ status.textContent='Error: '+d.error; return }
     lg(`Audio "${name}" ready — ${d.frames} frames (${d.duration}s)`)
     clearStaged()

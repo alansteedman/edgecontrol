@@ -7,6 +7,7 @@ waveforms.json
 .env
 audio/
 icons/
+!public/icons/
 ecosystem.config.cjs
 package-lock.json
 pawprints_raw.py

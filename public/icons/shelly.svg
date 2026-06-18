@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Pointy-top hexagon -->
+  <polygon points="50,4 88,27 88,73 50,96 12,73 12,27" fill="#F0C040" stroke="white" stroke-width="3.5"/>
+  <!-- Up arrow (left, bigger) -->
+  <path d="M40,30 L54,52 L46,52 L46,70 L34,70 L34,52 L26,52 Z" fill="#1a1a1a"/>
+  <!-- Down arrow (right, slightly smaller, rendered on top) -->
+  <path d="M58,70 L44,48 L52,48 L52,30 L64,30 L64,48 L72,48 Z" fill="#1a1a1a"/>
+</svg>

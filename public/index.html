@@ -345,6 +345,10 @@ select.mci{cursor:pointer}
       <span class="side-icon"><img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle"></span>
       <span class="side-lbl">Lights</span>
     </button>
+    <button class="side-btn" id="nav-shelly" style="display:none" onclick="showTab('shelly',this)">
+      <span class="side-icon"><img src="/icons/shelly.svg" style="width:28px;height:28px;vertical-align:middle"></span>
+      <span class="side-lbl">Shelly</span>
+    </button>
   </div>
   <div class="sb-bottom">
     <button class="side-btn" id="nav-macros" onclick="showTab('macros',this)">
@@ -616,6 +620,12 @@ select.mci{cursor:pointer}
   <div id="tab-hue" class="tab-pane">
     <div class="scroll" style="padding:24px">
       <div id="hue-cards"></div>
+    </div>
+  </div>
+
+  <!-- Shelly tab -->
+  <div id="tab-shelly" class="tab-pane">
+    <div class="scroll" style="padding:24px">
       <div id="shelly-cards"></div>
     </div>
   </div>
@@ -1459,6 +1469,7 @@ function renderAll() {
   const hasCamera  = Object.values(S.devices).some(d=>d.type==='camera')
   const hasPawPrints = Object.values(S.devices).some(d=>d.type==='pawprints')
   const hasHue     = Object.values(S.devices).some(d=>d.type==='hue')
+  const hasShelly  = Object.values(S.devices).some(d=>d.type==='shelly')
   document.getElementById('nav-coyote').style.display = hasCoyote ? '' : 'none'
   document.getElementById('nav-eom').style.display    = hasEom    ? '' : 'none'
   document.getElementById('nav-nimble').style.display = hasNimble ? '' : 'none'
@@ -1466,6 +1477,7 @@ function renderAll() {
   document.getElementById('nav-pawprints').style.display = hasPawPrints ? '' : 'none'
   document.getElementById('nav-camera').style.display = hasCamera ? '' : 'none'
   document.getElementById('nav-hue').style.display    = hasHue    ? '' : 'none'
+  document.getElementById('nav-shelly').style.display = hasShelly  ? '' : 'none'
   document.getElementById('nav-config').style.display = S.role==='admin' ? '' : 'none'
   renderDevList()
   renderCoyoteCards()

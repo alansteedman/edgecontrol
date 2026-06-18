@@ -1,7 +1,7 @@
 import express from 'express'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { StreamDeckController } from './streamdeck.js'
-import { WebSocketServer } from 'ws'
+import { WebSocket, WebSocketServer } from 'ws'
 import { createServer } from 'http'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, open as fsOpen, read as fsRead, write as fsWrite, close as fsClose } from 'fs'
 import { fileURLToPath } from 'url'
@@ -1570,6 +1570,7 @@ function createDevice(cfg) {
   if (cfg.type==='estim')  return new EstimDevice(cfg.id,cfg.name,cfg.ttyPath)
   if (cfg.type==='camera') return new CameraDevice(cfg.id,cfg.name,cfg.ip,cfg.username,cfg.password,cfg.streamPath,cfg.hasPTZ,cfg.ptzProfileToken,cfg.ptzServiceUrl)
   if (cfg.type==='hue')    return new HueBridge(cfg.id,cfg.name,cfg.ip,cfg.token,cfg.selectedLights,cfg.selectedGroups,cfg.selectedScenes)
+  if (cfg.type==='shelly') return new ShellyDevice(cfg.id,cfg.name,cfg.ip,cfg.password||'')
   throw new Error(`Unknown type: ${cfg.type}`)
 }
 for (const d of config.devices) {
@@ -1578,6 +1579,7 @@ for (const d of config.devices) {
     devices[d.id] = dev
     if (dev.type === 'coyote') setTimeout(() => dev.connect().catch(() => {}), 3000)
     if (dev.type === 'hue' && dev.token) setTimeout(() => dev.connect().catch(() => {}), 3000)
+    if (dev.type === 'shelly') setTimeout(() => dev.connect(), 3000)
   } catch {}
 }
 // Always rebuild go2rtc config on startup so it stays in sync with saved cameras
@@ -1923,6 +1925,13 @@ wss.on('connection', (ws, request) => {
           }
         }
       }
+      if (msg.type==='shelly:set') {
+        const dev=devices[msg.deviceId]
+        if (dev?.type==='shelly') {
+          const {component,idx,params}=msg
+          dev.rpc(component==='switch'?'Switch.Set':'Light.Set',{id:idx,...params}).catch(e=>console.error(`[${msg.deviceId}] shelly:set:`,e.message))
+        }
+      }
       if (msg.type==='group:setEnabled') {
         const grp=(config.groups||[]).find(g=>g.id===msg.groupId)
         if(grp) { grp.enabled=msg.enabled; saveConfig(config); broadcast({type:'group:updated',group:grp}) }
@@ -2018,6 +2027,205 @@ app.post('/api/devices/:id/disconnect', async (req,res) => {
   try{await dev.disconnect();res.json({ok:true})}catch(e){res.status(500).json({error:e.message})}
 })
 
+// ── Shelly device ─────────────────────────────────────────────────────────────
+const SHELLY_RPC_SVC  = '5f6d4f53-5f52-5043-5f53-56435f49445f'
+const SHELLY_DATA_CHR = '5f6d4f53-5f52-5043-5f64-6174615f5f5f'
+const SHELLY_RX_CHR   = '5f6d4f53-5f52-5043-5f72-785f63746c5f'
+const SHELLY_TX_CHR   = '5f6d4f53-5f52-5043-5f74-785f63746c5f'
+
+class ShellyDevice {
+  constructor(id, name, ip, password='') {
+    this.id=id; this.name=name; this.type='shelly'; this.ip=ip; this.password=password
+    this.status='disconnected'; this.components={}
+    this._ws=null; this._rpcId=1; this._pending={}; this._reconnectTimer=null
+  }
+
+  connect() {
+    this._clearReconnect()
+    try {
+      const ws = new WebSocket(`ws://${this.ip}/rpc`)
+      this._ws = ws
+      ws.on('open',    ()  => this._onOpen())
+      ws.on('message', d   => this._onMsg(d.toString()))
+      ws.on('close',   ()  => this._onClose())
+      ws.on('error',   e   => { console.error(`[${this.id}] WS:`,e.message); try{ws.terminate()}catch{} })
+    } catch(e) { console.error(`[${this.id}] connect:`,e.message); this._scheduleReconnect() }
+  }
+
+  async _onOpen() {
+    this.status='connected'
+    broadcast({type:'device:status',id:this.id,status:'connected'})
+    try {
+      const res = await this.rpc('Shelly.GetComponents',{dynamic_only:false})
+      this.components={}
+      for (const c of res?.components||[]) this.components[c.key]=c.status||{}
+      broadcast({type:'device:state',id:this.id,components:this.components})
+    } catch(e) { console.error(`[${this.id}] init:`,e.message) }
+  }
+
+  _onMsg(raw) {
+    try {
+      const m=JSON.parse(raw)
+      if (m.id!=null && this._pending[m.id]) {
+        const {resolve,reject}=this._pending[m.id]; delete this._pending[m.id]
+        m.error ? reject(new Error(m.error.message||JSON.stringify(m.error))) : resolve(m.result)
+        return
+      }
+      if (m.method==='NotifyStatus') {
+        for (const [k,v] of Object.entries(m.params||{})) {
+          if (k==='ts') continue
+          this.components[k]={...(this.components[k]||{}), ...v}
+        }
+        broadcast({type:'shelly:status',id:this.id,params:m.params})
+      }
+      if (m.method==='NotifyEvent') broadcast({type:'shelly:event',id:this.id,params:m.params})
+    } catch {}
+  }
+
+  _onClose() {
+    this.status='disconnected'
+    broadcast({type:'device:status',id:this.id,status:'disconnected'})
+    this._scheduleReconnect()
+  }
+
+  rpc(method,params={}) {
+    return new Promise((resolve,reject) => {
+      if (!this._ws||this._ws.readyState!==1) return reject(new Error('Not connected'))
+      const id=this._rpcId++
+      const t=setTimeout(()=>{ delete this._pending[id]; reject(new Error('timeout')) },8000)
+      this._pending[id]={ resolve:v=>{clearTimeout(t);resolve(v)}, reject:e=>{clearTimeout(t);reject(e)} }
+      this._ws.send(JSON.stringify({id,src:'edgecontroller',method,params}))
+    })
+  }
+
+  disconnect() {
+    this._clearReconnect()
+    try{this._ws?.terminate()}catch{}
+    this._ws=null; this.status='disconnected'
+  }
+
+  _scheduleReconnect() { this._clearReconnect(); this._reconnectTimer=setTimeout(()=>this.connect(),10000) }
+  _clearReconnect() { if(this._reconnectTimer){clearTimeout(this._reconnectTimer);this._reconnectTimer=null} }
+
+  toJSON() {
+    return {id:this.id,type:'shelly',name:this.name,ip:this.ip,status:this.status,components:this.components}
+  }
+}
+
+// BLE scan for unconfigured Shellys
+let _shellyBLEScanActive=false
+async function doShellyBLEScan() {
+  if (_shellyBLEScanActive) return
+  _shellyBLEScanActive=true
+  const found=new Map()
+  broadcast({type:'shelly:ble:start'})
+  try {
+    const adp=await getAdapter()
+    while (_bleConnecting>0) await new Promise(r=>setTimeout(r,1000))
+    if (!await adp.isDiscovering()) await adp.startDiscovery()
+    const end=Date.now()+8000
+    while (Date.now()<end) {
+      try {
+        const addrs=await adp.devices()
+        for (const addr of addrs) {
+          if (found.has(addr)) continue
+          try {
+            const {name}=await getCachedDevice(adp,addr)
+            if (name&&name.toLowerCase().startsWith('shelly')) {
+              const alreadyAdded=Object.values(devices).some(d=>d.type==='shelly'&&d.ip&&d._mac===addr.toLowerCase())
+              const result={mac:addr,name,alreadyAdded}
+              found.set(addr,result)
+              broadcast({type:'shelly:ble:found',device:result})
+            }
+          } catch {}
+        }
+      } catch {}
+      await new Promise(r=>setTimeout(r,600))
+    }
+  } catch(e) { console.error('[shelly-ble-scan]',e.message) }
+  _shellyBLEScanActive=false
+  broadcast({type:'shelly:ble:done',count:found.size})
+}
+
+// BLE provision: connect to unconfigured Shelly via BLE, call Wifi.SetConfig
+async function doShellyBLEProvision(mac,ssid,pass) {
+  broadcast({type:'shelly:provision:status',msg:'Stopping scan…'})
+  const adp=await getAdapter()
+  while (_bleConnecting>0) await new Promise(r=>setTimeout(r,1000))
+  for (let i=0;i<8;i++) {
+    await adp.stopDiscovery().catch(()=>{})
+    await new Promise(r=>setTimeout(r,400))
+    try { if (!await adp.isDiscovering()) break } catch {}
+  }
+  await new Promise(r=>setTimeout(r,2000))
+  _bleConnecting++
+  try {
+    broadcast({type:'shelly:provision:status',msg:'Connecting over BLE…'})
+    let device
+    try { device=await adp.getDevice(mac) } catch {
+      await adp.startDiscovery(); await new Promise(r=>setTimeout(r,5000))
+      await adp.stopDiscovery().catch(()=>{}); await new Promise(r=>setTimeout(r,2000))
+      device=await adp.getDevice(mac)
+    }
+    await Promise.race([device.connect(), new Promise((_,rej)=>setTimeout(()=>rej(new Error('connect timeout')),20000))])
+    const gatt=await Promise.race([device.gatt(), new Promise((_,rej)=>setTimeout(()=>rej(new Error('GATT timeout')),15000))])
+    const svc     =await gatt.getPrimaryService(SHELLY_RPC_SVC)
+    const dataChr =await svc.getCharacteristic(SHELLY_DATA_CHR)
+    const rxChr   =await svc.getCharacteristic(SHELLY_RX_CHR)
+    const txChr   =await svc.getCharacteristic(SHELLY_TX_CHR)
+    await rxChr.startNotifications()
+
+    const bleRpc=(method,params={})=>new Promise((resolve,reject)=>{
+      const msg=JSON.stringify({id:1,src:'edgecontroller',method,params})
+      const buf=Buffer.from(msg)
+      const lenBuf=Buffer.alloc(4); lenBuf.writeUInt32BE(buf.length,0)
+      const t=setTimeout(()=>reject(new Error('BLE RPC timeout')),12000)
+      rxChr.once('valuechanged',async()=>{
+        try {
+          clearTimeout(t)
+          const rb=await dataChr.readValue()
+          const resp=JSON.parse(Buffer.from(rb).toString())
+          resp.error?reject(new Error(resp.error.message||JSON.stringify(resp.error))):resolve(resp.result)
+        } catch(e){clearTimeout(t);reject(e)}
+      })
+      txChr.writeValue(lenBuf,{type:'command'})
+        .then(()=>dataChr.writeValue(buf,{type:'command'}))
+        .catch(e=>{clearTimeout(t);reject(e)})
+    })
+
+    broadcast({type:'shelly:provision:status',msg:'Configuring WiFi…'})
+    await bleRpc('Wifi.SetConfig',{config:{sta:{ssid,pass,enable:true}}})
+    broadcast({type:'shelly:provision:status',msg:'Rebooting device…'})
+    await bleRpc('Shelly.Reboot',{delay_ms:500}).catch(()=>{})
+    await device.disconnect().catch(()=>{})
+    _bleConnecting--
+    await adp.startDiscovery().catch(()=>{})
+    // Derive expected hostname from BLE device name (lowercased, no spaces)
+    const hostname=`${mac.replace(/:/g,'').toLowerCase()}.local`
+    broadcast({type:'shelly:provision:done',mac,hostname})
+  } catch(e) {
+    if(_bleConnecting>0)_bleConnecting--
+    console.error('[shelly-provision]',e.message)
+    broadcast({type:'shelly:provision:error',error:e.message})
+    const adp2=await getAdapter().catch(()=>null)
+    if(adp2) await adp2.startDiscovery().catch(()=>{})
+  }
+}
+
+// Probe a Shelly on the network — returns device info + component list
+async function doShellyProbe(ip) {
+  const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),6000)
+  try {
+    const r1=await fetch(`http://${ip}/rpc/Shelly.GetDeviceInfo`,{signal:ctrl.signal})
+    if(!r1.ok) throw new Error(`HTTP ${r1.status}`)
+    const info=await r1.json()
+    const r2=await fetch(`http://${ip}/rpc/Shelly.GetComponents?dynamic_only=false`,{signal:ctrl.signal})
+    const comps=await r2.json()
+    clearTimeout(t)
+    return {info,components:comps.components||[]}
+  } finally { clearTimeout(t) }
+}
+
 // ── ONVIF camera scan ─────────────────────────────────────────────────────────
 async function getOnvifDeviceInfo(xaddr) {
   const soap = `<?xml version="1.0" encoding="UTF-8"?>
@@ -2084,6 +2292,23 @@ async function doOnvifScan(broadcast) {
   sock.close()
   broadcast({ type:'camera:scan:done', count: seen.size })
 }
+
+app.post('/api/shelly/ble-scan', requireAuth, (req,res) => {
+  res.json({ok:true})
+  doShellyBLEScan()
+})
+app.post('/api/shelly/provision', requireAuth, (req,res) => {
+  const {mac,ssid,pass}=req.body
+  if (!mac||!ssid) return res.status(400).json({error:'mac and ssid required'})
+  res.json({ok:true})
+  doShellyBLEProvision(mac,ssid,pass)
+})
+app.post('/api/shelly/probe', requireAuth, async (req,res) => {
+  const {ip}=req.body
+  if (!ip) return res.status(400).json({error:'ip required'})
+  try { res.json(await doShellyProbe(ip)) }
+  catch(e) { res.status(500).json({error:e.message}) }
+})
 
 app.post('/api/cameras/scan', requireAuth, (req, res) => {
   res.json({ ok: true })

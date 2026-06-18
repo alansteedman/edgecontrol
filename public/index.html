@@ -616,6 +616,7 @@ select.mci{cursor:pointer}
   <div id="tab-hue" class="tab-pane">
     <div class="scroll" style="padding:24px">
       <div id="hue-cards"></div>
+      <div id="shelly-cards"></div>
     </div>
   </div>
 
@@ -749,6 +750,62 @@ select.mci{cursor:pointer}
     <div id="step-type">
       <div style="font-size:11px;color:#555;margin-bottom:10px">Select device type</div>
       <div id="type-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px"></div>
+    </div>
+    <!-- Step: Shelly -->
+    <div id="step-shelly" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <button class="btn btn-ghost btn-xs" onclick="showTypeStep()">← Back</button>
+        <span style="font-size:13px;font-weight:600">🔌 Shelly</span>
+      </div>
+      <!-- Path selector -->
+      <div id="shelly-path" style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn btn-primary btn-sm" style="width:100%;height:auto;padding:12px;flex-direction:column;align-items:flex-start" onclick="showShellyBLE()">
+          <div>🔵 New device — BLE setup</div>
+          <div style="font-size:10px;font-weight:400;color:#b0c4d8;margin-top:3px">Brand new Shelly in setup mode</div>
+        </button>
+        <button class="btn btn-outline btn-sm" style="width:100%;height:auto;padding:12px;flex-direction:column;align-items:flex-start" onclick="showShellyNet()">
+          <div>📡 Already on network</div>
+          <div style="font-size:10px;font-weight:400;color:#666;margin-top:3px">Device already connected to WiFi</div>
+        </button>
+      </div>
+      <!-- BLE provisioning path -->
+      <div id="shelly-ble-phase" style="display:none;flex-direction:column;gap:0">
+        <button class="btn btn-ghost btn-xs" style="margin-bottom:10px;align-self:flex-start" onclick="showShellyPath()">← Back</button>
+        <div id="shelly-ble-status" style="font-size:11px;color:#555;margin-bottom:8px">Press scan to find nearby Shelly devices in setup mode</div>
+        <button id="shelly-ble-btn" class="btn btn-primary btn-sm" style="width:100%;margin-bottom:10px" onclick="startShellyBLEScan()">🔍 Scan Bluetooth</button>
+        <div id="shelly-ble-results" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
+        <div id="shelly-wifi-form" style="display:none;flex-direction:column;gap:8px">
+          <div>
+            <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">WiFi Network (SSID)</label>
+            <input id="shelly-ssid" type="text" placeholder="Your WiFi name" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">WiFi Password</label>
+            <input id="shelly-wifipass" type="password" placeholder="Password" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+          </div>
+          <button class="btn btn-primary btn-sm" style="width:100%" onclick="startShellyProvision()">Configure WiFi →</button>
+        </div>
+        <div id="shelly-prov-status" style="display:none;font-size:11px;color:#4fc3f7;text-align:center;padding:8px"></div>
+        <div id="shelly-post-prov" style="display:none"></div>
+      </div>
+      <!-- Network path -->
+      <div id="shelly-net-phase" style="display:none;flex-direction:column;gap:8px">
+        <button class="btn btn-ghost btn-xs" style="align-self:flex-start" onclick="showShellyPath()">← Back</button>
+        <div>
+          <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">IP Address or Hostname</label>
+          <input id="shelly-net-ip" type="text" placeholder="192.168.1.x or shelly1minig4-xxxx.local" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+        </div>
+        <button id="shelly-net-btn" class="btn btn-primary btn-sm" style="width:100%" onclick="probeShellyDevice()">Connect →</button>
+        <div id="shelly-net-status" style="font-size:11px;color:#f87171"></div>
+        <div id="shelly-net-found" style="display:none;flex-direction:column;gap:8px">
+          <div id="shelly-net-info" style="font-size:11px;color:#4fc3f7;background:#0a1a2a;padding:8px;border-radius:6px;border:1px solid #1a3a5a"></div>
+          <div>
+            <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Display Name</label>
+            <input id="shelly-net-name" type="text" placeholder="e.g. Living Room Switch" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+          </div>
+          <button class="btn btn-primary btn-sm" style="width:100%" onclick="addShellyDevice()">Add Shelly</button>
+        </div>
+      </div>
     </div>
     <!-- Step 2: BLE scan (Coyote) -->
     <div id="step-ble" style="display:none">
@@ -928,6 +985,7 @@ function handle(m) {
     case 'device:state':
       if(S.devices[m.id]){
         if(m.channels) S.devices[m.id].channels=m.channels
+        if(m.components!==undefined) { S.devices[m.id].components=m.components; renderShellyCards() }
         if(m.motorSpeed!==undefined) S.devices[m.id].motorSpeed=m.motorSpeed
         if(m.mode!==undefined) S.devices[m.id].mode=m.mode
         // Nimble state sync
@@ -1018,6 +1076,37 @@ function handle(m) {
     case 'camera:scan:done':
       document.getElementById('cam-scan-status').textContent=m.count?`Found ${m.count} camera(s) — click to pre-fill`:'No cameras found'
       document.getElementById('cam-scan-btn').disabled=false; break
+    case 'shelly:ble:start':
+      document.getElementById('shelly-ble-btn').disabled=true
+      document.getElementById('shelly-ble-status').textContent='Scanning…'
+      document.getElementById('shelly-ble-results').innerHTML=''; break
+    case 'shelly:ble:found': addShellyBLEResult(m.device); break
+    case 'shelly:ble:done':
+      document.getElementById('shelly-ble-btn').disabled=false
+      document.getElementById('shelly-ble-status').textContent=m.count?`Found ${m.count} — click to select`:'No Shelly devices found in setup mode'; break
+    case 'shelly:provision:status': {
+      const el=document.getElementById('shelly-prov-status')
+      if(el){el.style.display='block';el.style.color='#4fc3f7';el.textContent=m.msg}; break }
+    case 'shelly:provision:done': {
+      const el=document.getElementById('shelly-prov-status')
+      if(el){el.style.color='#4ade80';el.textContent='✓ WiFi configured — device rebooting'}
+      const pp=document.getElementById('shelly-post-prov')
+      if(pp){pp.style.display='block';pp.innerHTML=`<div style="font-size:11px;color:#555;margin-bottom:6px">Enter the IP once the device appears on your network:</div><input id="shelly-post-ip" type="text" placeholder="${m.hostname||'192.168.1.x'}" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px;margin-bottom:8px"/><button class="btn btn-primary btn-sm" style="width:100%" onclick="shellyPostProvProbe()">Add Device →</button>`}; break }
+    case 'shelly:provision:error': {
+      const el=document.getElementById('shelly-prov-status')
+      if(el){el.style.color='#f87171';el.textContent='✗ '+m.error}
+      document.getElementById('shelly-wifi-form').style.display='flex'; break }
+    case 'shelly:status':
+      if(S.devices[m.id]){
+        for(const [k,v] of Object.entries(m.params||{})){
+          if(k==='ts') continue
+          S.devices[m.id].components=S.devices[m.id].components||{}
+          S.devices[m.id].components[k]={...(S.devices[m.id].components[k]||{}),...v}
+        }
+        updateShellyCard(m.id,m.params)
+      }; break
+    case 'shelly:event':
+      if(S.devices[m.id]) { /* future: macro triggers */ }; break
     case 'hue:inventory':
       if(S.devices[m.id]){
         S.devices[m.id].lights=m.lights
@@ -1062,6 +1151,217 @@ function showSub(name,btn) {
 }
 
 // ── Render all ────────────────────────────────────────────────────────────────
+// ── Shelly ────────────────────────────────────────────────────────────────────
+let _shellyBLEPick=null, _shellyNetProbed=null
+
+function showShellyPath(){
+  document.getElementById('shelly-path').style.display='flex'
+  document.getElementById('shelly-ble-phase').style.display='none'
+  document.getElementById('shelly-net-phase').style.display='none'
+}
+function showShellyBLE(){
+  document.getElementById('shelly-path').style.display='none'
+  document.getElementById('shelly-ble-phase').style.display='flex'
+}
+function showShellyNet(){
+  document.getElementById('shelly-path').style.display='none'
+  document.getElementById('shelly-net-phase').style.display='flex'
+  document.getElementById('shelly-net-found').style.display='none'
+  document.getElementById('shelly-net-status').textContent=''
+}
+
+function startShellyBLEScan(){
+  _shellyBLEPick=null
+  document.getElementById('shelly-ble-results').innerHTML=''
+  document.getElementById('shelly-wifi-form').style.display='none'
+  document.getElementById('shelly-prov-status').style.display='none'
+  document.getElementById('shelly-post-prov').style.display='none'
+  fetch('/api/shelly/ble-scan',{method:'POST'}).catch(()=>{})
+}
+
+function addShellyBLEResult(dev){
+  const el=document.createElement('button')
+  el.className='btn btn-ghost btn-xs'
+  el.style.cssText='width:100%;text-align:left;display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #2a2a2a;border-radius:7px'
+  el.innerHTML=`<span style="font-size:16px">🔵</span><span><strong style="color:#e0e0e0;font-size:12px">${dev.name}</strong><br><span style="color:#555;font-size:10px">${dev.mac}</span></span>`
+  el.onclick=()=>{
+    document.querySelectorAll('#shelly-ble-results button').forEach(b=>b.style.borderColor='#2a2a2a')
+    el.style.borderColor='#4fc3f7'
+    _shellyBLEPick=dev
+    document.getElementById('shelly-wifi-form').style.display='flex'
+  }
+  document.getElementById('shelly-ble-results').appendChild(el)
+}
+
+function startShellyProvision(){
+  if(!_shellyBLEPick) return
+  const ssid=document.getElementById('shelly-ssid').value.trim()
+  const pass=document.getElementById('shelly-wifipass').value
+  if(!ssid) return alert('Enter your WiFi network name')
+  document.getElementById('shelly-wifi-form').style.display='none'
+  document.getElementById('shelly-prov-status').style.display='block'
+  document.getElementById('shelly-prov-status').textContent='Starting…'
+  fetch('/api/shelly/provision',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mac:_shellyBLEPick.mac,ssid,pass})}).catch(()=>{})
+}
+
+function shellyPostProvProbe(){
+  const ip=document.getElementById('shelly-post-ip')?.value?.trim()
+  if(!ip) return
+  document.getElementById('shelly-net-ip').value=ip
+  showShellyNet()
+  probeShellyDevice()
+}
+
+async function probeShellyDevice(){
+  const ip=document.getElementById('shelly-net-ip').value.trim()
+  if(!ip) return
+  const btn=document.getElementById('shelly-net-btn')
+  btn.disabled=true; btn.textContent='Connecting…'
+  document.getElementById('shelly-net-status').textContent=''
+  document.getElementById('shelly-net-found').style.display='none'
+  try {
+    const r=await fetch('/api/shelly/probe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip})})
+    const data=await r.json()
+    if(!r.ok) throw new Error(data.error)
+    _shellyNetProbed={ip,...data}
+    const switchCount=(data.components||[]).filter(c=>c.key.startsWith('switch')).length
+    const lightCount=(data.components||[]).filter(c=>c.key.startsWith('light')).length
+    const inputCount=(data.components||[]).filter(c=>c.key.startsWith('input')).length
+    const parts=[]
+    if(switchCount) parts.push(`${switchCount} switch${switchCount>1?'es':''}`)
+    if(lightCount)  parts.push(`${lightCount} dimmer${lightCount>1?'s':''}`)
+    if(inputCount)  parts.push(`${inputCount} input${inputCount>1?'s':''}`)
+    document.getElementById('shelly-net-info').innerHTML=`<strong>${data.info?.name||'Shelly'}</strong> · ${data.info?.model||''}<br><span style="color:#888">${parts.join(', ')||'No controllable components'}</span>`
+    document.getElementById('shelly-net-name').value=data.info?.name||'Shelly'
+    document.getElementById('shelly-net-found').style.display='flex'
+  } catch(e) {
+    document.getElementById('shelly-net-status').textContent='Error: '+e.message
+  }
+  btn.disabled=false; btn.textContent='Connect →'
+}
+
+async function addShellyDevice(){
+  if(!_shellyNetProbed) return
+  const name=document.getElementById('shelly-net-name').value.trim()||'Shelly'
+  try {
+    const r=await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type:'shelly',name,ip:_shellyNetProbed.ip})})
+    const data=await r.json()
+    if(!r.ok) throw new Error(data.error)
+    closeScan()
+  } catch(e){alert('Add failed: '+e.message)}
+}
+
+function shellyComponentLabel(key){
+  const [type,idx]=key.split(':')
+  const num=parseInt(idx)
+  if(type==='switch') return num===0?'Switch':'Switch '+(num+1)
+  if(type==='light')  return num===0?'Dimmer':'Dimmer '+(num+1)
+  if(type==='input')  return num===0?'Input' :'Input ' +(num+1)
+  return key
+}
+
+function renderShellyCards(){
+  const el=document.getElementById('shelly-cards'); if(!el) return
+  const devs=Object.values(S.devices).filter(d=>d.type==='shelly')
+  if(!devs.length){el.innerHTML='';return}
+  el.innerHTML=devs.map(dev=>{
+    const statusColor=dev.status==='connected'?'#4ade80':dev.status==='connecting'?'#facc15':'#555'
+    const comps=dev.components||{}
+    const compHtml=Object.entries(comps).map(([key,state])=>{
+      const [type,idx]=key.split(':'); const i=parseInt(idx)
+      const label=shellyComponentLabel(key)
+      if(type==='switch'){
+        const on=state.output===true
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid #1a1a1a">
+          <span style="font-size:12px;color:#aaa">${label}</span>
+          <button class="btn btn-sm ${on?'btn-primary':'btn-outline'}" onclick="shellyToggleSwitch('${dev.id}',${i},${!on})" style="min-width:60px">${on?'ON':'OFF'}</button>
+        </div>`
+      }
+      if(type==='light'){
+        const on=state.output===true||state.ison===true
+        const brightness=state.brightness??state.level??0
+        return `<div style="padding:8px 0;border-top:1px solid #1a1a1a">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:12px;color:#aaa">${label}</span>
+            <button class="btn btn-sm ${on?'btn-primary':'btn-outline'}" onclick="shellyToggleLight('${dev.id}',${i},${!on})" style="min-width:60px">${on?'ON':'OFF'}</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:10px;color:#555;width:22px;text-align:right">${brightness}%</span>
+            <input type="range" min="0" max="100" value="${brightness}" style="flex:1;accent-color:#4fc3f7"
+              oninput="this.previousElementSibling.textContent=this.value+'%'"
+              onchange="shellySetBrightness('${dev.id}',${i},+this.value)"/>
+          </div>
+        </div>`
+      }
+      if(type==='input'){
+        const active=state.state===true||state.percent>0
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid #1a1a1a">
+          <span style="font-size:12px;color:#aaa">${label}</span>
+          <span id="shelly-input-${dev.id}-${i}" style="font-size:11px;font-weight:700;color:${active?'#4ade80':'#333'}">${active?'ACTIVE':'IDLE'}</span>
+        </div>`
+      }
+      return ''
+    }).join('')
+    return `<div class="device-card" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:16px">🔌</span>
+          <div>
+            <div style="font-size:13px;font-weight:600">${dev.name}</div>
+            <div style="font-size:10px;color:#555">${dev.ip}</div>
+          </div>
+        </div>
+        <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};display:inline-block"></span>
+      </div>
+      ${compHtml||'<div style="font-size:11px;color:#333;text-align:center;padding:10px">No components</div>'}
+    </div>`
+  }).join('')
+}
+
+function updateShellyCard(id,params){
+  const dev=S.devices[id]; if(!dev) return
+  for(const [key,state] of Object.entries(params||{})){
+    if(key==='ts') continue
+    const [type,idx]=key.split(':'); const i=parseInt(idx)
+    if(type==='switch'){
+      const btn=document.querySelector(`[onclick="shellyToggleSwitch('${id}',${i},${!state.output})"]`)
+      if(btn){ btn.textContent=state.output?'ON':'OFF'; btn.className=`btn btn-sm ${state.output?'btn-primary':'btn-outline'}` }
+    }
+    if(type==='light'){
+      const btn=document.querySelector(`[onclick="shellyToggleLight('${id}',${i},${!( state.output===true||state.ison===true )})"]`)
+      const on=state.output===true||state.ison===true
+      if(btn){ btn.textContent=on?'ON':'OFF'; btn.className=`btn btn-sm ${on?'btn-primary':'btn-outline'}` }
+      if(state.brightness!=null||state.level!=null){
+        const b=state.brightness??state.level
+        const sl=document.querySelector(`#shelly-cards input[type=range][onchange*="${id},${i}"]`)
+        if(sl) sl.value=b
+      }
+    }
+    if(type==='input'){
+      const el=document.getElementById(`shelly-input-${id}-${i}`)
+      const active=state.state===true||state.percent>0
+      if(el){ el.textContent=active?'ACTIVE':'IDLE'; el.style.color=active?'#4ade80':'#333' }
+    }
+  }
+}
+
+function shellyToggleSwitch(devId,idx,on){
+  send({type:'shelly:set',deviceId:devId,component:'switch',idx,params:{on}})
+  const dev=S.devices[devId]; if(dev?.components?.[`switch:${idx}`]) dev.components[`switch:${idx}`].output=on
+  renderShellyCards()
+}
+function shellyToggleLight(devId,idx,on){
+  send({type:'shelly:set',deviceId:devId,component:'light',idx,params:{on}})
+  const dev=S.devices[devId]; if(dev?.components?.[`light:${idx}`]) { dev.components[`light:${idx}`].output=on; dev.components[`light:${idx}`].ison=on }
+  renderShellyCards()
+}
+function shellySetBrightness(devId,idx,brightness){
+  send({type:'shelly:set',deviceId:devId,component:'light',idx,params:{brightness}})
+  const dev=S.devices[devId]; if(dev?.components?.[`light:${idx}`]) dev.components[`light:${idx}`].brightness=brightness
+}
+
 function renderAll() {
   const hasCoyote  = Object.values(S.devices).some(d=>d.type==='coyote')
   const hasEom     = Object.values(S.devices).some(d=>d.type==='eom')
@@ -1089,6 +1389,7 @@ function renderAll() {
   renderAudioList()
   renderCameraCards()
   renderHueCards()
+  renderShellyCards()
 }
 
 function eomUpdateReadings(id, r) {
@@ -3720,6 +4021,7 @@ const DEVICE_TYPES = [
   {type:'camera',    icon:'📷', label:'IP Camera',    sub:'RTSP / ONVIF',step:'camera'},
   {type:'pawprints', icon:'🐾', label:'PawPrints',    sub:'BLE sensor',  step:'ble'},
   {type:'hue',       icon:'<img src="/hue-logo.svg" style="width:32px;height:18px;vertical-align:middle">', label:'Philips Hue',  sub:'WiFi bridge', step:'hue'},
+  {type:'shelly',    icon:'🔌', label:'Shelly',       sub:'WiFi relay/dimmer', step:'shelly'},
 ]
 function openScan(){
   document.getElementById('scan-overlay').classList.add('open')
@@ -3738,7 +4040,7 @@ function openScan(){
   })
 }
 function selectDeviceType(dt){
-  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-usb,#step-camera,#step-hue').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-usb,#step-camera,#step-hue,#step-shelly').forEach(el=>el.style.display='none')
   if(dt.step==='camera'){
     document.getElementById('step-camera').style.display='block'
     document.getElementById('cam-name').value=''
@@ -3754,6 +4056,11 @@ function selectDeviceType(dt){
     document.getElementById('add-row').style.display='none'
   } else if(dt.step==='wifi'){
     document.getElementById('step-wifi').style.display='block'
+  } else if(dt.step==='shelly'){
+    document.getElementById('step-shelly').style.display='block'
+    document.getElementById('shelly-path').style.display='flex'
+    document.getElementById('shelly-ble-phase').style.display='none'
+    document.getElementById('shelly-net-phase').style.display='none'
   } else if(dt.step==='hue'){
     document.getElementById('step-hue').style.display='block'
     document.getElementById('hue-name').value=''
@@ -3771,7 +4078,7 @@ function selectDeviceType(dt){
   }
 }
 function showTypeStep(){
-  document.querySelectorAll('#step-ble,#step-wifi,#step-usb,#step-camera,#step-hue').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-ble,#step-wifi,#step-usb,#step-camera,#step-hue,#step-shelly').forEach(el=>el.style.display='none')
   document.getElementById('step-type').style.display='block'
 }
 function closeScan(){ document.getElementById('scan-overlay').classList.remove('open') }

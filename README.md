@@ -22,6 +22,7 @@ A self-hosted BLE and USB device controller that runs on a Raspberry Pi 5. Provi
 | EOM | Arousal sensor | Network |
 | IP Camera | Video | Network |
 | Philips Hue | Smart lighting | Network (local bridge) |
+| Shelly Gen 3/4 | Relay / dimmer | Network (WiFi) + BLE provisioning |
 
 ## Macro Blocks
 
@@ -30,6 +31,8 @@ The visual macro editor supports the following block types:
 **Control** — Start, End, Stop All, Run Macro
 
 **Timing** — Delay, Ramp (smooth intensity transition over time), Set Hue (activate a scene or room at a set brightness), Hue Ramp (smoothly ramp scene or room brightness from x% to y% over time)
+
+**I/O** — Switch (toggle Shelly relay on/off), Light (toggle Shelly dimmer on/off)
 
 **Triggers** — Wait: EOM (pause until arousal threshold), Wait: Manual (pause until user clicks continue), Wait: Paw (pause until PawPrints button press or tilt angle)
 
@@ -64,6 +67,7 @@ If you need to connect the Pi to WiFi after a fresh install, the device will bro
 
 ## Versions
 
+- **v2.0.4** — Shelly Gen 3/4 relay/dimmer support: BLE provisioning flow (auto-scans and connects after provision), network scan to add devices already on WiFi, real-time WebSocket status and component state, I/O tab in web UI with per-device component cards; StreamDeck+ I/O page with one button per switch/light component, amber theme, toggle on/off with colour feedback
 - **v2.0.3** — per-channel independent playback controls (⏮/⏸/▶ on A and B operate independently); audio sync playback (🔇/🔊 toggle plays source MP3 through browser in sync with BLE output, per channel and per group); waveform sync (Sync button links any combination of channels/groups — waveform changes and play/pause/back propagate in real time); audio edit workflow (Edit button on processed audio reloads original MP3 into staging with previous filter settings restored, no re-upload needed)
 - **v2.0.2** — IP camera: ONVIF WS-Discovery scan, stream/profile selection, PTZ controls (D-pad, hold to move), audio via ffmpeg OPUS transcoding, PTZ in popout window; audio waveform playback (▶/⏸), synthesised preview (⚡), animated playhead, base frequency slider per audio file; scrolling waveform visualisation for channels and groups (tick-synced to BLE output, fixed builtin waveform seam), ⏮/⏸/▶ playback controls per channel and group, group enable/disable toggle (releases channels for individual control without deleting the group)
 - **v2.0.1** — Philips Hue integration: scenes and rooms on Stream Deck LCD with brightness knobs, active scene tracking (per-group), Set Hue and Hue Ramp macro blocks with live ramp display on Stream Deck, macro monitor view support for Hue blocks

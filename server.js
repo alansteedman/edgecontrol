@@ -3149,6 +3149,30 @@ app.get('/api/audio', (req,res) => {
   })))
 })
 
+app.post('/api/audio/import', (req, res, next) => audioUpload.single('file')(req, res, (err) => {
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({error:'File too large'})
+  if (err) return res.status(400).json({error: err.message})
+  next()
+}), async (req, res) => {
+  if (!req.file) return res.status(400).json({error:'No file uploaded'})
+  const { name, frames: framesJson, baseFreq, lowCut, highCut } = req.body
+  if (!name?.trim()) return res.status(400).json({error:'Name required'})
+  let frames
+  try { frames = JSON.parse(framesJson) } catch { return res.status(400).json({error:'Invalid frames JSON'}) }
+  if (!Array.isArray(frames) || !frames.length) return res.status(400).json({error:'No frames data'})
+  const wfId = 'audio-' + req.file.filename
+  const wf = {
+    id: wfId, name: name.trim(), type: 'audio',
+    sourceFile: req.file.filename, originalName: req.file.originalname,
+    lowCut: parseInt(lowCut)||20, highCut: parseInt(highCut)||20000,
+    baseFreq: Math.max(10, Math.min(100, parseInt(baseFreq)||25)),
+    frames, importedFrom: 'community'
+  }
+  waveformStore.custom.push(wf); saveWaveforms()
+  broadcast({type:'waveforms:updated', waveforms:waveformsMeta()})
+  res.json({id:wfId, name:wf.name, frames:frames.length, duration:Math.round(frames.length/10)})
+})
+
 app.post('/api/audio', (req, res, next) => audioUpload.single('file')(req, res, (err) => {
   if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({error:'File too large — maximum upload size is 500 MB'})
   if (err) return res.status(400).json({error: err.message})

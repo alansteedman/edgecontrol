@@ -351,6 +351,10 @@ select.mci{cursor:pointer}
     </button>
   </div>
   <div class="sb-bottom">
+    <button class="side-btn" id="nav-community" onclick="showTab('community',this)">
+      <span class="side-icon">🌐</span>
+      <span class="side-lbl">Community</span>
+    </button>
     <button class="side-btn" id="nav-macros" onclick="showTab('macros',this)">
       <span class="side-icon">▷</span>
       <span class="side-lbl">Macros</span>
@@ -628,6 +632,11 @@ select.mci{cursor:pointer}
     <div class="scroll" style="padding:24px">
       <div id="shelly-cards"></div>
     </div>
+  </div>
+
+  <!-- Community tab -->
+  <div id="tab-community" class="tab-pane" style="flex-direction:column;overflow:hidden">
+    <div id="comm-wrap" style="display:flex;flex-direction:column;height:100%;overflow:hidden"></div>
   </div>
 
   <!-- Config tab -->
@@ -1194,6 +1203,7 @@ function showTab(name,btn) {
   if(sn) sn.classList.toggle('visible', name==='coyote')
   if(name==='eom') renderEomCards()
   if(name==='hue') renderHueCards()
+  if(name==='community') initCommunity()
   if(name==='config') loadWifiStatus()
   if(name==='waveforms') setTimeout(initBandSelector, 50)
   if(name==='macros') setTimeout(()=>window._macroTabActivated?.(), 50)
@@ -1463,6 +1473,607 @@ function shellyToggleLight(devId,idx,on){
 function shellySetBrightness(devId,idx,brightness){
   send({type:'shelly:set',deviceId:devId,component:'light',idx,params:{brightness}})
   const dev=S.devices[devId]; if(dev?.components?.[`light:${idx}`]) dev.components[`light:${idx}`].brightness=brightness
+}
+
+// ── Community ──────────────────────────────────────────────────────────────
+const COMM_URL = 'https://community.kinkcontrol.org'
+
+const CS = {
+  token: localStorage.getItem('comm_token') || null,
+  user:  JSON.parse(localStorage.getItem('comm_user') || 'null'),
+  page:  'forum',
+  posts: [], postsTotal: 0, postsOffset: 0,
+  openPost: null,
+  waveforms: [], wfsTotal: 0, wfsOffset: 0,
+  adminUsers: null,
+}
+
+async function commFetch(path, opts = {}) {
+  const headers = { ...(opts.body instanceof FormData ? {} : {'Content-Type':'application/json'}), ...(CS.token ? {Authorization:`Bearer ${CS.token}`} : {}), ...(opts.headers||{}) }
+  delete opts.headers
+  try {
+    const r = await fetch(COMM_URL + path, { ...opts, headers })
+    if (r.status === 401) { CS.token = null; CS.user = null; localStorage.removeItem('comm_token'); localStorage.removeItem('comm_user'); renderCommunityTab(); return null }
+    return r
+  } catch(e) { return null }
+}
+
+function commAvatar(avatar, size=32) {
+  if (!avatar) return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#2a2a2a;display:flex;align-items:center;justify-content:center;font-size:${Math.round(size*0.5)}px;flex-shrink:0">👤</div>`
+  return `<img src="${COMM_URL}/avatars/${avatar}" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex-shrink:0">`
+}
+
+function commTimeAgo(ts) {
+  const s = Math.floor(Date.now()/1000) - ts
+  if (s < 60) return 'just now'
+  if (s < 3600) return Math.floor(s/60) + 'm ago'
+  if (s < 86400) return Math.floor(s/3600) + 'h ago'
+  return Math.floor(s/86400) + 'd ago'
+}
+
+function renderCommunityTab() {
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  if (!CS.token || !CS.user) { renderCommRegister(); return }
+  if (CS.page === 'forum') renderCommForum()
+  else if (CS.page === 'waveforms') renderCommWaveforms()
+  else if (CS.page === 'post') renderCommPost()
+  else if (CS.page === 'admin') renderCommAdmin()
+}
+
+// ── Registration ──────────────────────────────────────────────────────────
+function renderCommRegister() {
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  wrap.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;padding:32px">
+      <div style="font-size:32px">🌐</div>
+      <div style="font-size:16px;font-weight:600;color:#e0e0e0">Join the Community</div>
+      <div style="font-size:12px;color:#555;text-align:center;max-width:280px">Pick a username to access the forum and share waveforms with other EdgeController users.</div>
+      <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px">
+        <div style="position:relative">
+          <input id="comm-uname" type="text" placeholder="Username (3–30 chars, letters/numbers/_/-)"
+            style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:10px 36px 10px 12px;color:#e0e0e0;font-size:13px;outline:none"
+            oninput="commCheckUsername(this.value)">
+          <span id="comm-uname-status" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px"></span>
+        </div>
+        <div id="comm-uname-msg" style="font-size:11px;color:#f87171;min-height:14px"></div>
+        <button id="comm-reg-btn" onclick="commRegister()" disabled
+          style="background:#1d4ed8;color:#fff;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;opacity:0.5">
+          Create Account
+        </button>
+      </div>
+    </div>`
+}
+
+let _commUnameTimer = null
+window.commCheckUsername = function(val) {
+  const msg = document.getElementById('comm-uname-msg')
+  const status = document.getElementById('comm-uname-status')
+  const btn = document.getElementById('comm-reg-btn')
+  if (!msg || !btn) return
+  clearTimeout(_commUnameTimer)
+  if (!val.trim() || val.length < 3) {
+    msg.textContent = ''; status.textContent = ''; btn.disabled = true; btn.style.opacity = '0.5'; return
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(val)) {
+    msg.textContent = 'Letters, numbers, _ and - only'; status.textContent = '❌'; btn.disabled = true; btn.style.opacity = '0.5'; return
+  }
+  status.textContent = '⏳'
+  _commUnameTimer = setTimeout(async () => {
+    const r = await fetch(`${COMM_URL}/api/check-username/${encodeURIComponent(val)}`)
+    const d = await r.json()
+    if (d.available) { msg.textContent = ''; status.textContent = '✅'; btn.disabled = false; btn.style.opacity = '1' }
+    else { msg.textContent = 'Username already taken'; status.textContent = '❌'; btn.disabled = true; btn.style.opacity = '0.5' }
+  }, 400)
+}
+
+window.commRegister = async function() {
+  const username = document.getElementById('comm-uname')?.value?.trim(); if (!username) return
+  const btn = document.getElementById('comm-reg-btn'); if (btn) { btn.disabled = true; btn.textContent = 'Registering…' }
+  const r = await commFetch('/api/register', { method:'POST', body: JSON.stringify({username}) })
+  if (!r) { if (btn) { btn.disabled = false; btn.textContent = 'Create Account' } return }
+  const d = await r.json()
+  if (d.error) { document.getElementById('comm-uname-msg').textContent = d.error; if (btn) { btn.disabled = false; btn.textContent = 'Create Account' } return }
+  CS.token = d.token; CS.user = d.user
+  localStorage.setItem('comm_token', d.token); localStorage.setItem('comm_user', JSON.stringify(d.user))
+  CS.page = 'forum'; await loadCommPosts(); renderCommunityTab()
+}
+
+// ── Top nav bar ───────────────────────────────────────────────────────────
+function commTopBar() {
+  const isAdmin = CS.user?.role === 'admin'
+  const isMod   = CS.user?.role === 'mod' || isAdmin
+  return `<div style="display:flex;align-items:center;gap:6px;padding:10px 14px;background:#111;border-bottom:1px solid #1e1e1e;flex-shrink:0">
+    <button onclick="setCommPage('forum')" style="background:${CS.page==='forum'||CS.page==='post'?'#1d4ed8':'#1a1a1a'};color:#e0e0e0;border:1px solid #333;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer">Forum</button>
+    <button onclick="setCommPage('waveforms')" style="background:${CS.page==='waveforms'?'#1d4ed8':'#1a1a1a'};color:#e0e0e0;border:1px solid #333;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer">Waveforms</button>
+    ${isAdmin?`<button onclick="setCommPage('admin')" style="background:${CS.page==='admin'?'#7c3aed':'#1a1a1a'};color:#e0e0e0;border:1px solid #333;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer">Admin</button>`:''}
+    <div style="flex:1"></div>
+    ${commAvatar(CS.user?.avatar, 26)}
+    <span style="font-size:11px;color:#888;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${CS.user?.username||''}</span>
+    <button onclick="commEditProfile()" style="background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer">Profile</button>
+  </div>`
+}
+
+window.setCommPage = async function(page) {
+  CS.page = page; CS.openPost = null
+  if (page === 'forum') await loadCommPosts()
+  if (page === 'waveforms') await loadCommWaveforms()
+  if (page === 'admin') await loadCommAdminUsers()
+  renderCommunityTab()
+}
+
+// ── Forum list ────────────────────────────────────────────────────────────
+async function loadCommPosts(offset = 0) {
+  CS.postsOffset = offset
+  const r = await commFetch(`/api/posts?limit=20&offset=${offset}`)
+  if (!r) return
+  const d = await r.json()
+  CS.posts = d.posts || []; CS.postsTotal = d.total || 0
+}
+
+function renderCommForum() {
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  const canPost = !!CS.user
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:12px 14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span style="font-size:13px;font-weight:600;color:#e0e0e0">Forum</span>
+        ${canPost ? `<button onclick="commNewPost()" style="background:#1d4ed8;color:#fff;border:none;border-radius:7px;padding:6px 14px;font-size:11px;font-weight:600;cursor:pointer">+ New Post</button>` : ''}
+      </div>
+      ${CS.posts.length === 0 ? `<div style="color:#444;font-size:12px;text-align:center;padding:40px 0">No posts yet — be the first!</div>` : ''}
+      ${CS.posts.map(p => `
+        <div onclick="commOpenPost(${p.id})" style="background:#111;border:1px solid #1e1e1e;border-radius:9px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='#333'" onmouseout="this.style.borderColor='#1e1e1e'">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            ${commAvatar(p.avatar, 28)}
+            <div>
+              <div style="font-size:11px;font-weight:600;color:#e0e0e0">${escHtml(p.username)}</div>
+              <div style="font-size:10px;color:#444">${commTimeAgo(p.created_at)}${p.edited_at?' · edited':''}</div>
+            </div>
+            <div style="margin-left:auto;font-size:10px;color:#555">${p.reply_count} ${p.reply_count===1?'reply':'replies'}</div>
+          </div>
+          <div style="font-size:13px;font-weight:600;color:#d0d0d0;margin-bottom:4px">${escHtml(p.title)}</div>
+          <div style="font-size:11px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.body)}</div>
+        </div>`).join('')}
+      ${CS.postsTotal > CS.posts.length + CS.postsOffset ? `<button onclick="commLoadMorePosts()" style="width:100%;background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:7px;padding:8px;font-size:11px;cursor:pointer;margin-top:4px">Load more</button>` : ''}
+    </div>`
+}
+
+window.commLoadMorePosts = async function() {
+  const offset = CS.postsOffset + 20
+  const r = await commFetch(`/api/posts?limit=20&offset=${offset}`)
+  if (!r) return
+  const d = await r.json()
+  CS.posts = [...CS.posts, ...(d.posts||[])]; CS.postsOffset = offset; CS.postsTotal = d.total||0
+  renderCommunityTab()
+}
+
+window.commOpenPost = async function(id) {
+  const r = await commFetch(`/api/posts/${id}`)
+  if (!r) return
+  CS.openPost = await r.json(); CS.page = 'post'; renderCommunityTab()
+}
+
+// ── Post detail ───────────────────────────────────────────────────────────
+function renderCommPost() {
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  const p = CS.openPost; if (!p) return
+  const isMine = p.user_id === CS.user?.id
+  const isMod  = CS.user?.role === 'mod' || CS.user?.role === 'admin'
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:12px 14px">
+      <button onclick="setCommPage('forum')" style="background:none;border:none;color:#4fc3f7;font-size:11px;cursor:pointer;padding:0;margin-bottom:10px">← Back to Forum</button>
+      <div style="background:#111;border:1px solid #1e1e1e;border-radius:9px;padding:14px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          ${commAvatar(p.avatar, 32)}
+          <div>
+            <div style="font-size:12px;font-weight:600;color:#e0e0e0">${escHtml(p.username)}</div>
+            <div style="font-size:10px;color:#444">${commTimeAgo(p.created_at)}${p.edited_at?' · edited':''}</div>
+          </div>
+          ${(isMine||isMod)?`<div style="margin-left:auto;display:flex;gap:6px">
+            ${isMine?`<button onclick="commEditPost(${p.id})" style="background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer">Edit</button>`:''}
+            <button onclick="commDeletePost(${p.id})" style="background:#2a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer">Delete</button>
+          </div>`:''}
+        </div>
+        <div style="font-size:14px;font-weight:700;color:#e8e8e8;margin-bottom:8px">${escHtml(p.title)}</div>
+        <div style="font-size:12px;color:#bbb;line-height:1.6;white-space:pre-wrap">${escHtml(p.body)}</div>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:8px">${(p.replies||[]).length} ${(p.replies||[]).length===1?'Reply':'Replies'}</div>
+      ${(p.replies||[]).map(r => {
+        const rMine = r.user_id === CS.user?.id; const rMod = CS.user?.role==='mod'||CS.user?.role==='admin'
+        return `<div style="background:#0d0d0d;border:1px solid #1a1a1a;border-radius:8px;padding:10px 12px;margin-bottom:6px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            ${commAvatar(r.avatar, 24)}
+            <div style="font-size:11px;font-weight:600;color:#d0d0d0">${escHtml(r.username)}</div>
+            <div style="font-size:10px;color:#444">${commTimeAgo(r.created_at)}</div>
+            ${(rMine||rMod)?`<button onclick="commDeleteReply(${r.id})" style="margin-left:auto;background:none;border:none;color:#555;font-size:10px;cursor:pointer">✕</button>`:''}
+          </div>
+          <div style="font-size:12px;color:#aaa;line-height:1.5;white-space:pre-wrap">${escHtml(r.body)}</div>
+        </div>`}).join('')}
+      <div style="margin-top:12px">
+        <textarea id="comm-reply-body" placeholder="Write a reply…" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px;color:#e0e0e0;font-size:12px;resize:vertical;min-height:70px;outline:none"></textarea>
+        <button onclick="commSubmitReply(${p.id})" style="margin-top:6px;background:#1d4ed8;color:#fff;border:none;border-radius:7px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer">Post Reply</button>
+      </div>
+    </div>`
+}
+
+window.commSubmitReply = async function(postId) {
+  const body = document.getElementById('comm-reply-body')?.value?.trim(); if (!body) return
+  const r = await commFetch(`/api/posts/${postId}/replies`, { method:'POST', body: JSON.stringify({body}) })
+  if (!r) return
+  const reply = await r.json()
+  if (reply.error) return
+  CS.openPost.replies = [...(CS.openPost.replies||[]), reply]
+  renderCommunityTab()
+}
+
+window.commDeletePost = async function(id) {
+  if (!confirm('Delete this post?')) return
+  await commFetch(`/api/posts/${id}`, { method:'DELETE' })
+  CS.page = 'forum'; await loadCommPosts(); renderCommunityTab()
+}
+
+window.commDeleteReply = async function(id) {
+  await commFetch(`/api/replies/${id}`, { method:'DELETE' })
+  if (CS.openPost) CS.openPost.replies = (CS.openPost.replies||[]).filter(r => r.id !== id)
+  renderCommunityTab()
+}
+
+window.commNewPost = function() {
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:14px">
+      <button onclick="setCommPage('forum')" style="background:none;border:none;color:#4fc3f7;font-size:11px;cursor:pointer;padding:0;margin-bottom:12px">← Back</button>
+      <div style="font-size:14px;font-weight:600;color:#e0e0e0;margin-bottom:14px">New Post</div>
+      <input id="comm-post-title" type="text" placeholder="Title" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#e0e0e0;font-size:13px;outline:none;margin-bottom:10px">
+      <textarea id="comm-post-body" placeholder="What's on your mind?" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#e0e0e0;font-size:12px;resize:vertical;min-height:120px;outline:none;margin-bottom:10px"></textarea>
+      <button onclick="commSubmitPost()" style="background:#1d4ed8;color:#fff;border:none;border-radius:7px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer">Post</button>
+    </div>`
+}
+
+window.commSubmitPost = async function() {
+  const title = document.getElementById('comm-post-title')?.value?.trim()
+  const body  = document.getElementById('comm-post-body')?.value?.trim()
+  if (!title || !body) return
+  const r = await commFetch('/api/posts', { method:'POST', body: JSON.stringify({title, body}) })
+  if (!r) return
+  const post = await r.json()
+  if (post.error) return
+  CS.openPost = { ...post, replies: [] }; CS.page = 'post'; renderCommunityTab()
+}
+
+window.commEditPost = function(id) {
+  const p = CS.openPost; if (!p) return
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:14px">
+      <button onclick="renderCommunityTab()" style="background:none;border:none;color:#4fc3f7;font-size:11px;cursor:pointer;padding:0;margin-bottom:12px">← Cancel</button>
+      <div style="font-size:14px;font-weight:600;color:#e0e0e0;margin-bottom:14px">Edit Post</div>
+      <input id="comm-edit-title" type="text" value="${escHtml(p.title)}" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#e0e0e0;font-size:13px;outline:none;margin-bottom:10px">
+      <textarea id="comm-edit-body" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#e0e0e0;font-size:12px;resize:vertical;min-height:120px;outline:none;margin-bottom:10px">${escHtml(p.body)}</textarea>
+      <button onclick="commSaveEditPost(${id})" style="background:#1d4ed8;color:#fff;border:none;border-radius:7px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer">Save</button>
+    </div>`
+}
+
+window.commSaveEditPost = async function(id) {
+  const title = document.getElementById('comm-edit-title')?.value?.trim()
+  const body  = document.getElementById('comm-edit-body')?.value?.trim()
+  if (!title || !body) return
+  const r = await commFetch(`/api/posts/${id}`, { method:'PUT', body: JSON.stringify({title, body}) })
+  if (!r) return
+  const updated = await r.json()
+  if (updated.error) return
+  CS.openPost = { ...CS.openPost, ...updated }; renderCommunityTab()
+}
+
+// ── Profile edit ──────────────────────────────────────────────────────────
+window.commEditProfile = function() {
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:14px">
+      <button onclick="renderCommunityTab()" style="background:none;border:none;color:#4fc3f7;font-size:11px;cursor:pointer;padding:0;margin-bottom:12px">← Back</button>
+      <div style="font-size:14px;font-weight:600;color:#e0e0e0;margin-bottom:4px">Profile</div>
+      <div style="font-size:12px;color:#555;margin-bottom:16px">Role: ${CS.user?.role||'user'}</div>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px">
+        ${commAvatar(CS.user?.avatar, 64)}
+        <div>
+          <div style="font-size:13px;font-weight:600;color:#e0e0e0;margin-bottom:6px">${escHtml(CS.user?.username||'')}</div>
+          <label style="background:#1a1a1a;color:#4fc3f7;border:1px solid #2a2a2a;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer">
+            Change Avatar
+            <input type="file" accept="image/*" style="display:none" onchange="commUploadAvatar(this)">
+          </label>
+        </div>
+      </div>
+      <div id="comm-profile-msg" style="font-size:11px;color:#4ade80;min-height:14px"></div>
+      <button onclick="commLogout()" style="margin-top:20px;background:#2a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:7px;padding:7px 14px;font-size:11px;cursor:pointer">Sign Out</button>
+    </div>`
+}
+
+window.commUploadAvatar = async function(input) {
+  const file = input.files?.[0]; if (!file) return
+  const fd = new FormData(); fd.append('avatar', file)
+  const r = await commFetch('/api/me/avatar', { method:'POST', body: fd })
+  if (!r) return
+  const d = await r.json()
+  if (d.avatar) {
+    CS.user = { ...CS.user, avatar: d.avatar }; localStorage.setItem('comm_user', JSON.stringify(CS.user))
+    const msg = document.getElementById('comm-profile-msg'); if (msg) msg.textContent = 'Avatar updated!'
+    setTimeout(() => renderCommunityTab(), 800)
+  }
+}
+
+window.commLogout = function() {
+  CS.token = null; CS.user = null; CS.page = 'forum'
+  localStorage.removeItem('comm_token'); localStorage.removeItem('comm_user')
+  renderCommunityTab()
+}
+
+// ── Waveforms ─────────────────────────────────────────────────────────────
+async function loadCommWaveforms(offset = 0) {
+  CS.wfsOffset = offset
+  const r = await commFetch(`/api/waveforms?limit=20&offset=${offset}`)
+  if (!r) return
+  const d = await r.json()
+  CS.waveforms = d.waveforms || []; CS.wfsTotal = d.total || 0
+}
+
+function renderCommWaveforms() {
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:12px 14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span style="font-size:13px;font-weight:600;color:#e0e0e0">Shared Waveforms</span>
+        <button onclick="commShareWaveform()" style="background:#1d4ed8;color:#fff;border:none;border-radius:7px;padding:6px 14px;font-size:11px;font-weight:600;cursor:pointer">↑ Share</button>
+      </div>
+      ${CS.waveforms.length === 0 ? `<div style="color:#444;font-size:12px;text-align:center;padding:40px 0">No waveforms shared yet.</div>` : ''}
+      ${CS.waveforms.map(w => {
+        const dur = Math.round(w.duration_secs)
+        const mins = Math.floor(dur/60), secs = String(dur%60).padStart(2,'0')
+        const isMine = w.user_id === CS.user?.id
+        const isAdmin = CS.user?.role === 'admin'
+        return `<div style="background:#111;border:1px solid #1e1e1e;border-radius:10px;padding:14px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            ${commAvatar(w.avatar, 28)}
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600;color:#e0e0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(w.name)}</div>
+              <div style="font-size:10px;color:#555">${escHtml(w.username)} · ${mins}:${secs} · ${w.frame_count} frames</div>
+            </div>
+            <div style="display:flex;gap:5px;flex-shrink:0">
+              ${isMine?`<button onclick="commEditWaveform(${w.id})" style="background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer">Edit</button>`:''}
+              ${(isMine||isAdmin)?`<button onclick="commDeleteWaveform(${w.id})" style="background:#2a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer">Delete</button>`:''}
+              <button onclick="commDownloadWaveform(${w.id},'${escHtml(w.name)}')" id="comm-dl-${w.id}" style="background:#14532d;color:#4ade80;border:1px solid #166534;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer">↓ Download</button>
+            </div>
+          </div>
+          ${w.description ? `<div style="font-size:11px;color:#666;margin-bottom:8px;line-height:1.5">${escHtml(w.description)}</div>` : ''}
+          <canvas id="comm-wf-${w.id}" height="36" style="display:block;width:100%;border-radius:4px;background:#080808"></canvas>
+        </div>`}).join('')}
+      ${CS.wfsTotal > CS.waveforms.length + CS.wfsOffset ? `<button onclick="commLoadMoreWfs()" style="width:100%;background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:7px;padding:8px;font-size:11px;cursor:pointer;margin-top:4px">Load more</button>` : ''}
+    </div>`
+  // Draw waveforms lazily
+  requestAnimationFrame(() => CS.waveforms.forEach(w => commDrawPreview(w)))
+}
+
+async function commLoadPreviewFrames(w) {
+  const r = await commFetch(`/api/waveforms/${w.id}/frames`)
+  if (!r) return null
+  try { return await r.json() } catch { return null }
+}
+
+async function commDrawPreview(w) {
+  const cv = document.getElementById(`comm-wf-${w.id}`); if (!cv) return
+  // Show placeholder bar
+  const ctx = cv.getContext('2d')
+  cv.width = cv.clientWidth || 600; cv.height = 36
+  ctx.fillStyle = '#0d0d0d'; ctx.fillRect(0,0,cv.width,cv.height)
+  ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,16,cv.width,4)
+  // Load frames
+  const frames = await commLoadPreviewFrames(w)
+  if (!frames?.length) return
+  const W = cv.clientWidth || 600, H = 36
+  cv.width = W
+  ctx.fillStyle = '#080808'; ctx.fillRect(0,0,W,H)
+  const bars = Math.min(frames.length, W/2|0)
+  const step = frames.length / bars
+  const g = ctx.createLinearGradient(0,0,0,H)
+  g.addColorStop(0,'#4fc3f7'); g.addColorStop(1,'rgba(79,195,247,.15)')
+  ctx.fillStyle = g
+  for (let b = 0; b < bars; b++) {
+    const s=Math.floor(b*step), e=Math.min(frames.length,Math.floor((b+1)*step)||s+1)
+    let peak=0; for(let i=s;i<e;i++) if(frames[i]>peak) peak=frames[i]
+    const bh=Math.max(1,Math.round((peak/100)*(H-2)))
+    ctx.fillRect(b*2, H-bh, 1, bh)
+  }
+}
+
+window.commLoadMoreWfs = async function() {
+  const offset = CS.wfsOffset + 20
+  const r = await commFetch(`/api/waveforms?limit=20&offset=${offset}`)
+  if (!r) return
+  const d = await r.json()
+  CS.waveforms = [...CS.waveforms, ...(d.waveforms||[])]; CS.wfsOffset = offset; CS.wfsTotal = d.total||0
+  renderCommunityTab()
+}
+
+window.commDownloadWaveform = async function(id, name) {
+  const btn = document.getElementById(`comm-dl-${id}`)
+  if (btn) { btn.textContent = '⏳ Downloading…'; btn.disabled = true }
+  try {
+    const [framesR, mp3R] = await Promise.all([
+      commFetch(`/api/waveforms/${id}/frames`),
+      commFetch(`/api/waveforms/${id}/mp3`)
+    ])
+    if (!framesR || !mp3R) throw new Error('Download failed')
+    const frames  = await framesR.json()
+    const mp3Blob = await mp3R.blob()
+    const fd = new FormData()
+    fd.append('file', mp3Blob, name + '.mp3')
+    fd.append('name', name)
+    fd.append('frames', JSON.stringify(frames))
+    fd.append('baseFreq', '25')
+    if (btn) btn.textContent = '⏳ Importing…'
+    const r = await fetch('/api/audio/import', { method:'POST', body:fd })
+    const d = await r.json()
+    if (d.error) throw new Error(d.error)
+    if (btn) { btn.textContent = '✓ Added!'; btn.style.background='#1a3a1a'; btn.style.color='#4ade80' }
+  } catch(e) {
+    if (btn) { btn.textContent = 'Error'; btn.disabled = false; btn.style.color='#f87171' }
+    console.error('[community] download:', e.message)
+  }
+}
+
+window.commDeleteWaveform = async function(id) {
+  if (!confirm('Delete this shared waveform?')) return
+  await commFetch(`/api/waveforms/${id}`, { method:'DELETE' })
+  CS.waveforms = CS.waveforms.filter(w => w.id !== id); renderCommunityTab()
+}
+
+window.commEditWaveform = function(id) {
+  const wf = CS.waveforms.find(w => w.id === id); if (!wf) return
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:14px">
+      <button onclick="setCommPage('waveforms')" style="background:none;border:none;color:#4fc3f7;font-size:11px;cursor:pointer;padding:0;margin-bottom:12px">← Back</button>
+      <div style="font-size:14px;font-weight:600;color:#e0e0e0;margin-bottom:14px">Edit Waveform</div>
+      <input id="comm-wf-name" type="text" value="${escHtml(wf.name)}" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#e0e0e0;font-size:13px;outline:none;margin-bottom:10px">
+      <textarea id="comm-wf-desc" placeholder="Description (optional)" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#e0e0e0;font-size:12px;resize:vertical;min-height:80px;outline:none;margin-bottom:10px">${escHtml(wf.description||'')}</textarea>
+      <button onclick="commSaveWaveform(${id})" style="background:#1d4ed8;color:#fff;border:none;border-radius:7px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer">Save</button>
+    </div>`
+}
+
+window.commSaveWaveform = async function(id) {
+  const name = document.getElementById('comm-wf-name')?.value?.trim()
+  const description = document.getElementById('comm-wf-desc')?.value?.trim() ?? ''
+  if (!name) return
+  const r = await commFetch(`/api/waveforms/${id}`, { method:'PUT', body: JSON.stringify({name, description}) })
+  if (!r) return
+  const updated = await r.json()
+  const idx = CS.waveforms.findIndex(w => w.id === id)
+  if (idx !== -1) CS.waveforms[idx] = { ...CS.waveforms[idx], ...updated }
+  await setCommPage('waveforms')
+}
+
+window.commShareWaveform = function() {
+  const audios = (S.waveforms.custom||[]).filter(w=>w.type==='audio')
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:14px">
+      <button onclick="setCommPage('waveforms')" style="background:none;border:none;color:#4fc3f7;font-size:11px;cursor:pointer;padding:0;margin-bottom:12px">← Back</button>
+      <div style="font-size:14px;font-weight:600;color:#e0e0e0;margin-bottom:4px">Share a Waveform</div>
+      <div style="font-size:11px;color:#555;margin-bottom:14px">This uploads the processed waveform and original MP3 so others can download it to their Pi.</div>
+      ${audios.length === 0 ? `<div style="color:#555;font-size:12px">No audio waveforms on this Pi yet. Upload an MP3 in the Waveforms tab first.</div>` : `
+      <div style="margin-bottom:12px">
+        <label style="font-size:11px;color:#888;display:block;margin-bottom:4px">Select waveform</label>
+        <select id="comm-share-wf" style="width:100%;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:9px 12px;color:#e0e0e0;font-size:12px">
+          ${audios.map(w=>`<option value="${w.id}">${escHtml(w.name)} (${Math.floor(Math.round(w.frames.length/10)/60)}:${String(Math.round(w.frames.length/10)%60).padStart(2,'0')})</option>`).join('')}
+        </select>
+      </div>
+      <div style="margin-bottom:10px">
+        <label style="font-size:11px;color:#888;display:block;margin-bottom:4px">Name (editable)</label>
+        <input id="comm-share-name" type="text" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:9px 12px;color:#e0e0e0;font-size:12px;outline:none">
+      </div>
+      <div style="margin-bottom:14px">
+        <label style="font-size:11px;color:#888;display:block;margin-bottom:4px">Description (optional)</label>
+        <textarea id="comm-share-desc" placeholder="e.g. Great bass-heavy track for drum and bass sessions…" style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:9px 12px;color:#e0e0e0;font-size:12px;resize:vertical;min-height:70px;outline:none"></textarea>
+      </div>
+      <div id="comm-share-progress" style="font-size:11px;color:#888;min-height:16px;margin-bottom:8px"></div>
+      <button onclick="commDoShare()" id="comm-share-btn" style="background:#1d4ed8;color:#fff;border:none;border-radius:7px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer">Share</button>`}
+    </div>`
+  // Pre-fill name from selected waveform
+  const sel = document.getElementById('comm-share-wf')
+  const nameInput = document.getElementById('comm-share-name')
+  if (sel && nameInput) {
+    const fill = () => { const w=audios.find(a=>a.id===sel.value); if(w&&nameInput) nameInput.value=w.name }
+    sel.addEventListener('change', fill); fill()
+  }
+}
+
+window.commDoShare = async function() {
+  const wfId = document.getElementById('comm-share-wf')?.value
+  const name  = document.getElementById('comm-share-name')?.value?.trim()
+  const desc  = document.getElementById('comm-share-desc')?.value?.trim() || ''
+  const prog  = document.getElementById('comm-share-progress')
+  const btn   = document.getElementById('comm-share-btn')
+  if (!wfId || !name) return
+  const wf = (S.waveforms.custom||[]).find(w=>w.id===wfId)
+  if (!wf || !Array.isArray(wf.frames)) { if(prog) prog.textContent='Waveform frames not loaded yet'; return }
+  if (btn) { btn.disabled=true; btn.textContent='Uploading…' }
+  if (prog) prog.textContent = 'Fetching audio file…'
+  try {
+    const mp3R = await fetch(`/api/audio/${wfId}/file`)
+    const mp3Blob = await mp3R.blob()
+    if (prog) prog.textContent = 'Uploading to community…'
+    const fd = new FormData()
+    fd.append('mp3', mp3Blob, wf.originalName || name + '.mp3')
+    fd.append('frames', new Blob([JSON.stringify(wf.frames)], {type:'application/json'}), 'frames.json')
+    fd.append('name', name)
+    fd.append('description', desc)
+    fd.append('duration_secs', String(Math.round((wf.frames.length||0)/10)))
+    fd.append('frame_count', String(wf.frames.length||0))
+    const token = CS.token
+    const r = await fetch(`${COMM_URL}/api/waveforms`, { method:'POST', body:fd, headers: token?{Authorization:`Bearer ${token}`}:{} })
+    const d = await r.json()
+    if (d.error) throw new Error(d.error)
+    if (prog) prog.textContent = '✓ Shared successfully!'
+    if (btn) btn.textContent = 'Shared!'
+    setTimeout(() => setCommPage('waveforms'), 1200)
+  } catch(e) {
+    if (prog) prog.textContent = 'Error: ' + e.message
+    if (btn) { btn.disabled=false; btn.textContent='Share' }
+  }
+}
+
+// ── Admin ─────────────────────────────────────────────────────────────────
+async function loadCommAdminUsers() {
+  const r = await commFetch('/api/admin/users')
+  if (!r) return
+  CS.adminUsers = await r.json()
+}
+
+function renderCommAdmin() {
+  const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  const users = CS.adminUsers || []
+  wrap.innerHTML = commTopBar() + `
+    <div style="flex:1;overflow-y:auto;padding:12px 14px">
+      <div style="font-size:13px;font-weight:600;color:#e0e0e0;margin-bottom:12px">Users (${users.length})</div>
+      ${users.map(u => `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#111;border:1px solid #1a1a1a;border-radius:8px;margin-bottom:6px">
+          ${commAvatar(u.avatar, 28)}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;font-weight:600;color:#d0d0d0">${escHtml(u.username)}</div>
+            <div style="font-size:10px;color:#555">${u.role}</div>
+          </div>
+          <select onchange="commSetRole(${u.id},this.value)" style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:6px;color:#aaa;font-size:10px;padding:3px 6px">
+            ${['user','mod','admin'].map(r=>`<option value="${r}"${u.role===r?' selected':''}>${r}</option>`).join('')}
+          </select>
+          ${u.id !== CS.user?.id ? `<button onclick="commAdminDeleteUser(${u.id})" style="background:#2a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:6px;padding:3px 7px;font-size:10px;cursor:pointer">✕</button>` : ''}
+        </div>`).join('')}
+    </div>`
+}
+
+window.commSetRole = async function(id, role) {
+  await commFetch(`/api/admin/users/${id}/role`, { method:'PUT', body: JSON.stringify({role}) })
+  await loadCommAdminUsers(); renderCommunityTab()
+}
+
+window.commAdminDeleteUser = async function(id) {
+  if (!confirm('Delete this user?')) return
+  await commFetch(`/api/admin/users/${id}`, { method:'DELETE' })
+  await loadCommAdminUsers(); renderCommunityTab()
+}
+
+// ── Helper ────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+}
+
+// Called when Community tab is activated
+async function initCommunity() {
+  if (!CS.token) { renderCommunityTab(); return }
+  // Refresh user info
+  const r = await commFetch('/api/me')
+  if (r) { const u = await r.json(); CS.user = u; localStorage.setItem('comm_user', JSON.stringify(u)) }
+  if (CS.page === 'forum') await loadCommPosts()
+  else if (CS.page === 'waveforms') await loadCommWaveforms()
+  else if (CS.page === 'admin') await loadCommAdminUsers()
+  renderCommunityTab()
 }
 
 function renderAll() {

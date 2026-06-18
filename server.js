@@ -1563,6 +1563,91 @@ async function checkCameraStatus() {
 
 setInterval(checkCameraStatus, 12000)
 
+// ── Shelly device ─────────────────────────────────────────────────────────────
+const SHELLY_RPC_SVC  = '5f6d4f53-5f52-5043-5f53-56435f49445f'
+const SHELLY_DATA_CHR = '5f6d4f53-5f52-5043-5f64-6174615f5f5f'
+const SHELLY_RX_CHR   = '5f6d4f53-5f52-5043-5f72-785f63746c5f'
+const SHELLY_TX_CHR   = '5f6d4f53-5f52-5043-5f74-785f63746c5f'
+
+class ShellyDevice {
+  constructor(id, name, ip, password='') {
+    this.id=id; this.name=name; this.type='shelly'; this.ip=ip; this.password=password
+    this.status='disconnected'; this.components={}
+    this._ws=null; this._rpcId=1; this._pending={}; this._reconnectTimer=null
+  }
+
+  connect() {
+    this._clearReconnect()
+    try {
+      const ws = new WebSocket(`ws://${this.ip}/rpc`)
+      this._ws = ws
+      ws.on('open',    ()  => this._onOpen())
+      ws.on('message', d   => this._onMsg(d.toString()))
+      ws.on('close',   ()  => this._onClose())
+      ws.on('error',   e   => { console.error(`[${this.id}] WS:`,e.message); try{ws.terminate()}catch{} })
+    } catch(e) { console.error(`[${this.id}] connect:`,e.message); this._scheduleReconnect() }
+  }
+
+  async _onOpen() {
+    this.status='connected'
+    broadcast({type:'device:status',id:this.id,status:'connected'})
+    try {
+      const res = await this.rpc('Shelly.GetComponents',{dynamic_only:false})
+      this.components={}
+      for (const c of res?.components||[]) this.components[c.key]=c.status||{}
+      broadcast({type:'device:state',id:this.id,components:this.components})
+    } catch(e) { console.error(`[${this.id}] init:`,e.message) }
+  }
+
+  _onMsg(raw) {
+    try {
+      const m=JSON.parse(raw)
+      if (m.id!=null && this._pending[m.id]) {
+        const {resolve,reject}=this._pending[m.id]; delete this._pending[m.id]
+        m.error ? reject(new Error(m.error.message||JSON.stringify(m.error))) : resolve(m.result)
+        return
+      }
+      if (m.method==='NotifyStatus') {
+        for (const [k,v] of Object.entries(m.params||{})) {
+          if (k==='ts') continue
+          this.components[k]={...(this.components[k]||{}), ...v}
+        }
+        broadcast({type:'shelly:status',id:this.id,params:m.params})
+      }
+      if (m.method==='NotifyEvent') broadcast({type:'shelly:event',id:this.id,params:m.params})
+    } catch {}
+  }
+
+  _onClose() {
+    this.status='disconnected'
+    broadcast({type:'device:status',id:this.id,status:'disconnected'})
+    this._scheduleReconnect()
+  }
+
+  rpc(method,params={}) {
+    return new Promise((resolve,reject) => {
+      if (!this._ws||this._ws.readyState!==1) return reject(new Error('Not connected'))
+      const id=this._rpcId++
+      const t=setTimeout(()=>{ delete this._pending[id]; reject(new Error('timeout')) },8000)
+      this._pending[id]={ resolve:v=>{clearTimeout(t);resolve(v)}, reject:e=>{clearTimeout(t);reject(e)} }
+      this._ws.send(JSON.stringify({id,src:'edgecontroller',method,params}))
+    })
+  }
+
+  disconnect() {
+    this._clearReconnect()
+    try{this._ws?.terminate()}catch{}
+    this._ws=null; this.status='disconnected'
+  }
+
+  _scheduleReconnect() { this._clearReconnect(); this._reconnectTimer=setTimeout(()=>this.connect(),10000) }
+  _clearReconnect() { if(this._reconnectTimer){clearTimeout(this._reconnectTimer);this._reconnectTimer=null} }
+
+  toJSON() {
+    return {id:this.id,type:'shelly',name:this.name,ip:this.ip,status:this.status,components:this.components}
+  }
+}
+
 function createDevice(cfg) {
   if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
   if (cfg.type==='pawprints') return new PawPrintsDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
@@ -2027,91 +2112,6 @@ app.post('/api/devices/:id/disconnect', async (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
   try{await dev.disconnect();res.json({ok:true})}catch(e){res.status(500).json({error:e.message})}
 })
-
-// ── Shelly device ─────────────────────────────────────────────────────────────
-const SHELLY_RPC_SVC  = '5f6d4f53-5f52-5043-5f53-56435f49445f'
-const SHELLY_DATA_CHR = '5f6d4f53-5f52-5043-5f64-6174615f5f5f'
-const SHELLY_RX_CHR   = '5f6d4f53-5f52-5043-5f72-785f63746c5f'
-const SHELLY_TX_CHR   = '5f6d4f53-5f52-5043-5f74-785f63746c5f'
-
-class ShellyDevice {
-  constructor(id, name, ip, password='') {
-    this.id=id; this.name=name; this.type='shelly'; this.ip=ip; this.password=password
-    this.status='disconnected'; this.components={}
-    this._ws=null; this._rpcId=1; this._pending={}; this._reconnectTimer=null
-  }
-
-  connect() {
-    this._clearReconnect()
-    try {
-      const ws = new WebSocket(`ws://${this.ip}/rpc`)
-      this._ws = ws
-      ws.on('open',    ()  => this._onOpen())
-      ws.on('message', d   => this._onMsg(d.toString()))
-      ws.on('close',   ()  => this._onClose())
-      ws.on('error',   e   => { console.error(`[${this.id}] WS:`,e.message); try{ws.terminate()}catch{} })
-    } catch(e) { console.error(`[${this.id}] connect:`,e.message); this._scheduleReconnect() }
-  }
-
-  async _onOpen() {
-    this.status='connected'
-    broadcast({type:'device:status',id:this.id,status:'connected'})
-    try {
-      const res = await this.rpc('Shelly.GetComponents',{dynamic_only:false})
-      this.components={}
-      for (const c of res?.components||[]) this.components[c.key]=c.status||{}
-      broadcast({type:'device:state',id:this.id,components:this.components})
-    } catch(e) { console.error(`[${this.id}] init:`,e.message) }
-  }
-
-  _onMsg(raw) {
-    try {
-      const m=JSON.parse(raw)
-      if (m.id!=null && this._pending[m.id]) {
-        const {resolve,reject}=this._pending[m.id]; delete this._pending[m.id]
-        m.error ? reject(new Error(m.error.message||JSON.stringify(m.error))) : resolve(m.result)
-        return
-      }
-      if (m.method==='NotifyStatus') {
-        for (const [k,v] of Object.entries(m.params||{})) {
-          if (k==='ts') continue
-          this.components[k]={...(this.components[k]||{}), ...v}
-        }
-        broadcast({type:'shelly:status',id:this.id,params:m.params})
-      }
-      if (m.method==='NotifyEvent') broadcast({type:'shelly:event',id:this.id,params:m.params})
-    } catch {}
-  }
-
-  _onClose() {
-    this.status='disconnected'
-    broadcast({type:'device:status',id:this.id,status:'disconnected'})
-    this._scheduleReconnect()
-  }
-
-  rpc(method,params={}) {
-    return new Promise((resolve,reject) => {
-      if (!this._ws||this._ws.readyState!==1) return reject(new Error('Not connected'))
-      const id=this._rpcId++
-      const t=setTimeout(()=>{ delete this._pending[id]; reject(new Error('timeout')) },8000)
-      this._pending[id]={ resolve:v=>{clearTimeout(t);resolve(v)}, reject:e=>{clearTimeout(t);reject(e)} }
-      this._ws.send(JSON.stringify({id,src:'edgecontroller',method,params}))
-    })
-  }
-
-  disconnect() {
-    this._clearReconnect()
-    try{this._ws?.terminate()}catch{}
-    this._ws=null; this.status='disconnected'
-  }
-
-  _scheduleReconnect() { this._clearReconnect(); this._reconnectTimer=setTimeout(()=>this.connect(),10000) }
-  _clearReconnect() { if(this._reconnectTimer){clearTimeout(this._reconnectTimer);this._reconnectTimer=null} }
-
-  toJSON() {
-    return {id:this.id,type:'shelly',name:this.name,ip:this.ip,status:this.status,components:this.components}
-  }
-}
 
 // BLE scan for unconfigured Shellys
 let _shellyBLEScanActive=false

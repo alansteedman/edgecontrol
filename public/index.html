@@ -1993,20 +1993,26 @@ window.commDoShare = async function() {
   const btn   = document.getElementById('comm-share-btn')
   if (!wfId || !name) return
   const wf = (S.waveforms.custom||[]).find(w=>w.id===wfId)
-  if (!wf || !Array.isArray(wf.frames)) { if(prog) prog.textContent='Waveform frames not loaded yet'; return }
+  if (!wf) { if(prog) prog.textContent='Waveform not found'; return }
   if (btn) { btn.disabled=true; btn.textContent='Uploading…' }
   if (prog) prog.textContent = 'Fetching audio file…'
   try {
-    const mp3R = await fetch(`/api/audio/${wfId}/file`)
-    const mp3Blob = await mp3R.blob()
+    const [mp3R, framesR] = await Promise.all([
+      fetch(`/api/audio/${wfId}/file`),
+      fetch(`/api/audio/${wfId}/frames`)
+    ])
+    if (!mp3R.ok) throw new Error('Could not fetch audio file')
+    if (!framesR.ok) throw new Error('Could not fetch frames')
+    const [mp3Blob, frames] = await Promise.all([mp3R.blob(), framesR.json()])
+    if (!Array.isArray(frames) || !frames.length) throw new Error('No frames data')
     if (prog) prog.textContent = 'Uploading to community…'
     const fd = new FormData()
     fd.append('mp3', mp3Blob, wf.originalName || name + '.mp3')
-    fd.append('frames', new Blob([JSON.stringify(wf.frames)], {type:'application/json'}), 'frames.json')
+    fd.append('frames', new Blob([JSON.stringify(frames)], {type:'application/json'}), 'frames.json')
     fd.append('name', name)
     fd.append('description', desc)
-    fd.append('duration_secs', String(Math.round((wf.frames.length||0)/10)))
-    fd.append('frame_count', String(wf.frames.length||0))
+    fd.append('duration_secs', String(Math.round((frames.length||0)/10)))
+    fd.append('frame_count', String(frames.length||0))
     const token = CS.token
     const r = await fetch(`${COMM_URL}/api/waveforms`, { method:'POST', body:fd, headers: token?{Authorization:`Bearer ${token}`}:{} })
     const d = await r.json()
@@ -4471,6 +4477,14 @@ function showStaged(file){
     initBandSelector()
     analyzeFileForSpectrum(file)
   }, 50)
+}
+function audioProgressUpdate(frames, elapsed) {
+  const el = document.getElementById('audio-process-status')
+  if (el) el.textContent = `Processing… ${frames} frames (${elapsed ? Math.round(elapsed) + 's' : ''})`
+}
+function audioProgressHide() {
+  const el = document.getElementById('audio-process-status')
+  if (el) el.textContent = ''
 }
 function clearStaged(){
   _stagedFile = null

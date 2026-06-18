@@ -3224,6 +3224,13 @@ app.get('/api/audio/:id/file', (req,res) => {
   res.sendFile(join(AUDIO_DIR, wf.sourceFile))
 })
 
+app.get('/api/audio/:id/frames', (req,res) => {
+  const wf=(waveformStore.custom||[]).find(w=>w.id===req.params.id&&w.type==='audio')
+  if(!wf) return res.status(404).json({error:'not found'})
+  const frames = (wf.frames||[]).map(f => typeof f === 'object' ? (f.segs?.[0]?.a ?? 0) : f)
+  res.json(frames)
+})
+
 // ── WiFi API ──────────────────────────────────────────────────────────────────
 function nmcli(...args) {
   return new Promise((resolve, reject) => {

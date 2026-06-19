@@ -415,10 +415,11 @@ function broadcast(msg) {
 }
 
 function encodeFreq(hz) {
-  hz = Math.max(10, Math.min(1000, hz))
-  if (hz <= 100) return hz
-  if (hz <= 600) return Math.round((hz - 100) / 5) + 100
-  return Math.round((hz - 600) / 10) + 200
+  hz = Math.max(10, Math.min(100, hz))
+  const ms = Math.round(1000 / hz) // protocol expects period in ms, not Hz
+  if (ms <= 100) return ms
+  if (ms <= 600) return Math.round((ms - 100) / 5) + 100
+  return Math.round((ms - 600) / 10) + 200
 }
 
 function computeWave(wfId, tick, amp, speed=1) {

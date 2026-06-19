@@ -3238,6 +3238,46 @@ import https from 'https'
 const COMMUNITY_HOST = 'community.kinkcontrol.org'
 const COMMUNITY_URL  = `https://${COMMUNITY_HOST}`
 
+// ── Fleet heartbeat ───────────────────────────────────────────────────────────
+let _fleetHeartbeatTimer = null
+
+async function communityFleetInit() {
+  const deviceId = (config.boxId || '').trim().toLowerCase()
+  if (!deviceId) return
+  const online = await waitForInternet(120000)
+  if (!online) { setTimeout(communityFleetInit, 60000); return }
+  if (!config.communityDeviceToken) {
+    try {
+      const r = await fetch(`${COMMUNITY_URL}/api/devices/register`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ device_id: deviceId }), signal: AbortSignal.timeout(15000)
+      })
+      const d = await r.json()
+      if (d.token) { config.communityDeviceToken = d.token; saveConfig(config); console.log('[fleet] registered with community') }
+      else throw new Error(d.error || 'no token')
+    } catch (e) { console.error('[fleet] registration failed:', e.message); setTimeout(communityFleetInit, 60000); return }
+  }
+  communityHeartbeat()
+  if (_fleetHeartbeatTimer) clearInterval(_fleetHeartbeatTimer)
+  _fleetHeartbeatTimer = setInterval(communityHeartbeat, 60000)
+}
+
+function communityHeartbeat() {
+  if (!config.communityDeviceToken) return
+  const bleDevices = (config.devices || []).map(d => ({ id: d.id, name: d.name, type: d.type }))
+  const meta = {
+    tunnel_hostname: (config.tunnel?.hostname || '').replace(/^https?:\/\//, ''),
+    tunnel_active: tunnelStatus === 'connected',
+    ble_devices: bleDevices,
+    uptime_s: Math.round(process.uptime()),
+  }
+  fetch(`${COMMUNITY_URL}/api/devices/heartbeat`, {
+    method: 'POST', headers: {'Content-Type':'application/json', Authorization:`Bearer ${config.communityDeviceToken}`},
+    body: JSON.stringify({ name: config.boxId, version: APP_VERSION, meta }), signal: AbortSignal.timeout(10000)
+  }).then(r => { if (r.status === 401) { delete config.communityDeviceToken; saveConfig(config); clearInterval(_fleetHeartbeatTimer) } })
+    .catch(e => console.error('[fleet] heartbeat failed:', e.message))
+}
+
 function communityPost(path, token, body) {
   const payload = JSON.stringify(body)
   return new Promise((resolve, reject) => {
@@ -3443,6 +3483,8 @@ server.listen(3000, '0.0.0.0', () => {
     // No token yet — try to auto-provision
     autoProvision()
   }
+  // Always try to register with community fleet (independent of tunnel)
+  communityFleetInit()
 })
 // Restart Bluetooth in background (only needed for Coyote BLE, non-blocking)
 exec('sudo systemctl restart bluetooth', err => {

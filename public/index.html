@@ -4354,17 +4354,17 @@ window.showBmPopup = function(groupId, evt) {
   const g = (S.groups||[]).find(g=>g.id===groupId); if (!g) return
   const st = groupState[groupId] || {intensity:0, waveform:'pulse'}
   const col = _bmColor(groupId)
-  const allWfs = [
-    ...(S.waveforms.builtin||[]),
-    ...(S.waveforms.custom||[]).filter(w=>w.type!=='audio').map(w=>({...w, icon:''})),
-    ...(S.waveforms.custom||[]).filter(w=>w.type==='audio').map(w=>({...w, icon:'🎵'})),
-  ]
-  const wfBtns = allWfs.map(w=>`
+  const builtinBtns = (S.waveforms.builtin||[]).map(w=>`
     <button data-wfid="${w.id}" onclick="bmPickWf('${groupId}','${w.id}')"
       style="background:${st.waveform===w.id?col+'22':'#1a1a1a'};border:1px solid ${st.waveform===w.id?col:'#282828'};
              border-radius:6px;padding:4px 8px;font-size:10px;color:${st.waveform===w.id?col:'#666'};cursor:pointer">
       ${w.icon||''} ${w.name}
     </button>`).join('')
+  const customOpts = (S.waveforms.custom||[]).filter(w=>w.type!=='audio').map(w=>
+    `<div class="wf-opt${st.waveform===w.id?' sel':''}" onclick="bmPickWf('${groupId}','${w.id}')">${w.name}</div>`).join('')
+  const audioOpts = (S.waveforms.custom||[]).filter(w=>w.type==='audio').map(w=>
+    `<div class="wf-opt${st.waveform===w.id?' sel':''}" onclick="bmPickWf('${groupId}','${w.id}')">🎵 ${w.name}</div>`).join('')
+  const customWfName = (S.waveforms.custom||[]).find(w=>w.id===st.waveform)?.name || null
   const el = document.createElement('div')
   el.id = 'bm-popup'
   el.style.cssText = 'position:fixed;background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:14px;min-width:220px;z-index:9999;box-shadow:0 8px 32px #000c'
@@ -4383,7 +4383,17 @@ window.showBmPopup = function(groupId, evt) {
         style="width:100%;accent-color:${col};cursor:pointer"
         oninput="bmSetIntensity('${groupId}',+this.value)">
     </div>
-    <div id="bm-wf-btns" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px">${wfBtns}</div>
+    <div id="bm-wf-btns" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">${builtinBtns}</div>
+    ${(customOpts||audioOpts) ? `<div class="wf-sel" style="margin-bottom:12px">
+      <button class="wf-sel-btn" onclick="toggleDrop('bm-custom-drop')">
+        <span id="bm-custom-label">${customWfName ? escHtml(customWfName) : 'Custom / Audio…'}</span>
+        <span style="font-size:10px;opacity:.5">&#9660;</span>
+      </button>
+      <div class="wf-drop" id="bm-custom-drop" style="min-width:180px">
+        ${customOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Custom</div>${customOpts}</div>` : ''}
+        ${audioOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${audioOpts}</div>` : ''}
+      </div>
+    </div>` : ''}
     <button onclick="bmStop('${groupId}')"
       style="width:100%;background:#1a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:7px;padding:7px;font-size:11px;cursor:pointer;font-weight:600">
       Stop
@@ -4417,6 +4427,11 @@ window.bmPickWf = function(groupId, wfId) {
     b.style.border = `1px solid ${active ? col : '#282828'}`
     b.style.color = active ? col : '#666'
   })
+  const selOpt = document.querySelector(`#bm-custom-drop .wf-opt[onclick*="'${wfId}'"]`)
+  const lbl = document.getElementById('bm-custom-label')
+  if (lbl) lbl.textContent = selOpt ? selOpt.textContent.trim() : 'Custom / Audio…'
+  document.querySelectorAll('#bm-custom-drop .wf-opt').forEach(o => o.classList.toggle('sel', o === selOpt))
+  document.getElementById('bm-custom-drop')?.classList.remove('open')
 }
 window.bmStop = function(groupId) {
   send({type:'group:stop', groupId})

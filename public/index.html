@@ -1530,26 +1530,43 @@ function renderCommunityTab() {
 }
 
 // ── Registration ──────────────────────────────────────────────────────────
-function renderCommRegister() {
+function renderCommRegister(mode) {
+  mode = mode || 'register'
   const wrap = document.getElementById('comm-wrap'); if (!wrap) return
+  const inp = 'width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:10px 12px;color:#e0e0e0;font-size:13px;outline:none'
+  const registerForm = `
+    <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px">
+      <div style="position:relative">
+        <input id="comm-uname" type="text" placeholder="Username (3–30 chars, letters/numbers/_/-)"
+          style="${inp};padding-right:36px" oninput="commCheckUsername(this.value)">
+        <span id="comm-uname-status" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px"></span>
+      </div>
+      <div id="comm-uname-msg" style="font-size:11px;color:#f87171;min-height:14px"></div>
+      <input id="comm-reg-pass" type="password" placeholder="Password (min 6 characters)" style="${inp}">
+      <button id="comm-reg-btn" onclick="commRegister()" disabled
+        style="background:#1d4ed8;color:#fff;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;opacity:0.5">
+        Create Account
+      </button>
+    </div>`
+  const loginForm = `
+    <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px">
+      <input id="comm-login-uname" type="text" placeholder="Username" style="${inp}">
+      <input id="comm-login-pass" type="password" placeholder="Password" style="${inp}">
+      <div id="comm-login-msg" style="font-size:11px;color:#f87171;min-height:14px"></div>
+      <button onclick="commLogin()"
+        style="background:#1d4ed8;color:#fff;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer">
+        Log In
+      </button>
+    </div>`
   wrap.innerHTML = `
     <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;padding:32px">
       <div style="font-size:32px">🌐</div>
-      <div style="font-size:16px;font-weight:600;color:#e0e0e0">Join the Community</div>
-      <div style="font-size:12px;color:#555;text-align:center;max-width:280px">Pick a username to access the forum and share waveforms with other EdgeController users.</div>
-      <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px">
-        <div style="position:relative">
-          <input id="comm-uname" type="text" placeholder="Username (3–30 chars, letters/numbers/_/-)"
-            style="width:100%;box-sizing:border-box;background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:10px 36px 10px 12px;color:#e0e0e0;font-size:13px;outline:none"
-            oninput="commCheckUsername(this.value)">
-          <span id="comm-uname-status" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px"></span>
-        </div>
-        <div id="comm-uname-msg" style="font-size:11px;color:#f87171;min-height:14px"></div>
-        <button id="comm-reg-btn" onclick="commRegister()" disabled
-          style="background:#1d4ed8;color:#fff;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;opacity:0.5">
-          Create Account
-        </button>
+      <div style="font-size:16px;font-weight:600;color:#e0e0e0">Community</div>
+      <div style="display:flex;border-bottom:1px solid #1e1e1e;width:100%;max-width:320px;margin-bottom:4px">
+        <button onclick="renderCommRegister('register')" style="flex:1;background:none;border:none;border-bottom:2px solid ${mode==='register'?'#a78bfa':'transparent'};color:${mode==='register'?'#a78bfa':'#555'};padding:9px;font-size:12px;font-weight:600;cursor:pointer">Create Account</button>
+        <button onclick="renderCommRegister('login')" style="flex:1;background:none;border:none;border-bottom:2px solid ${mode==='login'?'#a78bfa':'transparent'};color:${mode==='login'?'#a78bfa':'#555'};padding:9px;font-size:12px;font-weight:600;cursor:pointer">Log In</button>
       </div>
+      ${mode === 'register' ? registerForm : loginForm}
     </div>`
 }
 
@@ -1577,11 +1594,26 @@ window.commCheckUsername = function(val) {
 
 window.commRegister = async function() {
   const username = document.getElementById('comm-uname')?.value?.trim(); if (!username) return
+  const password = document.getElementById('comm-reg-pass')?.value; if (!password) { document.getElementById('comm-uname-msg').textContent = 'Password required'; return }
   const btn = document.getElementById('comm-reg-btn'); if (btn) { btn.disabled = true; btn.textContent = 'Registering…' }
-  const r = await commFetch('/api/register', { method:'POST', body: JSON.stringify({username}) })
+  const r = await commFetch('/api/register', { method:'POST', body: JSON.stringify({username, password}) })
   if (!r) { if (btn) { btn.disabled = false; btn.textContent = 'Create Account' } return }
   const d = await r.json()
   if (d.error) { document.getElementById('comm-uname-msg').textContent = d.error; if (btn) { btn.disabled = false; btn.textContent = 'Create Account' } return }
+  CS.token = d.token; CS.user = d.user
+  localStorage.setItem('comm_token', d.token); localStorage.setItem('comm_user', JSON.stringify(d.user))
+  CS.page = 'forum'; await loadCommPosts(); renderCommunityTab()
+}
+
+window.commLogin = async function() {
+  const username = document.getElementById('comm-login-uname')?.value?.trim()
+  const password = document.getElementById('comm-login-pass')?.value
+  const msg = document.getElementById('comm-login-msg')
+  if (!username) { if (msg) msg.textContent = 'Username required'; return }
+  const r = await commFetch('/api/login', { method:'POST', body: JSON.stringify({username, password}) })
+  if (!r) return
+  const d = await r.json()
+  if (d.error) { if (msg) msg.textContent = d.error; return }
   CS.token = d.token; CS.user = d.user
   localStorage.setItem('comm_token', d.token); localStorage.setItem('comm_user', JSON.stringify(d.user))
   CS.page = 'forum'; await loadCommPosts(); renderCommunityTab()
@@ -1796,6 +1828,20 @@ window.commEditProfile = function() {
         </div>
       </div>
       <div id="comm-profile-msg" style="font-size:11px;color:#4ade80;min-height:14px"></div>
+      <div style="margin-top:16px;border-top:1px solid #1e1e1e;padding-top:16px">
+        <div style="font-size:12px;font-weight:600;color:#888;margin-bottom:10px">Change Password</div>
+        <div style="display:flex;flex-direction:column;gap:8px;max-width:280px">
+          <input id="comm-pass-new" type="password" placeholder="New password (min 6 characters)"
+            style="background:#1a1a1a;border:1px solid #333;border-radius:7px;padding:8px 10px;color:#e0e0e0;font-size:12px;outline:none">
+          <input id="comm-pass-confirm" type="password" placeholder="Confirm new password"
+            style="background:#1a1a1a;border:1px solid #333;border-radius:7px;padding:8px 10px;color:#e0e0e0;font-size:12px;outline:none">
+          <div id="comm-pass-msg" style="font-size:11px;color:#f87171;min-height:14px"></div>
+          <button onclick="commChangePassword()"
+            style="background:#1a1a1a;color:#a78bfa;border:1px solid #2a2a2a;border-radius:7px;padding:7px 14px;font-size:11px;cursor:pointer;align-self:flex-start">
+            Update Password
+          </button>
+        </div>
+      </div>
       <button onclick="commLogout()" style="margin-top:20px;background:#2a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:7px;padding:7px 14px;font-size:11px;cursor:pointer">Sign Out</button>
     </div>`
 }
@@ -1817,6 +1863,23 @@ window.commLogout = function() {
   CS.token = null; CS.user = null; CS.page = 'forum'
   localStorage.removeItem('comm_token'); localStorage.removeItem('comm_user')
   renderCommunityTab()
+}
+
+window.commChangePassword = async function() {
+  const pw = document.getElementById('comm-pass-new')?.value
+  const pw2 = document.getElementById('comm-pass-confirm')?.value
+  const msg = document.getElementById('comm-pass-msg')
+  if (!pw || pw.length < 6) { if (msg) msg.textContent = 'Password must be at least 6 characters'; return }
+  if (pw !== pw2) { if (msg) msg.textContent = 'Passwords do not match'; return }
+  if (msg) msg.textContent = ''
+  const r = await commFetch('/api/me/password', { method:'POST', body: JSON.stringify({password: pw}) })
+  if (!r) return
+  const d = await r.json()
+  if (d.error) { if (msg) msg.textContent = d.error; return }
+  const profileMsg = document.getElementById('comm-profile-msg')
+  if (profileMsg) profileMsg.textContent = 'Password updated!'
+  document.getElementById('comm-pass-new').value = ''
+  document.getElementById('comm-pass-confirm').value = ''
 }
 
 // ── Waveforms ─────────────────────────────────────────────────────────────

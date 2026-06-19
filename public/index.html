@@ -4223,12 +4223,12 @@ function _bmColor(groupId) {
 }
 
 const _BODY_SVG = `<svg viewBox="0 0 60 150" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:100%">
-  <ellipse cx="30" cy="9" rx="9" ry="9.5" stroke="#2a2a2a" stroke-width="1.5"/>
+  <ellipse cx="30" cy="9" rx="9" ry="9.5" stroke="#aaaaaa" stroke-width="1.2"/>
   <path d="M26,18 C20,22 10,28 6,40 L4,70 C3,74 3,79 6,81 L13,81 L15,56 L18,43
            L18,90 L16,98 L16,148 L25,148 L25,110 C27,106 33,106 35,110
            L35,148 L44,148 L44,98 L42,90 L42,43 L45,56 L47,81 L54,81
            C57,79 57,74 56,70 L54,40 C50,28 40,22 34,18 Z"
-    stroke="#2a2a2a" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+    stroke="#aaaaaa" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>
 </svg>`
 
 function renderBodyMap() {
@@ -4288,7 +4288,7 @@ function renderBodyMap() {
     return `<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
       <div style="font-size:9px;font-weight:700;color:#333;text-transform:uppercase;letter-spacing:1.5px">${side}</div>
       <div id="bm-${side}" data-side="${side}" class="bm-drop"
-        style="position:relative;width:110px;height:265px">
+        style="position:relative;height:min(65vh,560px);aspect-ratio:2/5">
         ${_BODY_SVG}
         ${hotspotsHtml(side)}
       </div>

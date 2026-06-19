@@ -4216,6 +4216,9 @@ function pickGroupWf(grpId,wfId){
 
 // ── Body Map ──────────────────────────────────────────────────────────────────
 let _bodyMapEditing = false
+let _bmSyncActive = false
+let _bmWaveform = 'pulse'
+let _bmAudioState = null  // {audio, syncInterval}
 const _BM_COLORS = ['#a78bfa','#f472b6','#4ade80','#fb923c','#38bdf8','#fbbf24','#e879f9','#34d399']
 function _bmColor(groupId) {
   const idx = (S.groups||[]).findIndex(g=>g.id===groupId)
@@ -4295,12 +4298,49 @@ function renderBodyMap() {
     </div>`
   }
 
+  const bmBuiltinBtns = (S.waveforms.builtin||[]).map(w=>`
+    <button onclick="bmGlobalPickWf('${w.id}')" id="bm-gwf-${w.id}"
+      style="background:${_bmWaveform===w.id?'#4fc3f722':'#1a1a1a'};border:1px solid ${_bmWaveform===w.id?'#4fc3f7':'#282828'};
+             border-radius:6px;padding:3px 7px;font-size:10px;color:${_bmWaveform===w.id?'#4fc3f7':'#666'};cursor:pointer;white-space:nowrap">
+      ${w.name}
+    </button>`).join('')
+  const bmCustomOpts = (S.waveforms.custom||[]).filter(w=>w.type!=='audio').map(w=>
+    `<div class="wf-opt${_bmWaveform===w.id?' sel':''}" onclick="bmGlobalPickWf('${w.id}')">${w.name}</div>`).join('')
+  const bmAudioOpts = (S.waveforms.custom||[]).filter(w=>w.type==='audio').map(w=>
+    `<div class="wf-opt${_bmWaveform===w.id?' sel':''}" onclick="bmGlobalPickWf('${w.id}')">🎵 ${w.name}</div>`).join('')
+  const bmCustomWfName = (S.waveforms.custom||[]).find(w=>w.id===_bmWaveform)?.name || null
+  const bmHasCustom = !!(bmCustomOpts || bmAudioOpts)
+
   root.innerHTML = `
-    <div style="padding:10px 14px;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;gap:10px;flex-shrink:0">
+    <div style="padding:8px 14px;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap">
       <span style="font-size:11px;color:#444">${_bodyMapEditing
         ? 'Drag groups onto the body — click ✕ to remove'
-        : 'Click a hotspot to control a group'}</span>
+        : 'Click a hotspot to adjust intensity'}</span>
       <div style="flex:1"></div>
+      ${!_bodyMapEditing ? `
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          ${bmBuiltinBtns}
+          ${bmHasCustom ? `<div class="wf-sel" style="min-width:110px">
+            <button class="wf-sel-btn" onclick="toggleDrop('bm-global-drop')" style="padding:3px 8px;font-size:10px;gap:4px">
+              <span id="bm-glbl-lbl">${bmCustomWfName ? escHtml(bmCustomWfName) : 'Custom…'}</span>
+              <span style="font-size:9px;opacity:.5">&#9660;</span>
+            </button>
+            <div class="wf-drop" id="bm-global-drop" style="right:0;left:auto;min-width:160px">
+              ${bmCustomOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Custom</div>${bmCustomOpts}</div>` : ''}
+              ${bmAudioOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${bmAudioOpts}</div>` : ''}
+            </div>
+          </div>` : ''}
+          <button id="bm-aud-btn" onclick="toggleBmAudio()" title="Play audio in sync with waveform"
+            style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:6px;padding:3px 8px;font-size:13px;cursor:pointer;color:#666">
+            🔇
+          </button>
+          <button id="bm-sync-btn" onclick="toggleBmSync()"
+            style="background:${_bmSyncActive?'#0d2233':'#1a1a1a'};border:1px solid ${_bmSyncActive?'#4fc3f7':'#282828'};
+                   border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;
+                   color:${_bmSyncActive?'#4fc3f7':'#666'};font-weight:${_bmSyncActive?'600':'400'}">
+            Sync
+          </button>
+        </div>` : ''}
       ${editBtn}
     </div>
     <div style="flex:1;display:flex;overflow:hidden;min-height:0">
@@ -4315,6 +4355,93 @@ function renderBodyMap() {
 }
 
 window.toggleBodyMapEdit = function() { _bodyMapEditing = !_bodyMapEditing; renderBodyMap() }
+
+window.bmGlobalPickWf = function(wfId) {
+  _bmWaveform = wfId
+  document.querySelectorAll('[id^="bm-gwf-"]').forEach(b => {
+    const active = b.id === 'bm-gwf-' + wfId
+    b.style.background = active ? '#4fc3f722' : '#1a1a1a'
+    b.style.border = `1px solid ${active ? '#4fc3f7' : '#282828'}`
+    b.style.color = active ? '#4fc3f7' : '#666'
+  })
+  const customWf = (S.waveforms.custom||[]).find(w=>w.id===wfId)
+  const lbl = document.getElementById('bm-glbl-lbl')
+  if (lbl) lbl.textContent = customWf ? customWf.name : 'Custom…'
+  document.querySelectorAll('#bm-global-drop .wf-opt').forEach(o =>
+    o.classList.toggle('sel', o.dataset?.wfid === wfId || o.onclick?.toString().includes(`'${wfId}'`)))
+  document.getElementById('bm-global-drop')?.classList.remove('open')
+  const allPlaced = (S.groups||[]).filter(g=>g.bodyPos?.side)
+  for (const g of allPlaced) {
+    if (!groupState[g.id]) groupState[g.id] = {intensity:0, waveform:'pulse'}
+    groupState[g.id].waveform = wfId
+    send({type:'group:set', groupId:g.id, params:{waveform:wfId}})
+  }
+  if (_bmAudioState) stopBmAudio()
+}
+
+window.toggleBmSync = function() {
+  _bmSyncActive = !_bmSyncActive
+  const btn = document.getElementById('bm-sync-btn')
+  const allPlaced = (S.groups||[]).filter(g=>g.bodyPos?.side)
+  if (_bmSyncActive) {
+    if (btn) { btn.style.color='#4fc3f7'; btn.style.fontWeight='600'; btn.style.background='#0d2233'; btn.style.borderColor='#4fc3f7' }
+    for (const g of allPlaced) _syncEnabled.add('grp:'+g.id)
+    for (const g of allPlaced) {
+      if (!groupState[g.id]) groupState[g.id] = {intensity:0, waveform:'pulse'}
+      groupState[g.id].waveform = _bmWaveform
+      send({type:'group:set', groupId:g.id, params:{waveform:_bmWaveform}})
+    }
+  } else {
+    if (btn) { btn.style.color='#666'; btn.style.fontWeight='400'; btn.style.background='#1a1a1a'; btn.style.borderColor='#282828' }
+    for (const g of allPlaced) _syncEnabled.delete('grp:'+g.id)
+  }
+}
+
+function stopBmAudio() {
+  if (!_bmAudioState) return
+  clearInterval(_bmAudioState.syncInterval)
+  try { _bmAudioState.audio.pause(); _bmAudioState.audio.src = '' } catch {}
+  _bmAudioState = null
+  const btn = document.getElementById('bm-aud-btn')
+  if (btn) { btn.textContent = '🔇'; btn.style.color = '' }
+}
+
+window.toggleBmAudio = async function() {
+  if (_bmAudioState) { stopBmAudio(); return }
+  const btn = document.getElementById('bm-aud-btn')
+  const wf = (S.waveforms.custom||[]).find(w=>w.id===_bmWaveform && w.type==='audio')
+  if (!wf) {
+    if (btn) { btn.style.color='#c0392b'; setTimeout(()=>{ if(btn) btn.style.color='' }, 800) }
+    return
+  }
+  const refGrp = (S.groups||[]).filter(g=>g.bodyPos?.side)
+    .find(g=>g.channels?.some(({deviceId})=>S.devices?.[deviceId]?.status==='connected'))
+  const refGrpId = refGrp?.id
+  const refCh = refGrp?.channels?.find(({deviceId})=>S.devices?.[deviceId]?.status==='connected')
+  const refDevId = refCh?.deviceId
+  const fch = refCh?.channel
+  const speed = (refDevId ? S.devices[refDevId]?.channels?.[fch]?.speed : null) || 1
+  const fLen = Array.isArray(wf.frames) ? wf.frames.length : (wf.frames||0)
+  const audio = new Audio(`/api/audio/${wf.id}/file`)
+  audio.loop = true
+  audio.playbackRate = Math.min(Math.max(speed, 0.25), 4)
+  audio.addEventListener('loadedmetadata', () => {
+    const d = refDevId ? S.devices[refDevId] : null
+    audio.currentTime = _calcAudioTime(d?.ticks?.[fch]||0, d?.tickAt, speed, fLen, audio.duration)
+    if (!d?.paused?.[fch]) audio.play().catch(()=>{})
+  })
+  const syncInterval = setInterval(() => {
+    const d = refDevId ? S.devices[refDevId] : null
+    const currentWfId = d?.channels?.[fch]?.waveform || groupState[refGrpId]?.waveform || _bmWaveform
+    if (currentWfId !== wf.id) { stopBmAudio(); return }
+    if (d?.paused?.[fch]) { if (!audio.paused) audio.pause(); return }
+    if (audio.paused) audio.play().catch(()=>{})
+    const expected = _calcAudioTime(d?.ticks?.[fch]||0, d?.tickAt, speed, fLen, audio.duration)
+    if (Math.abs(audio.currentTime - expected) > 0.5) audio.currentTime = expected
+  }, 2000)
+  _bmAudioState = {audio, syncInterval}
+  if (btn) { btn.textContent = '🔊'; btn.style.color = '#4fc3f7' }
+}
 
 function _initBmDrag() {
   let _dragGid = null
@@ -4432,6 +4559,19 @@ window.bmPickWf = function(groupId, wfId) {
   if (lbl) lbl.textContent = selOpt ? selOpt.textContent.trim() : 'Custom / Audio…'
   document.querySelectorAll('#bm-custom-drop .wf-opt').forEach(o => o.classList.toggle('sel', o === selOpt))
   document.getElementById('bm-custom-drop')?.classList.remove('open')
+  propagateSyncWf('grp:'+groupId, wfId)
+  if (_bmSyncActive) {
+    _bmWaveform = wfId
+    document.querySelectorAll('[id^="bm-gwf-"]').forEach(b => {
+      const active = b.id === 'bm-gwf-' + wfId
+      b.style.background = active ? '#4fc3f722' : '#1a1a1a'
+      b.style.border = `1px solid ${active ? '#4fc3f7' : '#282828'}`
+      b.style.color = active ? '#4fc3f7' : '#666'
+    })
+    const customWf = (S.waveforms.custom||[]).find(w=>w.id===wfId)
+    const glbl = document.getElementById('bm-glbl-lbl')
+    if (glbl) glbl.textContent = customWf ? customWf.name : 'Custom…'
+  }
 }
 window.bmStop = function(groupId) {
   send({type:'group:stop', groupId})

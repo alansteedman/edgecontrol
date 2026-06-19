@@ -1590,15 +1590,19 @@ window.commRegister = async function() {
 // ── Top nav bar ───────────────────────────────────────────────────────────
 function commTopBar() {
   const isAdmin = CS.user?.role === 'admin'
-  const isMod   = CS.user?.role === 'mod' || isAdmin
-  return `<div style="display:flex;align-items:center;gap:6px;padding:10px 14px;background:#111;border-bottom:1px solid #1e1e1e;flex-shrink:0">
-    <button onclick="setCommPage('forum')" style="background:${CS.page==='forum'||CS.page==='post'?'#1d4ed8':'#1a1a1a'};color:#e0e0e0;border:1px solid #333;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer">Forum</button>
-    <button onclick="setCommPage('waveforms')" style="background:${CS.page==='waveforms'?'#1d4ed8':'#1a1a1a'};color:#e0e0e0;border:1px solid #333;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer">Waveforms</button>
-    ${isAdmin?`<button onclick="setCommPage('admin')" style="background:${CS.page==='admin'?'#7c3aed':'#1a1a1a'};color:#e0e0e0;border:1px solid #333;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer">Admin</button>`:''}
+  const forumActive    = CS.page==='forum'||CS.page==='post'
+  const waveformActive = CS.page==='waveforms'
+  const adminActive    = CS.page==='admin'
+  return `<div style="background:#141414;border-bottom:1px solid #1e1e1e;display:flex;align-items:center;flex-shrink:0">
+    <button class="sub-btn${forumActive?' active':''}" onclick="setCommPage('forum')">Forum</button>
+    <button class="sub-btn${waveformActive?' active':''}" onclick="setCommPage('waveforms')">Waveforms</button>
+    ${isAdmin?`<button class="sub-btn${adminActive?' active':''}" onclick="setCommPage('admin')">Admin</button>`:''}
     <div style="flex:1"></div>
-    ${commAvatar(CS.user?.avatar, 52)}
-    <span style="font-size:11px;color:#888;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${CS.user?.username||''}</span>
-    <button onclick="commEditProfile()" style="background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer">Profile</button>
+    <div style="display:flex;align-items:center;gap:8px;padding:0 14px">
+      ${commAvatar(CS.user?.avatar, 52)}
+      <span style="font-size:11px;color:#888;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${CS.user?.username||''}</span>
+      <button onclick="commEditProfile()" style="background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer">Profile</button>
+    </div>
   </div>`
 }
 

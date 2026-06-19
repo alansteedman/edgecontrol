@@ -3264,11 +3264,12 @@ async function communityFleetInit() {
 
 function communityHeartbeat() {
   if (!config.communityDeviceToken) return
-  const bleDevices = (config.devices || []).map(d => ({ id: d.id, name: d.name, type: d.type }))
+  const devList = (config.devices || []).map(d => ({ id: d.id, name: d.name, type: d.type }))
+  if (streamDeck) devList.push({ id: 'streamdeck', name: streamDeck.deck?.PRODUCT_NAME || 'Stream Deck+', type: 'streamdeck' })
   const meta = {
     tunnel_hostname: (config.tunnel?.hostname || '').replace(/^https?:\/\//, ''),
     tunnel_active: tunnelStatus === 'connected',
-    ble_devices: bleDevices,
+    ble_devices: devList,
     uptime_s: Math.round(process.uptime()),
   }
   fetch(`${COMMUNITY_URL}/api/devices/heartbeat`, {

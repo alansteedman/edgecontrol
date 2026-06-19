@@ -2122,7 +2122,7 @@ function renderCommFleet() {
     const ago = d.last_seen ? commTimeAgo(now - d.last_seen) : 'never'
     const deviceGroups = {
       BLE:     { types: ['coyote','pawprints'], color: '#6d28d9', bg: '#1a1030' },
-      USB:     { types: ['estim','nimble'],     color: '#0369a1', bg: '#0a1a28' },
+      USB:     { types: ['estim','nimble','streamdeck'], color: '#0369a1', bg: '#0a1a28' },
       Network: { types: ['eom','camera','hue','shelly'], color: '#065f46', bg: '#0a1e18' },
     }
     const grouped = Object.entries(deviceGroups).map(([label, {types, color, bg}]) => {

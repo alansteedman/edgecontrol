@@ -379,6 +379,7 @@ select.mci{cursor:pointer}
     <button class="sub-btn active" id="sub-channels-btn" onclick="showSub('channels',this)">Channels</button>
     <button class="sub-btn" id="sub-groups-btn" onclick="showSub('groups',this)">Groups</button>
     <button class="sub-btn" id="sub-waveforms-btn" onclick="showSub('waveforms',this)">Waveforms</button>
+    <button class="sub-btn" id="sub-bodymap-btn" onclick="showSub('bodymap',this)">Body Map</button>
   </div>
 
   <!-- Macros tab -->
@@ -570,6 +571,11 @@ select.mci{cursor:pointer}
       </div>
 
     </div>
+
+    <div id="sub-bodymap" class="sub-pane" style="padding:0;overflow:hidden">
+      <div id="bodymap-root" style="height:100%;display:flex;flex-direction:column"></div>
+    </div>
+
   </div>
 
   <!-- EoM tab -->
@@ -1225,6 +1231,7 @@ function showSub(name,btn) {
   document.getElementById('sub-'+name).classList.add('active')
   btn.classList.add('active')
   if(name==='waveforms') setTimeout(()=>{ paintCanvas() },80)
+  if(name==='bodymap') renderBodyMap()
 }
 
 // ── Render all ────────────────────────────────────────────────────────────────
@@ -4205,6 +4212,212 @@ function pickGroupWf(grpId,wfId){
   send({type:'group:set',groupId:grpId,params:{waveform:wfId}})
   document.getElementById('gc-'+grpId)?.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
   propagateSyncWf('grp:'+grpId, wfId)
+}
+
+// ── Body Map ──────────────────────────────────────────────────────────────────
+let _bodyMapEditing = false
+const _BM_COLORS = ['#a78bfa','#f472b6','#4ade80','#fb923c','#38bdf8','#fbbf24','#e879f9','#34d399']
+function _bmColor(groupId) {
+  const idx = (S.groups||[]).findIndex(g=>g.id===groupId)
+  return _BM_COLORS[Math.max(0,idx) % _BM_COLORS.length]
+}
+
+const _BODY_SVG = `<svg viewBox="0 0 60 150" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:100%">
+  <ellipse cx="30" cy="9" rx="9" ry="9.5" stroke="#2a2a2a" stroke-width="1.5"/>
+  <path d="M26,18 C20,22 10,28 6,40 L4,70 C3,74 3,79 6,81 L13,81 L15,56 L18,43
+           L18,90 L16,98 L16,148 L25,148 L25,110 C27,106 33,106 35,110
+           L35,148 L44,148 L44,98 L42,90 L42,43 L45,56 L47,81 L54,81
+           C57,79 57,74 56,70 L54,40 C50,28 40,22 34,18 Z"
+    stroke="#2a2a2a" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>`
+
+function renderBodyMap() {
+  const root = document.getElementById('bodymap-root'); if (!root) return
+  const placed = {front:[], back:[]}
+  const unplaced = []
+  for (const g of (S.groups||[])) {
+    if (g.bodyPos?.side === 'front') placed.front.push(g)
+    else if (g.bodyPos?.side === 'back') placed.back.push(g)
+    else unplaced.push(g)
+  }
+  const editBtn = _bodyMapEditing
+    ? `<button onclick="toggleBodyMapEdit()" style="background:#1d3a1d;color:#4ade80;border:1px solid #2d5a2d;border-radius:7px;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600">✓ Done</button>`
+    : `<button onclick="toggleBodyMapEdit()" style="background:#1a1a1a;color:#888;border:1px solid #2a2a2a;border-radius:7px;padding:5px 14px;font-size:11px;cursor:pointer">Edit Placement</button>`
+
+  const sidebarHtml = _bodyMapEditing ? `
+    <div style="width:150px;flex-shrink:0;border-right:1px solid #1a1a1a;padding:12px;overflow-y:auto">
+      <div style="font-size:9px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">Drag to place</div>
+      ${unplaced.map(g=>`
+        <div class="bm-chip" data-gid="${g.id}" draggable="true"
+          style="background:#1a1a1a;border:1px solid ${_bmColor(g.id)}55;border-radius:8px;
+                 padding:7px 10px;font-size:11px;cursor:grab;color:#e0e0e0;margin-bottom:6px;
+                 user-select:none;display:flex;align-items:center;gap:8px">
+          <div style="width:8px;height:8px;border-radius:50%;background:${_bmColor(g.id)};flex-shrink:0"></div>
+          ${escHtml(g.name)}
+        </div>`).join('') || '<div style="font-size:11px;color:#333;text-align:center;padding:8px 0">All groups placed</div>'}
+    </div>` : ''
+
+  function hotspotsHtml(side) {
+    return placed[side].map(g => {
+      const x = g.bodyPos.x * 100, y = g.bodyPos.y * 100
+      const col = _bmColor(g.id)
+      const initials = g.name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2)
+      if (_bodyMapEditing) {
+        return `<div class="bm-hs bm-hs-drag" data-gid="${g.id}" data-side="${side}" draggable="true"
+          style="position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);width:28px;height:28px;
+                 border-radius:50%;background:${col}22;border:2px solid ${col};cursor:grab;display:flex;
+                 align-items:center;justify-content:center;font-size:9px;color:${col};font-weight:700;z-index:2">
+          ${initials}
+          <span onclick="bmSavePos('${g.id}',null)"
+            style="position:absolute;top:-7px;right:-7px;width:14px;height:14px;border-radius:50%;
+                   background:#1a0808;border:1px solid #f87171;color:#f87171;font-size:9px;
+                   cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:3;line-height:1">✕</span>
+        </div>`
+      }
+      return `<div class="bm-hs" onclick="showBmPopup('${g.id}',event)"
+        style="position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);width:32px;height:32px;
+               border-radius:50%;background:${col}22;border:2px solid ${col};cursor:pointer;display:flex;
+               align-items:center;justify-content:center;font-size:9px;color:${col};font-weight:700;z-index:2;
+               box-shadow:0 0 10px ${col}55">
+        ${initials}
+      </div>`
+    }).join('')
+  }
+
+  function bodyPanel(side) {
+    return `<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+      <div style="font-size:9px;font-weight:700;color:#333;text-transform:uppercase;letter-spacing:1.5px">${side}</div>
+      <div id="bm-${side}" data-side="${side}" class="bm-drop"
+        style="position:relative;width:110px;height:265px">
+        ${_BODY_SVG}
+        ${hotspotsHtml(side)}
+      </div>
+    </div>`
+  }
+
+  root.innerHTML = `
+    <div style="padding:10px 14px;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <span style="font-size:11px;color:#444">${_bodyMapEditing
+        ? 'Drag groups onto the body — click ✕ to remove'
+        : 'Click a hotspot to control a group'}</span>
+      <div style="flex:1"></div>
+      ${editBtn}
+    </div>
+    <div style="flex:1;display:flex;overflow:hidden;min-height:0">
+      ${sidebarHtml}
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:50px;padding:20px;overflow:auto">
+        ${bodyPanel('front')}
+        ${bodyPanel('back')}
+      </div>
+    </div>`
+
+  if (_bodyMapEditing) _initBmDrag()
+}
+
+window.toggleBodyMapEdit = function() { _bodyMapEditing = !_bodyMapEditing; renderBodyMap() }
+
+function _initBmDrag() {
+  let _dragGid = null
+  document.querySelectorAll('.bm-chip,.bm-hs-drag').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      _dragGid = el.dataset.gid
+      e.dataTransfer.effectAllowed = 'move'
+      e.stopPropagation()
+    })
+  })
+  document.querySelectorAll('.bm-drop').forEach(zone => {
+    zone.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' })
+    zone.addEventListener('drop', e => {
+      e.preventDefault()
+      if (!_dragGid) return
+      const rect = zone.getBoundingClientRect()
+      const x = Math.max(0.05, Math.min(0.95, (e.clientX - rect.left) / rect.width))
+      const y = Math.max(0.05, Math.min(0.95, (e.clientY - rect.top) / rect.height))
+      bmSavePos(_dragGid, {side: zone.dataset.side, x, y})
+      _dragGid = null
+    })
+  })
+}
+
+window.bmSavePos = async function(groupId, pos) {
+  await fetch(`/api/groups/${groupId}`, {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({bodyPos: pos})
+  })
+  const g = (S.groups||[]).find(g=>g.id===groupId)
+  if (g) g.bodyPos = pos
+  renderBodyMap()
+}
+
+window.showBmPopup = function(groupId, evt) {
+  hideBmPopup()
+  const g = (S.groups||[]).find(g=>g.id===groupId); if (!g) return
+  const st = groupState[groupId] || {intensity:0, waveform:'pulse'}
+  const col = _bmColor(groupId)
+  const wfBtns = (S.waveforms.builtin||[]).map(w=>`
+    <button data-wfid="${w.id}" onclick="bmPickWf('${groupId}','${w.id}')"
+      style="background:${st.waveform===w.id?col+'22':'#1a1a1a'};border:1px solid ${st.waveform===w.id?col:'#282828'};
+             border-radius:6px;padding:4px 8px;font-size:10px;color:${st.waveform===w.id?col:'#666'};cursor:pointer">
+      ${w.icon||''} ${w.name}
+    </button>`).join('')
+  const el = document.createElement('div')
+  el.id = 'bm-popup'
+  el.style.cssText = 'position:fixed;background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:14px;min-width:220px;z-index:9999;box-shadow:0 8px 32px #000c'
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <div style="width:10px;height:10px;border-radius:50%;background:${col};flex-shrink:0"></div>
+      <div style="font-size:13px;font-weight:600;color:#e0e0e0;flex:1">${escHtml(g.name)}</div>
+      <button onclick="hideBmPopup()" style="background:none;border:none;color:#444;font-size:16px;cursor:pointer;line-height:1">✕</button>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+        <span style="font-size:10px;color:#555">Intensity</span>
+        <span id="bm-pct" style="font-size:10px;color:${col};font-weight:600">${st.intensity}%</span>
+      </div>
+      <input id="bm-slider" type="range" min="0" max="100" value="${st.intensity}"
+        style="width:100%;accent-color:${col};cursor:pointer"
+        oninput="bmSetIntensity('${groupId}',+this.value)">
+    </div>
+    <div id="bm-wf-btns" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px">${wfBtns}</div>
+    <button onclick="bmStop('${groupId}')"
+      style="width:100%;background:#1a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:7px;padding:7px;font-size:11px;cursor:pointer;font-weight:600">
+      Stop
+    </button>`
+  document.body.appendChild(el)
+  const px = Math.min(evt.clientX + 12, window.innerWidth - 240)
+  const py = Math.min(evt.clientY - 10, window.innerHeight - 300)
+  el.style.left = Math.max(10, px) + 'px'
+  el.style.top  = Math.max(10, py) + 'px'
+  setTimeout(() => document.addEventListener('click', _bmOutside), 100)
+}
+function _bmOutside(e) { if (!document.getElementById('bm-popup')?.contains(e.target)) hideBmPopup() }
+window.hideBmPopup = function() {
+  document.getElementById('bm-popup')?.remove()
+  document.removeEventListener('click', _bmOutside)
+}
+window.bmSetIntensity = function(groupId, v) {
+  if (!groupState[groupId]) groupState[groupId] = {intensity:0, waveform:'pulse'}
+  groupState[groupId].intensity = v
+  const pct = document.getElementById('bm-pct'); if (pct) pct.textContent = v+'%'
+  send({type:'group:set', groupId, params:{intensity:v, waveform:groupState[groupId].waveform||'pulse'}})
+}
+window.bmPickWf = function(groupId, wfId) {
+  if (!groupState[groupId]) groupState[groupId] = {intensity:0, waveform:'pulse'}
+  groupState[groupId].waveform = wfId
+  send({type:'group:set', groupId, params:{intensity: groupState[groupId].intensity||0, waveform:wfId}})
+  const col = _bmColor(groupId)
+  document.querySelectorAll('#bm-wf-btns button').forEach(b => {
+    const active = b.dataset.wfid === wfId
+    b.style.background = active ? col+'22' : '#1a1a1a'
+    b.style.border = `1px solid ${active ? col : '#282828'}`
+    b.style.color = active ? col : '#666'
+  })
+}
+window.bmStop = function(groupId) {
+  send({type:'group:stop', groupId})
+  if (groupState[groupId]) groupState[groupId].intensity = 0
+  const sl = document.getElementById('bm-slider'); if (sl) sl.value = 0
+  const pct = document.getElementById('bm-pct'); if (pct) pct.textContent = '0%'
 }
 
 // ── Group modal (new + edit) ──────────────────────────────────────────────────

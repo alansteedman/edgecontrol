@@ -2634,8 +2634,10 @@ app.post('/api/groups', (req,res) => {
 app.put('/api/groups/:id', (req,res) => {
   const g=(config.groups||[]).find(g=>g.id===req.params.id)
   if(!g) return res.status(404).json({error:'not found'})
-  const {name,channels}=req.body
-  if(name) g.name=name; if(Array.isArray(channels)) g.channels=channels
+  const {name,channels,bodyPos}=req.body
+  if(name) g.name=name
+  if(Array.isArray(channels)) g.channels=channels
+  if('bodyPos' in req.body) g.bodyPos=bodyPos
   saveConfig(config); broadcast({type:'group:updated',group:g})
   if (streamDeck) streamDeck.updateGroups(config.groups)
   res.json(g)

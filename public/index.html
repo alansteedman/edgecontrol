@@ -4305,7 +4305,7 @@ function renderBodyMap() {
     </div>
     <div style="flex:1;display:flex;overflow:hidden;min-height:0">
       ${sidebarHtml}
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:50px;padding:20px;overflow:auto">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:100px;padding:20px;overflow:auto">
         ${bodyPanel('front')}
         ${bodyPanel('back')}
       </div>
@@ -4354,7 +4354,12 @@ window.showBmPopup = function(groupId, evt) {
   const g = (S.groups||[]).find(g=>g.id===groupId); if (!g) return
   const st = groupState[groupId] || {intensity:0, waveform:'pulse'}
   const col = _bmColor(groupId)
-  const wfBtns = (S.waveforms.builtin||[]).map(w=>`
+  const allWfs = [
+    ...(S.waveforms.builtin||[]),
+    ...(S.waveforms.custom||[]).filter(w=>w.type!=='audio').map(w=>({...w, icon:''})),
+    ...(S.waveforms.custom||[]).filter(w=>w.type==='audio').map(w=>({...w, icon:'🎵'})),
+  ]
+  const wfBtns = allWfs.map(w=>`
     <button data-wfid="${w.id}" onclick="bmPickWf('${groupId}','${w.id}')"
       style="background:${st.waveform===w.id?col+'22':'#1a1a1a'};border:1px solid ${st.waveform===w.id?col:'#282828'};
              border-radius:6px;padding:4px 8px;font-size:10px;color:${st.waveform===w.id?col:'#666'};cursor:pointer">

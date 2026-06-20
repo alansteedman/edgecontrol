@@ -4758,6 +4758,11 @@ window.bmStop = function(groupId) {
 }
 window.bmPlaybackAll = function(action) {
   for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) grpPlayback(g.id, action)
+  const audio = _bmAudioState?.audio
+  if (!audio) return
+  if (action === 'play')  { audio.play().catch(()=>{}) }
+  if (action === 'pause') { audio.pause() }
+  if (action === 'back')  { audio.currentTime = 0; audio.play().catch(()=>{}) }
 }
 window.bmStopAll = function() {
   hideBmPopup()

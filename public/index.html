@@ -1231,7 +1231,8 @@ function showSub(name,btn) {
   document.getElementById('sub-'+name).classList.add('active')
   btn.classList.add('active')
   if(name==='waveforms') setTimeout(()=>{ paintCanvas() },80)
-  if(name==='bodymap') loadBodyLayouts().then(renderBodyMap)
+  if(name==='bodymap') { loadBodyLayouts().then(renderBodyMap); _startBmFallback() }
+  else _stopBmFallback()
 }
 
 // ── Render all ────────────────────────────────────────────────────────────────
@@ -4223,6 +4224,7 @@ let _bmAudioManualPause = false
 let _bmPausedIntensities = {}  // groupId → saved intensity
 let _bodyLayouts = []
 let _bmCurrentLayout = null
+let _bmFallbackTimer = null
 const _bmlBtn = 'background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:4px 12px;font-size:11px;color:#888;cursor:pointer;'
 const _BM_COLORS = ['#a78bfa','#f472b6','#4ade80','#fb923c','#38bdf8','#fbbf24','#e879f9','#34d399']
 function _bmColor(groupId) {
@@ -4709,6 +4711,29 @@ function _bmOutside(e) { if (!document.getElementById('bm-popup')?.contains(e.ta
 window.hideBmPopup = function() {
   document.getElementById('bm-popup')?.remove()
   document.removeEventListener('click', _bmOutside)
+}
+function _startBmFallback() {
+  if (_bmFallbackTimer) return
+  _bmFallbackTimer = setInterval(() => {
+    if (!document.getElementById('sub-bodymap')?.classList.contains('active')) return
+    for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) {
+      const hasConnected = g.channels?.some(c=>S.devices?.[c.deviceId]?.status==='connected')
+      if (hasConnected) continue
+      const intensity = groupState[g.id]?.intensity || 0
+      if (intensity === 0) continue
+      const inner = document.getElementById('bm-hs-'+g.id)?.querySelector('div')
+      if (!inner) continue
+      const col = _bmColor(g.id)
+      const s = 1 + (intensity / 100) * 0.22
+      inner.style.transform = `scale(${s.toFixed(3)})`
+      inner.style.boxShadow = `0 0 ${Math.round(6 + intensity * 0.08)}px ${col}aa`
+      clearTimeout(inner._pt)
+      inner._pt = setTimeout(() => { inner.style.transform='scale(1)'; inner.style.boxShadow='none' }, 70)
+    }
+  }, 100)
+}
+function _stopBmFallback() {
+  if (_bmFallbackTimer) { clearInterval(_bmFallbackTimer); _bmFallbackTimer = null }
 }
 function bmTickPulse(deviceId, paused) {
   if (!document.getElementById('sub-bodymap')?.classList.contains('active')) return

@@ -4220,6 +4220,7 @@ let _bmSyncActive = false
 let _bmWaveform = 'pulse'
 let _bmAudioState = null
 let _bmAudioManualPause = false
+let _bmPausedIntensities = {}  // groupId → saved intensity
 let _bodyLayouts = []
 let _bmCurrentLayout = null
 const _bmlBtn = 'background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:4px 12px;font-size:11px;color:#888;cursor:pointer;'
@@ -4760,7 +4761,32 @@ window.bmStop = function(groupId) {
   updateBmRing(groupId, 0)
 }
 window.bmPlaybackAll = function(action) {
-  for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) grpPlayback(g.id, action)
+  const placed = (S.groups||[]).filter(g=>g.bodyPos?.side)
+  if (action === 'pause') {
+    _bmPausedIntensities = {}
+    for (const g of placed) {
+      _bmPausedIntensities[g.id] = groupState[g.id]?.intensity || 0
+      send({type:'group:set', groupId:g.id, params:{intensity:0, waveform:groupState[g.id]?.waveform||'pulse'}})
+      if (groupState[g.id]) groupState[g.id].intensity = 0
+      updateBmRing(g.id, 0)
+    }
+  } else if (action === 'play') {
+    for (const g of placed) {
+      grpPlayback(g.id, 'play')
+      const v = _bmPausedIntensities[g.id] ?? groupState[g.id]?.intensity ?? 0
+      send({type:'group:set', groupId:g.id, params:{intensity:v, waveform:groupState[g.id]?.waveform||'pulse'}})
+      if (groupState[g.id]) groupState[g.id].intensity = v
+      updateBmRing(g.id, v)
+    }
+  } else if (action === 'back') {
+    for (const g of placed) {
+      grpPlayback(g.id, 'back')
+      const v = _bmPausedIntensities[g.id] ?? groupState[g.id]?.intensity ?? 0
+      send({type:'group:set', groupId:g.id, params:{intensity:v, waveform:groupState[g.id]?.waveform||'pulse'}})
+      if (groupState[g.id]) groupState[g.id].intensity = v
+      updateBmRing(g.id, v)
+    }
+  }
   const audio = _bmAudioState?.audio
   if (!audio) return
   if (action === 'play')  { _bmAudioManualPause = false; audio.play().catch(()=>{}) }

@@ -4277,12 +4277,16 @@ function renderBodyMap() {
                    cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:3;line-height:1">✕</span>
         </div>`
       }
-      return `<div class="bm-hs" onclick="showBmPopup('${g.id}',event)"
-        style="position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);width:32px;height:32px;
-               border-radius:50%;background:${col}22;border:2px solid ${col};cursor:pointer;display:flex;
-               align-items:center;justify-content:center;font-size:9px;color:${col};font-weight:700;z-index:2;
-               box-shadow:0 0 10px ${col}55">
-        ${initials}
+      const pct0 = groupState[g.id]?.intensity || 0
+      const deg0 = pct0 * 3.6
+      return `<div class="bm-hs" id="bm-hs-${g.id}" onclick="showBmPopup('${g.id}',event)"
+        style="position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);width:36px;height:36px;
+               border-radius:50%;background:conic-gradient(${col} ${deg0}deg,${col}22 ${deg0}deg);
+               cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2">
+        <div style="width:28px;height:28px;border-radius:50%;background:#0d0d0d;display:flex;
+                    align-items:center;justify-content:center;font-size:9px;color:${col};font-weight:700">
+          ${initials}
+        </div>
       </div>`
     }).join('')
   }
@@ -4339,6 +4343,11 @@ function renderBodyMap() {
                    border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;
                    color:${_bmSyncActive?'#4fc3f7':'#666'};font-weight:${_bmSyncActive?'600':'400'}">
             Sync
+          </button>
+          <button onclick="bmStopAll()"
+            style="background:#1a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:6px;
+                   padding:3px 10px;font-size:10px;cursor:pointer;font-weight:600">
+            Stop All
           </button>
         </div>` : ''}
       ${editBtn}
@@ -4537,11 +4546,18 @@ window.hideBmPopup = function() {
   document.getElementById('bm-popup')?.remove()
   document.removeEventListener('click', _bmOutside)
 }
+function updateBmRing(groupId, intensity) {
+  const hs = document.getElementById('bm-hs-' + groupId); if (!hs) return
+  const col = _bmColor(groupId)
+  const deg = intensity * 3.6
+  hs.style.background = `conic-gradient(${col} ${deg}deg,${col}22 ${deg}deg)`
+}
 window.bmSetIntensity = function(groupId, v) {
   if (!groupState[groupId]) groupState[groupId] = {intensity:0, waveform:'pulse'}
   groupState[groupId].intensity = v
   const pct = document.getElementById('bm-pct'); if (pct) pct.textContent = v+'%'
   send({type:'group:set', groupId, params:{intensity:v, waveform:groupState[groupId].waveform||'pulse'}})
+  updateBmRing(groupId, v)
 }
 window.bmPickWf = function(groupId, wfId) {
   if (!groupState[groupId]) groupState[groupId] = {intensity:0, waveform:'pulse'}
@@ -4578,6 +4594,16 @@ window.bmStop = function(groupId) {
   if (groupState[groupId]) groupState[groupId].intensity = 0
   const sl = document.getElementById('bm-slider'); if (sl) sl.value = 0
   const pct = document.getElementById('bm-pct'); if (pct) pct.textContent = '0%'
+  updateBmRing(groupId, 0)
+}
+window.bmStopAll = function() {
+  hideBmPopup()
+  for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) {
+    send({type:'group:stop', groupId:g.id})
+    if (groupState[g.id]) groupState[g.id].intensity = 0
+    updateBmRing(g.id, 0)
+  }
+  if (_bmAudioState) stopBmAudio()
 }
 
 // ── Group modal (new + edit) ──────────────────────────────────────────────────

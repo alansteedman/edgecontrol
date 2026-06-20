@@ -4761,32 +4761,7 @@ window.bmStop = function(groupId) {
   updateBmRing(groupId, 0)
 }
 window.bmPlaybackAll = function(action) {
-  const placed = (S.groups||[]).filter(g=>g.bodyPos?.side)
-  if (action === 'pause') {
-    _bmPausedIntensities = {}
-    for (const g of placed) {
-      _bmPausedIntensities[g.id] = groupState[g.id]?.intensity || 0
-      send({type:'group:set', groupId:g.id, params:{intensity:0, waveform:groupState[g.id]?.waveform||'pulse'}})
-      if (groupState[g.id]) groupState[g.id].intensity = 0
-      updateBmRing(g.id, 0)
-    }
-  } else if (action === 'play') {
-    for (const g of placed) {
-      grpPlayback(g.id, 'play')
-      const v = _bmPausedIntensities[g.id] ?? groupState[g.id]?.intensity ?? 0
-      send({type:'group:set', groupId:g.id, params:{intensity:v, waveform:groupState[g.id]?.waveform||'pulse'}})
-      if (groupState[g.id]) groupState[g.id].intensity = v
-      updateBmRing(g.id, v)
-    }
-  } else if (action === 'back') {
-    for (const g of placed) {
-      grpPlayback(g.id, 'back')
-      const v = _bmPausedIntensities[g.id] ?? groupState[g.id]?.intensity ?? 0
-      send({type:'group:set', groupId:g.id, params:{intensity:v, waveform:groupState[g.id]?.waveform||'pulse'}})
-      if (groupState[g.id]) groupState[g.id].intensity = v
-      updateBmRing(g.id, v)
-    }
-  }
+  for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) grpPlayback(g.id, action)
   const audio = _bmAudioState?.audio
   if (!audio) return
   if (action === 'play')  { _bmAudioManualPause = false; audio.play().catch(()=>{}) }

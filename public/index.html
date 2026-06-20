@@ -4219,6 +4219,7 @@ let _bodyMapEditing = false
 let _bmSyncActive = false
 let _bmWaveform = 'pulse'
 let _bmAudioState = null
+let _bmAudioManualPause = false
 let _bodyLayouts = []
 let _bmCurrentLayout = null
 const _bmlBtn = 'background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:4px 12px;font-size:11px;color:#888;cursor:pointer;'
@@ -4566,6 +4567,7 @@ function stopBmAudio() {
   clearInterval(_bmAudioState.syncInterval)
   try { _bmAudioState.audio.pause(); _bmAudioState.audio.src = '' } catch {}
   _bmAudioState = null
+  _bmAudioManualPause = false
   const btn = document.getElementById('bm-aud-btn')
   if (btn) { btn.textContent = '🔇'; btn.style.color = '' }
 }
@@ -4597,6 +4599,7 @@ window.toggleBmAudio = async function() {
     if (!refDevId || !d?.paused?.[fch]) audio.play().catch(()=>{})
   })
   const syncInterval = setInterval(() => {
+    if (_bmAudioManualPause) return
     if (!refDevId || !fch) { if (audio.paused) audio.play().catch(()=>{}); return }
     const d = S.devices[refDevId]
     const currentWfId = d?.channels?.[fch]?.waveform || groupState[refGrpId]?.waveform || _bmWaveform
@@ -4760,9 +4763,9 @@ window.bmPlaybackAll = function(action) {
   for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) grpPlayback(g.id, action)
   const audio = _bmAudioState?.audio
   if (!audio) return
-  if (action === 'play')  { audio.play().catch(()=>{}) }
-  if (action === 'pause') { audio.pause() }
-  if (action === 'back')  { audio.currentTime = 0; audio.play().catch(()=>{}) }
+  if (action === 'play')  { _bmAudioManualPause = false; audio.play().catch(()=>{}) }
+  if (action === 'pause') { _bmAudioManualPause = true;  audio.pause() }
+  if (action === 'back')  { _bmAudioManualPause = false; audio.currentTime = 0; audio.play().catch(()=>{}) }
 }
 window.bmStopAll = function() {
   hideBmPopup()

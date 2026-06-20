@@ -4321,7 +4321,7 @@ function renderBodyMap() {
 
   const syncCard = !_bodyMapEditing ? `
     <div style="position:absolute;bottom:16px;right:16px;background:#111;border:1px solid #2a2a2a;
-                border-radius:10px;padding:10px 12px;z-index:10;min-width:270px;max-width:360px">
+                border-radius:10px;padding:10px 12px;z-index:10;min-width:340px;max-width:450px">
       <div style="font-size:9px;font-weight:700;color:#333;text-transform:uppercase;letter-spacing:.8px;margin-bottom:7px">Waveform</div>
       <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px">${bmBuiltinBtns}</div>
       ${bmHasCustom ? `<div class="wf-sel" style="margin-bottom:7px">
@@ -4334,20 +4334,24 @@ function renderBodyMap() {
           ${bmAudioOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${bmAudioOpts}</div>` : ''}
         </div>
       </div>` : ''}
-      <div style="display:flex;gap:5px;align-items:center">
+      <div style="display:flex;gap:5px;align-items:center;margin-bottom:7px">
+        <button onclick="bmPlaybackAll('back')" class="btn btn-ghost btn-xs" title="Back to start">⏮</button>
+        <button onclick="bmPlaybackAll('pause')" class="btn btn-ghost btn-xs" title="Pause">⏸</button>
+        <button onclick="bmPlaybackAll('play')" class="btn btn-ghost btn-xs" title="Play">▶</button>
+        <div style="flex:1"></div>
         <button id="bm-aud-btn" onclick="toggleBmAudio()" title="Play audio in sync"
-          style="background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:3px 8px;font-size:13px;cursor:pointer;color:#666;flex-shrink:0">
+          style="background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:3px 8px;font-size:13px;cursor:pointer;color:#666">
           🔇
         </button>
         <button id="bm-sync-btn" onclick="toggleBmSync()"
           style="background:${_bmSyncActive?'#0d2233':'#141414'};border:1px solid ${_bmSyncActive?'#4fc3f7':'#282828'};
                  border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;
-                 color:${_bmSyncActive?'#4fc3f7':'#666'};font-weight:${_bmSyncActive?'600':'400'};flex:1">
+                 color:${_bmSyncActive?'#4fc3f7':'#666'};font-weight:${_bmSyncActive?'600':'400'}">
           Sync
         </button>
         <button onclick="bmStopAll()"
           style="background:#1a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:6px;
-                 padding:3px 8px;font-size:10px;cursor:pointer;font-weight:600;flex-shrink:0">
+                 padding:3px 8px;font-size:10px;cursor:pointer;font-weight:600">
           Stop All
         </button>
       </div>
@@ -4751,6 +4755,9 @@ window.bmStop = function(groupId) {
   const sl = document.getElementById('bm-slider'); if (sl) sl.value = 0
   const pct = document.getElementById('bm-pct'); if (pct) pct.textContent = '0%'
   updateBmRing(groupId, 0)
+}
+window.bmPlaybackAll = function(action) {
+  for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) grpPlayback(g.id, action)
 }
 window.bmStopAll = function() {
   hideBmPopup()

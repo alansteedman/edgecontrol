@@ -4225,6 +4225,7 @@ let _bmPausedIntensities = {}  // groupId → saved intensity
 let _bodyLayouts = []
 let _bmCurrentLayout = null
 let _bmFallbackTimer = null
+let _bmFallbackTick = 0
 const _bmlBtn = 'background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:4px 12px;font-size:11px;color:#888;cursor:pointer;'
 const _BM_COLORS = ['#a78bfa','#f472b6','#4ade80','#fb923c','#38bdf8','#fbbf24','#e879f9','#34d399']
 function _bmColor(groupId) {
@@ -4712,10 +4713,28 @@ window.hideBmPopup = function() {
   document.getElementById('bm-popup')?.remove()
   document.removeEventListener('click', _bmOutside)
 }
+function _bmSimAmp(wfId, t) {
+  switch(wfId) {
+    case 'pulse':   return t%10<5 ? 100 : 0
+    case 'breathe': return Math.round(((Math.sin(t*.1)+1)/2)*100)
+    case 'wave':    return Math.round((((Math.sin(t*.1)+1)/2)+((Math.sin(t*.1+1.57)+1)/2))/2*100)
+    case 'steps':   return [25,50,75,100][Math.floor((t%20)/5)]
+    default: {
+      const wf = (S.waveforms?.custom||[]).find(w=>w.id===wfId)
+      if (wf?.frames?.length) {
+        const fr = wf.frames[Math.floor(t % wf.frames.length)]
+        return typeof fr === 'number' ? fr : (fr?.a ?? 50)
+      }
+      return t%10<5 ? 100 : 0
+    }
+  }
+}
 function _startBmFallback() {
   if (_bmFallbackTimer) return
+  _bmFallbackTick = 0
   _bmFallbackTimer = setInterval(() => {
     if (!document.getElementById('sub-bodymap')?.classList.contains('active')) return
+    _bmFallbackTick++
     for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) {
       const hasConnected = g.channels?.some(c=>S.devices?.[c.deviceId]?.status==='connected')
       if (hasConnected) continue
@@ -4723,10 +4742,14 @@ function _startBmFallback() {
       if (intensity === 0) continue
       const inner = document.getElementById('bm-hs-'+g.id)?.querySelector('div')
       if (!inner) continue
+      const wfId = groupState[g.id]?.waveform || _bmWaveform
+      const amp = _bmSimAmp(wfId, _bmFallbackTick)
+      if (amp < 15) continue
       const col = _bmColor(g.id)
-      const s = 1 + (intensity / 100) * 0.22
+      const scaledI = (intensity / 100) * (amp / 100)
+      const s = 1 + scaledI * 0.22
       inner.style.transform = `scale(${s.toFixed(3)})`
-      inner.style.boxShadow = `0 0 ${Math.round(6 + intensity * 0.08)}px ${col}aa`
+      inner.style.boxShadow = `0 0 ${Math.round(6 + scaledI * 100 * 0.08)}px ${col}aa`
       clearTimeout(inner._pt)
       inner._pt = setTimeout(() => { inner.style.transform='scale(1)'; inner.style.boxShadow='none' }, 70)
     }

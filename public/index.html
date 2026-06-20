@@ -1008,7 +1008,7 @@ function handle(m) {
     case 'macro:added': case 'macro:updated': case 'macro:removed':
       window._handleMacroWS?.(m); break
     case 'device:tick':
-      if(S.devices[m.id]){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused } break
+      if(S.devices[m.id]){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused; bmTickPulse(m.id, m.paused) } break
     case 'device:status':
       if(S.devices[m.id]){ S.devices[m.id].status=m.status; if(S.devices[m.id].type==='shelly') renderShellyCards() }
       renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); renderPawPrintsCards(); if(!_hueDragging) renderHueCards(); break
@@ -4709,6 +4709,27 @@ function _bmOutside(e) { if (!document.getElementById('bm-popup')?.contains(e.ta
 window.hideBmPopup = function() {
   document.getElementById('bm-popup')?.remove()
   document.removeEventListener('click', _bmOutside)
+}
+function bmTickPulse(deviceId, paused) {
+  if (!document.getElementById('sub-bodymap')?.classList.contains('active')) return
+  for (const g of (S.groups||[]).filter(g=>g.bodyPos?.side)) {
+    const ch = g.channels?.find(c=>c.deviceId===deviceId)
+    if (!ch) continue
+    if (paused?.[ch.channel]) continue
+    const intensity = groupState[g.id]?.intensity || 0
+    if (intensity === 0) continue
+    const inner = document.getElementById('bm-hs-'+g.id)?.querySelector('div')
+    if (!inner) continue
+    const col = _bmColor(g.id)
+    const s = 1 + (intensity / 100) * 0.22
+    inner.style.transform = `scale(${s.toFixed(3)})`
+    inner.style.boxShadow = `0 0 ${Math.round(6 + intensity * 0.08)}px ${col}aa`
+    clearTimeout(inner._pt)
+    inner._pt = setTimeout(() => {
+      inner.style.transform = 'scale(1)'
+      inner.style.boxShadow = 'none'
+    }, 70)
+  }
 }
 function updateBmRing(groupId, intensity) {
   const hs = document.getElementById('bm-hs-' + groupId); if (!hs) return

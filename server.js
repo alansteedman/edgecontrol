@@ -103,9 +103,10 @@ import bcrypt from 'bcryptjs'
 const FileStore = SessionFileStore(session)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const CONFIG_PATH    = join(__dirname, 'config.json')
-const WAVEFORMS_PATH = join(__dirname, 'waveforms.json')
-const MACROS_PATH    = join(__dirname, 'macros.json')
+const CONFIG_PATH       = join(__dirname, 'config.json')
+const WAVEFORMS_PATH    = join(__dirname, 'waveforms.json')
+const MACROS_PATH       = join(__dirname, 'macros.json')
+const BODY_LAYOUTS_PATH = join(__dirname, 'body-layouts.json')
 const AP_FLAG        = '/run/edgecontroller/ap-mode'
 
 function loadConfig() {
@@ -2650,6 +2651,52 @@ app.delete('/api/groups/:id', (req,res) => {
   broadcast({type:'group:removed',id:req.params.id})
   if (streamDeck) streamDeck.updateGroups(config.groups)
   res.json({ok:true})
+})
+
+// ── Body Layouts ──────────────────────────────────────────────────────────────
+let bodyLayouts = []
+try { bodyLayouts = JSON.parse(readFileSync(BODY_LAYOUTS_PATH, 'utf8')) } catch {}
+function saveBodyLayouts() { writeFileSync(BODY_LAYOUTS_PATH, JSON.stringify(bodyLayouts, null, 2)) }
+
+app.get('/api/body-layouts', (req, res) => res.json(bodyLayouts))
+
+app.post('/api/body-layouts', (req, res) => {
+  const { name, positions } = req.body
+  if (!name) return res.status(400).json({ error: 'name required' })
+  const layout = { id: Date.now().toString(36), name: name.trim(), positions: positions || {} }
+  bodyLayouts.push(layout)
+  saveBodyLayouts()
+  res.json(layout)
+})
+
+app.put('/api/body-layouts/:id', (req, res) => {
+  const layout = bodyLayouts.find(l => l.id === req.params.id)
+  if (!layout) return res.status(404).json({ error: 'not found' })
+  if (req.body.name !== undefined) layout.name = req.body.name.trim()
+  if (req.body.positions !== undefined) layout.positions = req.body.positions
+  saveBodyLayouts()
+  res.json(layout)
+})
+
+app.delete('/api/body-layouts/:id', (req, res) => {
+  const idx = bodyLayouts.findIndex(l => l.id === req.params.id)
+  if (idx === -1) return res.status(404).json({ error: 'not found' })
+  bodyLayouts.splice(idx, 1)
+  saveBodyLayouts()
+  res.json({ ok: true })
+})
+
+app.post('/api/body-layouts/:id/recall', (req, res) => {
+  const layout = bodyLayouts.find(l => l.id === req.params.id)
+  if (!layout) return res.status(404).json({ error: 'not found' })
+  for (const g of config.groups || []) {
+    if (g.id in layout.positions) {
+      g.bodyPos = layout.positions[g.id]
+      broadcast({ type: 'group:updated', group: g })
+    }
+  }
+  saveConfig(config)
+  res.json({ ok: true })
 })
 
 // ── Macros ────────────────────────────────────────────────────────────────────

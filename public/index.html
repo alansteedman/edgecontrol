@@ -1001,7 +1001,7 @@ function handle(m) {
     case 'deck:status':
       S.deck={ status:m.status, name:m.name }; renderDeckCard(); break
     case 'group:added':   S.groups=[...S.groups,m.group]; renderGroups(); renderCoyoteCards(); break
-    case 'group:updated': S.groups=S.groups.map(g=>g.id===m.group.id?m.group:g); renderGroups(); renderCoyoteCards(); break
+    case 'group:updated': S.groups=S.groups.map(g=>g.id===m.group.id?m.group:g); renderGroups(); renderCoyoteCards(); if(document.getElementById('sub-bodymap')?.classList.contains('active')) renderBodyMap(); break
     case 'group:removed': S.groups=S.groups.filter(g=>g.id!==m.id); renderGroups(); renderCoyoteCards(); break
     case 'macro:running': case 'macro:stopped': case 'macro:step':
     case 'macro:wait': case 'macro:countdown':
@@ -1231,7 +1231,7 @@ function showSub(name,btn) {
   document.getElementById('sub-'+name).classList.add('active')
   btn.classList.add('active')
   if(name==='waveforms') setTimeout(()=>{ paintCanvas() },80)
-  if(name==='bodymap') renderBodyMap()
+  if(name==='bodymap') loadBodyLayouts().then(renderBodyMap)
 }
 
 // ── Render all ────────────────────────────────────────────────────────────────
@@ -4218,7 +4218,9 @@ function pickGroupWf(grpId,wfId){
 let _bodyMapEditing = false
 let _bmSyncActive = false
 let _bmWaveform = 'pulse'
-let _bmAudioState = null  // {audio, syncInterval}
+let _bmAudioState = null
+let _bodyLayouts = []
+let _bmLayoutsOpen = false
 const _BM_COLORS = ['#a78bfa','#f472b6','#4ade80','#fb923c','#38bdf8','#fbbf24','#e879f9','#34d399']
 function _bmColor(groupId) {
   const idx = (S.groups||[]).findIndex(g=>g.id===groupId)
@@ -4350,8 +4352,40 @@ function renderBodyMap() {
             Stop All
           </button>
         </div>` : ''}
+      <button onclick="toggleBmLayouts()"
+        style="background:${_bmLayoutsOpen?'#1a2a1a':'#1a1a1a'};border:1px solid ${_bmLayoutsOpen?'#4ade80':'#2a2a2a'};
+               border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;
+               color:${_bmLayoutsOpen?'#4ade80':'#666'}">
+        Layouts
+      </button>
       ${editBtn}
     </div>
+    ${_bmLayoutsOpen ? `<div style="border-bottom:1px solid #1a1a1a;padding:8px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0">
+      ${_bodyLayouts.length ? _bodyLayouts.map(l=>`
+        <div style="display:flex;align-items:center;gap:2px">
+          <button onclick="bmRecallLayout('${l.id}')"
+            style="background:#141414;border:1px solid #2a2a2a;border-radius:6px 0 0 6px;
+                   padding:4px 10px;font-size:11px;color:#ccc;cursor:pointer;white-space:nowrap">
+            ${escHtml(l.name)}
+          </button>
+          <button onclick="bmOverwriteLayout('${l.id}')" title="Overwrite with current positions"
+            style="background:#141414;border:1px solid #2a2a2a;border-left:none;
+                   padding:4px 6px;font-size:10px;color:#555;cursor:pointer">↑</button>
+          <button onclick="bmDeleteLayout('${l.id}')" title="Delete layout"
+            style="background:#141414;border:1px solid #2a2a2a;border-left:none;border-radius:0 6px 6px 0;
+                   padding:4px 6px;font-size:10px;color:#555;cursor:pointer">✕</button>
+        </div>`).join('') : '<span style="font-size:11px;color:#333">No saved layouts</span>'}
+      <div style="flex:1"></div>
+      <input id="bm-lay-name" placeholder="Layout name…" maxlength="40"
+        style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:6px;padding:4px 8px;
+               font-size:11px;color:#ccc;width:140px;outline:none"
+        onkeydown="if(event.key==='Enter') bmSaveLayout()">
+      <button onclick="bmSaveLayout()"
+        style="background:#1a2a1a;border:1px solid #2d4a2d;border-radius:6px;
+               padding:4px 10px;font-size:11px;color:#4ade80;cursor:pointer;font-weight:600">
+        Save
+      </button>
+    </div>` : ''}
     <div style="flex:1;display:flex;overflow:hidden;min-height:0">
       ${sidebarHtml}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:100px;padding:20px;overflow:auto">
@@ -4364,6 +4398,48 @@ function renderBodyMap() {
 }
 
 window.toggleBodyMapEdit = function() { _bodyMapEditing = !_bodyMapEditing; renderBodyMap() }
+window.toggleBmLayouts = function() { _bmLayoutsOpen = !_bmLayoutsOpen; renderBodyMap() }
+
+async function loadBodyLayouts() {
+  try { const r = await fetch('/api/body-layouts'); _bodyLayouts = await r.json() } catch {}
+}
+
+function _bmCurrentPositions() {
+  const positions = {}
+  for (const g of S.groups || []) positions[g.id] = g.bodyPos || null
+  return positions
+}
+
+window.bmSaveLayout = async function() {
+  const input = document.getElementById('bm-lay-name')
+  const name = input?.value.trim()
+  if (!name) { input?.focus(); return }
+  const r = await fetch('/api/body-layouts', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, positions: _bmCurrentPositions() })
+  })
+  const layout = await r.json()
+  _bodyLayouts.push(layout)
+  renderBodyMap()
+}
+
+window.bmRecallLayout = async function(id) {
+  await fetch(`/api/body-layouts/${id}/recall`, { method: 'POST' })
+  // group:updated broadcast will trigger renderBodyMap via WS handler
+}
+
+window.bmOverwriteLayout = async function(id) {
+  await fetch(`/api/body-layouts/${id}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ positions: _bmCurrentPositions() })
+  })
+}
+
+window.bmDeleteLayout = async function(id) {
+  await fetch(`/api/body-layouts/${id}`, { method: 'DELETE' })
+  _bodyLayouts = _bodyLayouts.filter(l => l.id !== id)
+  renderBodyMap()
+}
 
 window.bmGlobalPickWf = function(wfId) {
   _bmWaveform = wfId

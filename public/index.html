@@ -4220,7 +4220,8 @@ let _bmSyncActive = false
 let _bmWaveform = 'pulse'
 let _bmAudioState = null
 let _bodyLayouts = []
-let _bmLayoutsOpen = false
+let _bmCurrentLayout = null
+const _bmlBtn = 'background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:4px 12px;font-size:11px;color:#888;cursor:pointer;'
 const _BM_COLORS = ['#a78bfa','#f472b6','#4ade80','#fb923c','#38bdf8','#fbbf24','#e879f9','#34d399']
 function _bmColor(groupId) {
   const idx = (S.groups||[]).findIndex(g=>g.id===groupId)
@@ -4306,7 +4307,7 @@ function renderBodyMap() {
 
   const bmBuiltinBtns = (S.waveforms.builtin||[]).map(w=>`
     <button onclick="bmGlobalPickWf('${w.id}')" id="bm-gwf-${w.id}"
-      style="background:${_bmWaveform===w.id?'#4fc3f722':'#1a1a1a'};border:1px solid ${_bmWaveform===w.id?'#4fc3f7':'#282828'};
+      style="background:${_bmWaveform===w.id?'#4fc3f722':'#141414'};border:1px solid ${_bmWaveform===w.id?'#4fc3f7':'#282828'};
              border-radius:6px;padding:3px 7px;font-size:10px;color:${_bmWaveform===w.id?'#4fc3f7':'#666'};cursor:pointer;white-space:nowrap">
       ${w.name}
     </button>`).join('')
@@ -4316,81 +4317,60 @@ function renderBodyMap() {
     `<div class="wf-opt${_bmWaveform===w.id?' sel':''}" onclick="bmGlobalPickWf('${w.id}')">🎵 ${w.name}</div>`).join('')
   const bmCustomWfName = (S.waveforms.custom||[]).find(w=>w.id===_bmWaveform)?.name || null
   const bmHasCustom = !!(bmCustomOpts || bmAudioOpts)
+  const layName = _bmCurrentLayout ? escHtml(_bmCurrentLayout.name) : 'Unsaved'
+
+  const syncCard = !_bodyMapEditing ? `
+    <div style="position:absolute;bottom:16px;right:16px;background:#111;border:1px solid #2a2a2a;
+                border-radius:10px;padding:10px 12px;z-index:10;min-width:180px;max-width:240px">
+      <div style="font-size:9px;font-weight:700;color:#333;text-transform:uppercase;letter-spacing:.8px;margin-bottom:7px">Waveform</div>
+      <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px">${bmBuiltinBtns}</div>
+      ${bmHasCustom ? `<div class="wf-sel" style="margin-bottom:7px">
+        <button class="wf-sel-btn" onclick="toggleDrop('bm-global-drop')" style="padding:3px 8px;font-size:10px;gap:4px">
+          <span id="bm-glbl-lbl">${bmCustomWfName ? escHtml(bmCustomWfName) : 'Custom…'}</span>
+          <span style="font-size:9px;opacity:.5">&#9660;</span>
+        </button>
+        <div class="wf-drop" id="bm-global-drop" style="bottom:100%;top:auto;min-width:160px">
+          ${bmCustomOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Custom</div>${bmCustomOpts}</div>` : ''}
+          ${bmAudioOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${bmAudioOpts}</div>` : ''}
+        </div>
+      </div>` : ''}
+      <div style="display:flex;gap:5px;align-items:center">
+        <button id="bm-aud-btn" onclick="toggleBmAudio()" title="Play audio in sync"
+          style="background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:3px 8px;font-size:13px;cursor:pointer;color:#666;flex-shrink:0">
+          🔇
+        </button>
+        <button id="bm-sync-btn" onclick="toggleBmSync()"
+          style="background:${_bmSyncActive?'#0d2233':'#141414'};border:1px solid ${_bmSyncActive?'#4fc3f7':'#282828'};
+                 border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;
+                 color:${_bmSyncActive?'#4fc3f7':'#666'};font-weight:${_bmSyncActive?'600':'400'};flex:1">
+          Sync
+        </button>
+        <button onclick="bmStopAll()"
+          style="background:#1a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:6px;
+                 padding:3px 8px;font-size:10px;cursor:pointer;font-weight:600;flex-shrink:0">
+          Stop All
+        </button>
+      </div>
+    </div>` : ''
 
   root.innerHTML = `
-    <div style="padding:8px 14px;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap">
+    <div style="padding:8px 14px;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;gap:6px;flex-shrink:0">
       <span style="font-size:11px;color:#444">${_bodyMapEditing
         ? 'Drag groups onto the body — click ✕ to remove'
-        : 'Click a hotspot to adjust intensity'}</span>
+        : _bmCurrentLayout ? escHtml(_bmCurrentLayout.name) : 'No layout'}</span>
       <div style="flex:1"></div>
-      ${!_bodyMapEditing ? `
-        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          ${bmBuiltinBtns}
-          ${bmHasCustom ? `<div class="wf-sel" style="min-width:110px">
-            <button class="wf-sel-btn" onclick="toggleDrop('bm-global-drop')" style="padding:3px 8px;font-size:10px;gap:4px">
-              <span id="bm-glbl-lbl">${bmCustomWfName ? escHtml(bmCustomWfName) : 'Custom…'}</span>
-              <span style="font-size:9px;opacity:.5">&#9660;</span>
-            </button>
-            <div class="wf-drop" id="bm-global-drop" style="right:0;left:auto;min-width:160px">
-              ${bmCustomOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Custom</div>${bmCustomOpts}</div>` : ''}
-              ${bmAudioOpts ? `<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${bmAudioOpts}</div>` : ''}
-            </div>
-          </div>` : ''}
-          <button id="bm-aud-btn" onclick="toggleBmAudio()" title="Play audio in sync with waveform"
-            style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:6px;padding:3px 8px;font-size:13px;cursor:pointer;color:#666">
-            🔇
-          </button>
-          <button id="bm-sync-btn" onclick="toggleBmSync()"
-            style="background:${_bmSyncActive?'#0d2233':'#1a1a1a'};border:1px solid ${_bmSyncActive?'#4fc3f7':'#282828'};
-                   border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;
-                   color:${_bmSyncActive?'#4fc3f7':'#666'};font-weight:${_bmSyncActive?'600':'400'}">
-            Sync
-          </button>
-          <button onclick="bmStopAll()"
-            style="background:#1a0808;color:#f87171;border:1px solid #5a1a1a;border-radius:6px;
-                   padding:3px 10px;font-size:10px;cursor:pointer;font-weight:600">
-            Stop All
-          </button>
-        </div>` : ''}
-      <button onclick="toggleBmLayouts()"
-        style="background:${_bmLayoutsOpen?'#1a2a1a':'#1a1a1a'};border:1px solid ${_bmLayoutsOpen?'#4ade80':'#2a2a2a'};
-               border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;
-               color:${_bmLayoutsOpen?'#4ade80':'#666'}">
-        Layouts
-      </button>
+      <button onclick="bmOpenModal()" style="${_bmlBtn}">Open</button>
+      <button onclick="bmNewModal()"  style="${_bmlBtn}">New</button>
+      <button onclick="bmSaveModal()" style="${_bmlBtn}${_bmCurrentLayout?'':'opacity:.5;'}">Save</button>
+      <button onclick="bmDeleteModal()" style="${_bmlBtn}color:#f87171;border-color:#5a1a1a;${_bmCurrentLayout?'':'opacity:.5;'}">Delete</button>
       ${editBtn}
     </div>
-    ${_bmLayoutsOpen ? `<div style="border-bottom:1px solid #1a1a1a;padding:8px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0">
-      ${_bodyLayouts.length ? _bodyLayouts.map(l=>`
-        <div style="display:flex;align-items:center;gap:2px">
-          <button onclick="bmRecallLayout('${l.id}')"
-            style="background:#141414;border:1px solid #2a2a2a;border-radius:6px 0 0 6px;
-                   padding:4px 10px;font-size:11px;color:#ccc;cursor:pointer;white-space:nowrap">
-            ${escHtml(l.name)}
-          </button>
-          <button onclick="bmOverwriteLayout('${l.id}')" title="Overwrite with current positions"
-            style="background:#141414;border:1px solid #2a2a2a;border-left:none;
-                   padding:4px 6px;font-size:10px;color:#555;cursor:pointer">↑</button>
-          <button onclick="bmDeleteLayout('${l.id}')" title="Delete layout"
-            style="background:#141414;border:1px solid #2a2a2a;border-left:none;border-radius:0 6px 6px 0;
-                   padding:4px 6px;font-size:10px;color:#555;cursor:pointer">✕</button>
-        </div>`).join('') : '<span style="font-size:11px;color:#333">No saved layouts</span>'}
-      <div style="flex:1"></div>
-      <input id="bm-lay-name" placeholder="Layout name…" maxlength="40"
-        style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:6px;padding:4px 8px;
-               font-size:11px;color:#ccc;width:140px;outline:none"
-        onkeydown="if(event.key==='Enter') bmSaveLayout()">
-      <button onclick="bmSaveLayout()"
-        style="background:#1a2a1a;border:1px solid #2d4a2d;border-radius:6px;
-               padding:4px 10px;font-size:11px;color:#4ade80;cursor:pointer;font-weight:600">
-        Save
-      </button>
-    </div>` : ''}
     <div style="flex:1;display:flex;overflow:hidden;min-height:0">
       ${sidebarHtml}
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:100px;padding:20px;overflow:auto">
+      <div style="flex:1;position:relative;display:flex;align-items:center;justify-content:center;gap:100px;padding:20px;overflow:auto">
         ${bodyPanel('front')}
         ${bodyPanel('back')}
+        ${syncCard}
       </div>
     </div>`
 
@@ -4398,7 +4378,6 @@ function renderBodyMap() {
 }
 
 window.toggleBodyMapEdit = function() { _bodyMapEditing = !_bodyMapEditing; renderBodyMap() }
-window.toggleBmLayouts = function() { _bmLayoutsOpen = !_bmLayoutsOpen; renderBodyMap() }
 
 async function loadBodyLayouts() {
   try { const r = await fetch('/api/body-layouts'); _bodyLayouts = await r.json() } catch {}
@@ -4410,35 +4389,131 @@ function _bmCurrentPositions() {
   return positions
 }
 
-window.bmSaveLayout = async function() {
-  const input = document.getElementById('bm-lay-name')
-  const name = input?.value.trim()
-  if (!name) { input?.focus(); return }
+function _bmModalOverlay(id, html) {
+  document.getElementById(id)?.remove()
+  const el = document.createElement('div')
+  el.id = id; el.className = 'overlay open'
+  el.innerHTML = `<div class="modal">${html}</div>`
+  document.body.appendChild(el)
+  el.addEventListener('click', e => { if (e.target === el) el.remove() })
+  return el
+}
+
+window.bmOpenModal = function() {
+  const rows = _bodyLayouts.length
+    ? _bodyLayouts.map(l => `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #1a1a1a">
+          <span style="flex:1;font-size:13px;color:#ccc">${escHtml(l.name)}</span>
+          <button onclick="bmRecallLayout('${l.id}')"
+            style="background:#1a2a3a;border:1px solid #2a4a6a;border-radius:6px;padding:4px 12px;font-size:11px;color:#4fc3f7;cursor:pointer">
+            Open
+          </button>
+        </div>`).join('')
+    : '<div style="padding:16px 0;text-align:center;color:#444;font-size:12px">No saved layouts yet</div>'
+  _bmModalOverlay('bm-open-modal', `
+    <div class="modal-head"><h2>Open Layout</h2>
+      <button class="btn btn-ghost btn-xs" onclick="document.getElementById('bm-open-modal').remove()">✕</button>
+    </div>
+    <div style="max-height:50vh;overflow-y:auto">${rows}</div>`)
+}
+
+window.bmNewModal = function() {
+  _bmModalOverlay('bm-new-modal', `
+    <div class="modal-head"><h2>New Layout</h2>
+      <button class="btn btn-ghost btn-xs" onclick="document.getElementById('bm-new-modal').remove()">✕</button>
+    </div>
+    <p style="font-size:12px;color:#555;margin-bottom:12px">Saves the current group positions as a new layout.</p>
+    <input id="bm-new-name" type="text" placeholder="Layout name…" maxlength="40" autofocus
+      style="width:100%;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:7px;padding:8px 10px;font-size:13px;color:#ccc;outline:none;box-sizing:border-box;margin-bottom:12px"
+      onkeydown="if(event.key==='Enter') bmCreateLayout()">
+    <button onclick="bmCreateLayout()" class="btn btn-primary btn-sm" style="width:100%">Create Layout</button>`)
+  setTimeout(() => document.getElementById('bm-new-name')?.focus(), 50)
+}
+
+window.bmCreateLayout = async function() {
+  const name = document.getElementById('bm-new-name')?.value.trim()
+  if (!name) { document.getElementById('bm-new-name')?.focus(); return }
   const r = await fetch('/api/body-layouts', {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ name, positions: _bmCurrentPositions() })
   })
   const layout = await r.json()
   _bodyLayouts.push(layout)
+  _bmCurrentLayout = { id: layout.id, name: layout.name }
+  document.getElementById('bm-new-modal')?.remove()
+  renderBodyMap()
+}
+
+window.bmSaveModal = function() {
+  if (!_bmCurrentLayout) { bmNewModal(); return }
+  _bmModalOverlay('bm-save-modal', `
+    <div class="modal-head"><h2>Save Layout</h2>
+      <button class="btn btn-ghost btn-xs" onclick="document.getElementById('bm-save-modal').remove()">✕</button>
+    </div>
+    <p style="font-size:12px;color:#555;margin-bottom:12px">Change the name to save as a new layout, or keep it the same to overwrite.</p>
+    <input id="bm-save-name" type="text" value="${escHtml(_bmCurrentLayout.name)}" maxlength="40"
+      style="width:100%;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:7px;padding:8px 10px;font-size:13px;color:#ccc;outline:none;box-sizing:border-box;margin-bottom:12px"
+      onkeydown="if(event.key==='Enter') bmDoSave()">
+    <button onclick="bmDoSave()" class="btn btn-primary btn-sm" style="width:100%">Save</button>`)
+  setTimeout(() => { const i = document.getElementById('bm-save-name'); if(i){i.focus();i.select()} }, 50)
+}
+
+window.bmDoSave = async function() {
+  const name = document.getElementById('bm-save-name')?.value.trim()
+  if (!name) return
+  if (name === _bmCurrentLayout.name) {
+    await fetch(`/api/body-layouts/${_bmCurrentLayout.id}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ positions: _bmCurrentPositions() })
+    })
+    const idx = _bodyLayouts.findIndex(l => l.id === _bmCurrentLayout.id)
+    if (idx !== -1) _bodyLayouts[idx].positions = _bmCurrentPositions()
+  } else {
+    const r = await fetch('/api/body-layouts', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name, positions: _bmCurrentPositions() })
+    })
+    const layout = await r.json()
+    _bodyLayouts.push(layout)
+    _bmCurrentLayout = { id: layout.id, name: layout.name }
+  }
+  document.getElementById('bm-save-modal')?.remove()
+  renderBodyMap()
+}
+
+window.bmDeleteModal = function() {
+  if (!_bmCurrentLayout) return
+  _bmModalOverlay('bm-del-modal', `
+    <div class="modal-head"><h2>Delete Layout</h2>
+      <button class="btn btn-ghost btn-xs" onclick="document.getElementById('bm-del-modal').remove()">✕</button>
+    </div>
+    <p style="font-size:13px;color:#ccc;margin-bottom:16px">Delete <strong>${escHtml(_bmCurrentLayout.name)}</strong>? This cannot be undone.</p>
+    <div style="display:flex;gap:8px">
+      <button onclick="document.getElementById('bm-del-modal').remove()"
+        style="flex:1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:7px;padding:8px;font-size:12px;color:#888;cursor:pointer">
+        Cancel
+      </button>
+      <button onclick="bmConfirmDelete()" style="flex:1;background:#2a0808;border:1px solid #7a1a1a;border-radius:7px;padding:8px;font-size:12px;color:#f87171;cursor:pointer;font-weight:600">
+        Delete
+      </button>
+    </div>`)
+}
+
+window.bmConfirmDelete = async function() {
+  if (!_bmCurrentLayout) return
+  await fetch(`/api/body-layouts/${_bmCurrentLayout.id}`, { method: 'DELETE' })
+  _bodyLayouts = _bodyLayouts.filter(l => l.id !== _bmCurrentLayout.id)
+  _bmCurrentLayout = null
+  document.getElementById('bm-del-modal')?.remove()
   renderBodyMap()
 }
 
 window.bmRecallLayout = async function(id) {
   await fetch(`/api/body-layouts/${id}/recall`, { method: 'POST' })
-  // group:updated broadcast will trigger renderBodyMap via WS handler
-}
-
-window.bmOverwriteLayout = async function(id) {
-  await fetch(`/api/body-layouts/${id}`, {
-    method: 'PUT', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ positions: _bmCurrentPositions() })
-  })
-}
-
-window.bmDeleteLayout = async function(id) {
-  await fetch(`/api/body-layouts/${id}`, { method: 'DELETE' })
-  _bodyLayouts = _bodyLayouts.filter(l => l.id !== id)
-  renderBodyMap()
+  const layout = _bodyLayouts.find(l => l.id === id)
+  if (layout) _bmCurrentLayout = { id: layout.id, name: layout.name }
+  document.getElementById('bm-open-modal')?.remove()
+  // group:updated broadcast re-renders body map via WS handler
 }
 
 window.bmGlobalPickWf = function(wfId) {

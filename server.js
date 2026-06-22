@@ -920,8 +920,10 @@ class PawPrintsDevice {
 }
 
 // ── Nimble Stroker Device ─────────────────────────────────────────────────────
-// 7-byte binary serial protocol at 115200 baud, 50Hz send rate
-// Packet: [statusByte][posHi][posLo][forceHi][forceLo][cksumLo][cksumHi]
+// 7-byte binary serial protocol at 115200 baud
+// Byte0: [SYSTEM_TYPE:3][SET_EXTEN][AIR_SPRING][AIR_IN][AIR_OUT][ACK]
+// Byte1-2: position (sign-magnitude 10-bit), Byte3-4: force (10-bit)
+// Bytes5-6: checksum (sum of bytes 0-4, little-endian)
 class NimbleDevice {
   constructor(id, name, ttyPath) {
     this.id=id; this.name=name; this.type='nimble'
@@ -929,34 +931,37 @@ class NimbleDevice {
     this.status='disconnected'
     this._fd=null; this._sendTimer=null; this._oscTimer=null; this._rxBuf=Buffer.alloc(0)
     // Command state
-    this.position=0       // -1000 to +1000 (direct position control)
-    this.force=0          // 0 to 1023  (0 = device goes idle)
+    this.position=0       // -1000 to +1000
+    this.force=0          // 0 to 1023
     this.activated=false
-    // Oscillation mode
+    // Air control
+    this.airIn=false
+    this.airOut=false
+    // Oscillation (primary stroke wave)
     this.oscillating=false
-    this.oscSpeed=0.5     // Hz — strokes per second
-    this.oscDepth=800     // amplitude 0-1000
+    this.oscSpeed=0.5     // Hz
+    this.oscDepth=500     // amplitude 0-1000
     this.oscOffset=0      // centre offset -500 to +500
     this._oscPhase=0
+    // Texture / vibration (secondary wave layered on stroke)
+    this.nsTexture=0      // vibration amplitude 0-200 position units
+    this.nsNature=20      // vibration frequency Hz
+    this._vibPhase=0
+    this._lastPosition=0  // for delta clamping
     // Feedback from device
     this.feedback={ position:0, force:0, tempLimiting:false, sensorFault:false, present:false }
   }
 
   _buildPacket() {
-    // Protocol: little-endian, sign-magnitude position, 10-bit force
-    // Byte0: SYSTEM_TYPE=0b100 in bits[7:5], ACK in bit[0]
-    // Byte1: posLow(7:0)  Byte2: NODE_TYPE(7:5)|sign(2)|posHi(1:0)
-    // Byte3: forceLow(7:0) Byte4: forceHi(1:0)
-    // Bytes5-6: checksum little-endian
     const buf=Buffer.alloc(7)
     const pos=Math.max(-1000,Math.min(1000,Math.round(this.position)))
     const posAbs=Math.abs(pos); const posSign=pos<0?1:0
     const frc=Math.max(0,Math.min(1023,Math.round(this.force)))
-    buf[0]=0x80|(this.activated?1:0)   // SYSTEM_TYPE=0b100, ACK
-    buf[1]=posAbs&0xFF                 // position low byte
-    buf[2]=(posSign<<2)|((posAbs>>8)&0x03) // NODE_TYPE=0b000, sign, posHi
-    buf[3]=frc&0xFF                    // force low byte
-    buf[4]=(frc>>8)&0x03              // force high 2 bits
+    buf[0]=0x80|(this.activated?1:0)|(this.airOut?2:0)|(this.airIn?4:0)
+    buf[1]=posAbs&0xFF
+    buf[2]=(posSign<<2)|((posAbs>>8)&0x03)
+    buf[3]=frc&0xFF
+    buf[4]=(frc>>8)&0x03
     const ck=buf[0]+buf[1]+buf[2]+buf[3]+buf[4]
     buf[5]=ck&0xFF; buf[6]=(ck>>8)&0xFF
     return buf
@@ -964,29 +969,34 @@ class NimbleDevice {
 
   _parsePacket(buf) {
     if(buf.length<7) return false
-    // Validate checksum (little-endian 16-bit sum of bytes 0-4)
     const ck=buf[0]+buf[1]+buf[2]+buf[3]+buf[4]
     if(buf[5]!=(ck&0xFF)||buf[6]!=((ck>>8)&0xFF)) return false
-    // Position: sign-magnitude, sign at buf[2][2], high bits at buf[2][1:0], low at buf[1]
     const posSign=(buf[2]>>2)&0x01
     const posAbs=((buf[2]&0x03)<<8)|buf[1]
     const pos=posSign?-posAbs:posAbs
-    // Force feedback: sign at buf[4][5], high bits at buf[4][1:0], low at buf[3]
-    const frcSign=(buf[4]>>5)&0x01
-    const frcAbs=((buf[4]&0x03)<<8)|buf[3]
-    const frc=frcSign?-frcAbs:frcAbs
+    // Force sign is bit 2 of byte 4 (bit 10 of assembled word)
+    const frcWord=((buf[4]&0x07)<<8)|buf[3]
+    const frc=(frcWord&0x400)?-(frcWord&0x3FF):frcWord
     this.feedback={ position:pos, force:frc, tempLimiting:!!(buf[0]&0x04), sensorFault:!!(buf[0]&0x02), present:true }
     return true
   }
 
   _startOscillation() {
     if(this._oscTimer) return
-    const dt=0.02  // 50Hz
+    const dt=0.01  // 100Hz
     this._oscTimer=setInterval(()=>{
-      if(!this.oscillating||!this.activated){ return }
+      if(!this.oscillating||!this.activated) return
       this._oscPhase+=2*Math.PI*this.oscSpeed*dt
-      this.position=Math.round(this.oscOffset+this.oscDepth*Math.sin(this._oscPhase))
-    }, 20)
+      this._vibPhase+=2*Math.PI*this.nsNature*dt
+      const strokeAmp=Math.max(0, this.oscDepth-this.nsTexture)
+      const strokePos=this.oscOffset+strokeAmp*Math.sin(this._oscPhase)
+      const vibPos=this.nsTexture*Math.sin(this._vibPhase)
+      const target=Math.round(strokePos+vibPos)
+      // Clamp position delta to avoid mechanical shudder
+      const delta=Math.max(-50,Math.min(50,target-this._lastPosition))
+      this.position=Math.max(-1000,Math.min(1000,this._lastPosition+delta))
+      this._lastPosition=this.position
+    }, 10)
   }
 
   async connect() {
@@ -994,23 +1004,21 @@ class NimbleDevice {
     this.status='connecting'
     broadcast({type:'device:status',id:this.id,status:'connecting'})
     try {
-      // Use raw fs.open — no TIOCEXCL exclusive lock unlike serialport npm
       const fd=await new Promise((res,rej)=>fsOpen(this.ttyPath,'r+',(e,fd)=>e?rej(e):res(fd)))
       this._fd=fd
-      // Configure port: 115200 baud, raw mode, no echo, ignore modem lines
       execSync(`stty -F ${this.ttyPath} 115200 raw -echo -hupcl clocal cs8 -cstopb -parenb`)
-      this.status='connected'; this.activated=true; this.force=200
+      this.status='connected'; this.activated=false; this.force=500
       broadcast({type:'device:status',id:this.id,status:'connected'})
       console.log(`[${this.id}] Nimble connected on ${this.ttyPath}`)
 
-      // Send loop 50Hz using raw fd write
+      // Send loop 200Hz — well within 50ms device timeout, smooth position updates
       this._sendTimer=setInterval(()=>{
         if(this._fd===null) return
         const buf=this._buildPacket()
         fsWrite(this._fd,buf,0,buf.length,null,(err)=>{
           if(err&&this._fd!==null){ console.error(`[${this.id}] write err:`,err.message); this._cleanup('error') }
         })
-      },20)
+      },5)
 
       // Oscillation timer
       this._startOscillation()
@@ -1062,19 +1070,29 @@ class NimbleDevice {
     broadcast({type:'device:state',id:this.id,...this.toJSON()})
   }
 
-  setOscillation({speed,depth,offset,running}={}) {
-    if(speed!==undefined) this.oscSpeed=Math.max(0.1,Math.min(5,parseFloat(speed)))
-    if(depth!==undefined) this.oscDepth=Math.max(0,Math.min(1000,Math.round(depth)))
-    if(offset!==undefined) this.oscOffset=Math.max(-500,Math.min(500,Math.round(offset)))
+  setOscillation({speed,depth,offset,running,texture,nature}={}) {
+    if(speed!==undefined)   this.oscSpeed=Math.max(0.1,Math.min(5,parseFloat(speed)))
+    if(depth!==undefined)   this.oscDepth=Math.max(0,Math.min(1000,Math.round(depth)))
+    if(offset!==undefined)  this.oscOffset=Math.max(-500,Math.min(500,Math.round(offset)))
+    if(texture!==undefined) this.nsTexture=Math.max(0,Math.min(200,Math.round(texture)))
+    if(nature!==undefined)  this.nsNature=Math.max(0.5,Math.min(50,parseFloat(nature)))
     if(running!==undefined){
       this.oscillating=!!running
-      if(!running){ this.position=this.oscOffset }  // park at centre when stopped
+      this.activated=!!running
+      if(!running){ this.position=this.oscOffset; this._lastPosition=this.oscOffset }
     }
+    broadcast({type:'device:state',id:this.id,...this.toJSON()})
+  }
+
+  setAir({airIn,airOut}={}) {
+    if(airIn!==undefined)  this.airIn=!!airIn
+    if(airOut!==undefined) this.airOut=!!airOut
     broadcast({type:'device:state',id:this.id,...this.toJSON()})
   }
 
   stop() {
     this.oscillating=false; this.position=0; this.force=0; this.activated=false
+    this.airIn=false; this.airOut=false
     broadcast({type:'device:state',id:this.id,...this.toJSON()})
   }
 
@@ -1087,6 +1105,8 @@ class NimbleDevice {
              status:this.status, position:this.position, force:this.force,
              activated:this.activated, oscillating:this.oscillating,
              oscSpeed:this.oscSpeed, oscDepth:this.oscDepth, oscOffset:this.oscOffset,
+             nsTexture:this.nsTexture, nsNature:this.nsNature,
+             airIn:this.airIn, airOut:this.airOut,
              feedback:this.feedback }
   }
 }
@@ -1955,6 +1975,7 @@ wss.on('connection', (ws, request) => {
       if (msg.type==='nimble:setOscillation' && dev?.type==='nimble') dev.setOscillation(msg.params)
       if (msg.type==='nimble:setForce'       && dev?.type==='nimble') dev.setForce(msg.force)
       if (msg.type==='nimble:setPosition'    && dev?.type==='nimble') dev.setPosition(msg.position)
+      if (msg.type==='nimble:setAir'         && dev?.type==='nimble') dev.setAir(msg.params)
       if (msg.type==='nimble:stop'           && dev?.type==='nimble') dev.stop()
       if (msg.type==='estim:setChannel'  && dev?.type==='estim') dev.setChannel(msg.channel,msg.params)
       if (msg.type==='estim:setMode'     && dev?.type==='estim') dev.setMode(msg.mode)

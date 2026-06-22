@@ -1019,12 +1019,16 @@ function handle(m) {
         if(m.motorSpeed!==undefined) S.devices[m.id].motorSpeed=m.motorSpeed
         if(m.mode!==undefined) S.devices[m.id].mode=m.mode
         // Nimble state sync
-        if(m.position!==undefined) S.devices[m.id].position=m.position
-        if(m.force!==undefined)    S.devices[m.id].force=m.force
+        if(m.position!==undefined)   S.devices[m.id].position=m.position
+        if(m.force!==undefined)      S.devices[m.id].force=m.force
         if(m.oscillating!==undefined){ S.devices[m.id].oscillating=m.oscillating; nimbleUpdateRunBtn(m.id,m.oscillating) }
-        if(m.oscSpeed!==undefined) S.devices[m.id].oscSpeed=m.oscSpeed
-        if(m.oscDepth!==undefined) S.devices[m.id].oscDepth=m.oscDepth
-        if(m.oscOffset!==undefined) S.devices[m.id].oscOffset=m.oscOffset
+        if(m.oscSpeed!==undefined)   S.devices[m.id].oscSpeed=m.oscSpeed
+        if(m.oscDepth!==undefined)   S.devices[m.id].oscDepth=m.oscDepth
+        if(m.oscOffset!==undefined)  S.devices[m.id].oscOffset=m.oscOffset
+        if(m.nsTexture!==undefined)  S.devices[m.id].nsTexture=m.nsTexture
+        if(m.nsNature!==undefined)   S.devices[m.id].nsNature=m.nsNature
+        if(m.airIn!==undefined)      S.devices[m.id].airIn=m.airIn
+        if(m.airOut!==undefined)     S.devices[m.id].airOut=m.airOut
         // Estim state sync
         if(m.feel!==undefined)     S.devices[m.id].feel=m.feel
         if(m.rate!==undefined)     S.devices[m.id].rate=m.rate
@@ -2393,6 +2397,15 @@ function buildNimbleCard(dev) {
   el.className='coyote-card'; el.id='nc-'+id
   const oscOn=dev.oscillating&&conn
   const spm=Math.round((dev.oscSpeed||0.5)*60)
+  const sliderRow=(label,color,id2,val,min,max,step,fn)=>`
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px">${label}</span>
+        <span style="font-size:12px;color:${color};font-weight:700" id="${id2}">${val}</span>
+      </div>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${val}"
+        oninput="${fn}" style="width:100%;accent-color:${color}"/>
+    </div>`
   el.innerHTML=`
     <div class="ch-header">
       <div style="display:flex;align-items:center;gap:8px">
@@ -2413,45 +2426,32 @@ function buildNimbleCard(dev) {
           ${oscOn?'⏹ Stop':'▶ Run'}
         </button>
         <span style="font-size:10px;color:#555">${oscOn?'oscillating':'stopped'}</span>
-        ${dev.feedback?.tempLimiting?'<span style="font-size:10px;color:#f87171">⚠ TEMP LIMIT</span>':''}
-        ${dev.feedback?.sensorFault?'<span style="font-size:10px;color:#f87171">⚠ SENSOR FAULT</span>':''}
+        ${dev.feedback?.tempLimiting?'<span style="font-size:10px;color:#f59e0b">⚠ Temp sensor</span>':''}
+        ${dev.feedback?.sensorFault?'<span style="font-size:10px;color:#f87171">⚠ Sensor fault</span>':''}
       </div>
 
-      <!-- Speed -->
-      <div style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Speed</span>
-          <span style="font-size:12px;color:#4fc3f7;font-weight:700" id="nc-spm-${id}">${spm} spm</span>
-        </div>
-        <input type="range" min="6" max="300" step="1" value="${spm}"
-          oninput="nimbleSetSpeed('${id}',this.value)"
-          style="width:100%;accent-color:#4fc3f7"/>
-      </div>
+      ${sliderRow('Stroke Speed','#4fc3f7',`nc-spm-${id}`,spm,6,300,1,`nimbleSetSpeed('${id}',this.value)`)}
+      ${sliderRow('Stroke Depth','#a78bfa',`nc-depth-${id}`,dev.oscDepth??500,0,1000,10,`nimbleSetDepth('${id}',this.value)`)}
+      ${sliderRow('Nurture (Vibration Intensity)','#f472b6',`nc-tex-${id}`,dev.nsTexture??0,0,200,1,`nimbleSetTexture('${id}',this.value)`)}
+      ${sliderRow('Nature (Vibration Speed)','#fb923c',`nc-nat-${id}`,dev.nsNature??20,0.5,50,0.5,`nimbleSetNature('${id}',this.value)`)}
+      ${sliderRow('Force','#34d399',`nc-force-${id}`,dev.force??500,0,1023,8,`nimbleSetForce('${id}',this.value)`)}
 
-      <!-- Depth -->
-      <div style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Depth</span>
-          <span style="font-size:12px;color:#a78bfa;font-weight:700" id="nc-depth-${id}">${dev.oscDepth??800}</span>
-        </div>
-        <input type="range" min="0" max="1000" step="10" value="${dev.oscDepth??800}"
-          oninput="nimbleSetDepth('${id}',this.value)"
-          style="width:100%;accent-color:#a78bfa"/>
-      </div>
-
-      <!-- Force -->
-      <div style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Force</span>
-          <span style="font-size:12px;color:#34d399;font-weight:700" id="nc-force-${id}">${dev.force??0}</span>
-        </div>
-        <input type="range" min="0" max="1023" step="8" value="${dev.force??0}"
-          oninput="nimbleSetForce('${id}',this.value)"
-          style="width:100%;accent-color:#34d399"/>
+      <!-- Air In / Air Out -->
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button class="btn btn-sm" style="flex:1;background:${dev.airIn?'#1e3a5f':'#141414'};border:1px solid ${dev.airIn?'#4fc3f7':'#2a2a2a'};color:${dev.airIn?'#4fc3f7':'#666'}"
+          onmousedown="nimbleAir('${id}','in',true)" ontouchstart="nimbleAir('${id}','in',true)"
+          onmouseup="nimbleAir('${id}','in',false)" onmouseleave="nimbleAir('${id}','in',false)" ontouchend="nimbleAir('${id}','in',false)">
+          ▲ Air In
+        </button>
+        <button class="btn btn-sm" style="flex:1;background:${dev.airOut?'#3a1e1e':'#141414'};border:1px solid ${dev.airOut?'#f87171':'#2a2a2a'};color:${dev.airOut?'#f87171':'#666'}"
+          onmousedown="nimbleAir('${id}','out',true)" ontouchstart="nimbleAir('${id}','out',true)"
+          onmouseup="nimbleAir('${id}','out',false)" onmouseleave="nimbleAir('${id}','out',false)" ontouchend="nimbleAir('${id}','out',false)">
+          ▼ Air Out
+        </button>
       </div>
 
       <!-- Feedback -->
-      <div style="display:flex;gap:12px;font-size:10px;color:#444;margin-top:6px;padding-top:8px;border-top:1px solid #1a1a1a">
+      <div style="display:flex;gap:12px;font-size:10px;color:#444;padding-top:8px;border-top:1px solid #1a1a1a">
         <span>POS: <span style="color:#888" id="nc-fbpos-${id}">${dev.feedback?.position??'—'}</span></span>
         <span>FORCE: <span style="color:#888" id="nc-fbfrc-${id}">${dev.feedback?.force??'—'}</span></span>
         <span>PRESENT: <span style="color:#888" id="nc-fbpres-${id}">${dev.feedback?.present?'✓':'✗'}</span></span>
@@ -2498,10 +2498,25 @@ function nimbleSetDepth(id, depth) {
   _nimbleSend(id,{depth: parseInt(depth)})
 }
 
+function nimbleSetTexture(id, val) {
+  const el=document.getElementById('nc-tex-'+id); if(el) el.textContent=val
+  _nimbleSend(id,{texture: parseInt(val)})
+}
+
+function nimbleSetNature(id, val) {
+  const el=document.getElementById('nc-nat-'+id); if(el) el.textContent=val+' Hz'
+  _nimbleSend(id,{nature: parseFloat(val)})
+}
+
 function nimbleSetForce(id, force) {
   const el=document.getElementById('nc-force-'+id); if(el) el.textContent=force
   clearTimeout(_nimbleDebounce['force'+id])
   _nimbleDebounce['force'+id]=setTimeout(()=>send({type:'nimble:setForce',deviceId:id,force:parseInt(force)}),80)
+}
+
+function nimbleAir(id, which, active) {
+  const params = which==='in' ? {airIn:active,airOut:false} : {airOut:active,airIn:false}
+  send({type:'nimble:setAir',deviceId:id,params})
 }
 
 // ── Nimble add-device helpers ─────────────────────────────────────────────────

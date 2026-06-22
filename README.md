@@ -30,7 +30,15 @@ The visual macro editor supports the following block types:
 
 **Control** — Start, End, Stop All, Run Macro
 
-**Timing** — Delay, Ramp (smooth intensity transition over time), Set Hue (activate a scene or room at a set brightness), Hue Ramp (smoothly ramp scene or room brightness from x% to y% over time)
+**Timing** — Delay
+
+**Nimble** — Nimble Start (set speed/depth/nurture/nature and start stroke), Nimble Stop, Nimble Ramp (ramp Speed/Depth/Nurture/Nature over time)
+
+**Coyote** — Coyote Ramp (smooth intensity transition over time), Set (waveform, intensity, speed per channel)
+
+**E-Stim** — E-Stim Ramp (ramp power on A/B/Both over time), Set (mode/waveform, power per channel)
+
+**Hue** — Set Hue (activate a scene or room at a set brightness), Hue Ramp (smoothly ramp brightness from x% to y% over time)
 
 **I/O** — Switch (toggle Shelly relay on/off), Light (toggle Shelly dimmer on/off)
 
@@ -67,6 +75,8 @@ If you need to connect the Pi to WiFi after a fresh install, the device will bro
 
 ## Versions
 
+- **v2.0.7** — NimbleStroker full control: stroke oscillation (speed/depth/nurture/nature), air in/out, Stream Deck+ page with knobs controlling all four parameters, arc dial LCD strip, momentary air buttons, Run/Stop toggle with flash-on-pause, E-Stop wired to system stop; macro palette reorganised into device sections (Nimble, Coyote, E-Stim); new macro blocks: Nimble Start/Stop/Ramp, E-Stim Ramp (with A/B/Both channel selector), E-Stim SET now includes mode/waveform selection
+- **v2.0.6** — Nimble stroker initial integration: USB serial connection, oscillation engine with delta clamping, force control, web UI card with speed/depth/nurture/nature sliders, air in/out hold buttons
 - **v2.0.5** — Community login system: username + password registration, Log In tab for returning users on any browser/device, legacy accounts can log in by username and set a password on first login, change password in profile; Fleet dashboard (admin): Pis self-register with community server on first boot, heartbeat every 60s with version/uptime/BLE devices/tunnel status, Fleet tab shows all Pis as online/offline cards with clickable tunnel links
 - **v2.0.4** — Shelly Gen 3/4 relay/dimmer support: BLE provisioning flow (auto-scans and connects after provision), network scan to add devices already on WiFi, real-time WebSocket status and component state, I/O tab in web UI with per-device component cards; StreamDeck+ I/O page with one button per switch/light component, amber theme, toggle on/off with colour feedback; I/O SET macro block; Community tab: closed user community for Pi owners with forum (posts/replies, mod/admin controls), waveform sharing (upload MP3 + frames, browse with waveform preview, download directly to Pi), user profiles with avatars; large file uploads streamed Pi→server with real-time progress bar
 - **v2.0.3** — per-channel independent playback controls (⏮/⏸/▶ on A and B operate independently); audio sync playback (🔇/🔊 toggle plays source MP3 through browser in sync with BLE output, per channel and per group); waveform sync (Sync button links any combination of channels/groups — waveform changes and play/pause/back propagate in real time); audio edit workflow (Edit button on processed audio reloads original MP3 into staging with previous filter settings restored, no re-upload needed)

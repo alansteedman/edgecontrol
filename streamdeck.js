@@ -1080,13 +1080,17 @@ const BLOCK_META = {
   end:        { icon:'■', label:'END',        color:'#f87171' },
   stop_all:   { icon:'⛔', label:'STOP ALL',  color:'#ef4444' },
   delay:      { icon:'⏱', label:'DELAY',      color:'#60a5fa' },
-  ramp:       { icon:'↗', label:'RAMP',       color:'#c084fc' },
+  ramp:       { icon:'↗', label:'COYOTE RAMP', color:'#c084fc' },
   wait_eom:   { icon:'◈', label:'WAIT EOM',   color:'#f97316' },
   wait_manual:{ icon:'⏸', label:'WAITING',   color:'#fbbf24' },
   if_else:    { icon:'⋈', label:'IF / ELSE', color:'#e879f9' },
   loop:       { icon:'↺', label:'LOOP',       color:'#818cf8' },
   run_macro:  { icon:'▷', label:'SUB MACRO', color:'#34d399' },
   dev:        { icon:'⚡', label:'SET DEVICE',color:'#ef4444' },
+  estim_ramp:   { icon:'↗', label:'ESTIM RAMP',   color:'#f59e0b' },
+  nimble_start: { icon:'▶', label:'NIMBLE START', color:'#4fc3f7' },
+  nimble_stop:  { icon:'⏹', label:'NIMBLE STOP',  color:'#f87171' },
+  nimble_ramp:  { icon:'↗', label:'NIMBLE RAMP',  color:'#4fc3f7' },
   hue_set:    { icon:'☀', label:'SET HUE',   color:'#a78bfa' },
   hue_ramp:   { icon:'☀', label:'HUE RAMP',  color:'#a78bfa' },
 }
@@ -1102,6 +1106,10 @@ function blockSummaryForLcd(type, cfg, macros) {
     case 'loop':        return cfg.mode === 'Repeat N times' ? `×${cfg.count ?? 3}` : `EOM ${(cfg.mode||'').includes('>') ? '>' : '<'} ${cfg.thr ?? 75}%`
     case 'run_macro':   { const m = (macros||[]).find(x=>x.id===cfg.macroId); return m ? m.name.slice(0,16) : '?' }
     case 'dev':         return cfg.waveform ? cfg.waveform.slice(0,14) : ''
+    case 'estim_ramp':   return `${cfg.from??0}→${cfg.to??80}%`
+    case 'nimble_start': return `${cfg.speed||30} SPM`
+    case 'nimble_stop':  return 'Stop stroke'
+    case 'nimble_ramp':  return `${cfg.param||'Speed'} ${cfg.from??20}→${cfg.to??120}`
     case 'hue_set':     { const p=(cfg.hueTarget||'').split(':'); return p[2]?`${p[1]}:${p[2]}`.slice(0,16):'' }
     case 'hue_ramp':    return `${cfg.from??20}%→${cfg.to??100}% / ${cfg.dur||30}s`
     default:            return ''

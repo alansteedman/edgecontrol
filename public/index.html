@@ -6304,10 +6304,50 @@ const BDef = {
   end:      { label:'END',       icon:'■', bg:'#260e0e', bd:'#f87171', tx:'#f87171', ports:{i:['i'],o:[]}, dc:{}, sc:[], sm:()=>'Macro complete' },
   stop_all: { label:'STOP ALL',  icon:'⛔', bg:'#2a0808', bd:'#dc2626', tx:'#fca5a5', ports:{i:['i'],o:['o']}, dc:{}, sc:[], sm:()=>'Zero all devices immediately' },
   delay:    { label:'DELAY',     icon:'⏱', bg:'#0d1a2e', bd:'#60a5fa', tx:'#93c5fd', ports:{i:['i'],o:['o']}, dc:{dur:10}, sc:[{k:'dur',l:'Duration (s)',t:'num',min:.5,step:.5}], sm:c=>`Wait ${c.dur||10}s` },
-  ramp:     { label:'RAMP',      icon:'↗', bg:'#1c0e2e', bd:'#c084fc', tx:'#d8b4fe', ports:{i:['i'],o:['o']},
+  ramp:     { label:'COYOTE RAMP', icon:'↗', bg:'#1c0e2e', bd:'#c084fc', tx:'#d8b4fe', ports:{i:['i'],o:['o']},
     dc:{devRef:'',channel:'A',from:20,to:160,dur:30,block:false},
     sc:[{k:'devRef',l:'Device',t:'devsel'},{k:'channel',l:'Channel',t:'chsel'},{k:'from',l:'From (0–200)',t:'num',min:0,max:200},{k:'to',l:'To (0–200)',t:'num',min:0,max:200},{k:'dur',l:'Duration (s)',t:'num',min:1},{k:'block',l:'Wait for ramp to finish',t:'chk'}],
     sm:c=>`${c.from??20}→${c.to??160} over ${c.dur||30}s${c.block?' ⏸':''}`
+  },
+  estim_ramp: { label:'ESTIM RAMP', icon:'↗', bg:'#221600', bd:'#f59e0b', tx:'#fcd34d', ports:{i:['i'],o:['o']},
+    dc:{estimRef:'',channel:'Both',from:0,to:80,dur:30,block:false},
+    sc:[
+      {k:'estimRef',l:'Device',t:'estimsel'},
+      {k:'channel',l:'Channel',t:'sel',opts:['Both','A','B']},
+      {k:'from',l:'From (%)',t:'num',min:0,max:100},
+      {k:'to',l:'To (%)',t:'num',min:0,max:100},
+      {k:'dur',l:'Duration (s)',t:'num',min:1},
+      {k:'block',l:'Wait for ramp to finish',t:'chk'},
+    ],
+    sm:c=>`Ch ${c.channel||'Both'} ${c.from??0}→${c.to??80}% over ${c.dur||30}s${c.block?' ⏸':''}`
+  },
+  nimble_start: { label:'NIMBLE START', icon:'▶', bg:'#061a26', bd:'#4fc3f7', tx:'#7dd3fc', ports:{i:['i'],o:['o']},
+    dc:{nimbleRef:'',speed:30,depth:500,nurture:0,nature:20},
+    sc:[
+      {k:'nimbleRef',l:'Device',t:'nimblesel'},
+      {k:'speed',l:'Speed (SPM)',t:'num',min:6,max:300},
+      {k:'depth',l:'Depth (0–1000)',t:'num',min:0,max:1000},
+      {k:'nurture',l:'Nurture (0–200)',t:'num',min:0,max:200},
+      {k:'nature',l:'Nature (Hz)',t:'num',min:0.5,max:50,step:0.5},
+    ],
+    sm:c=>`Start ${c.speed||30} SPM / depth ${c.depth??500}`
+  },
+  nimble_stop: { label:'NIMBLE STOP', icon:'⏹', bg:'#1a0606', bd:'#f87171', tx:'#fca5a5', ports:{i:['i'],o:['o']},
+    dc:{nimbleRef:''},
+    sc:[{k:'nimbleRef',l:'Device',t:'nimblesel'}],
+    sm:()=>'Stop stroke'
+  },
+  nimble_ramp: { label:'NIMBLE RAMP', icon:'↗', bg:'#061a26', bd:'#4fc3f7', tx:'#7dd3fc', ports:{i:['i'],o:['o']},
+    dc:{nimbleRef:'',param:'Speed (SPM)',from:20,to:120,dur:30,block:false},
+    sc:[
+      {k:'nimbleRef',l:'Device',t:'nimblesel'},
+      {k:'param',l:'Parameter',t:'sel',opts:['Speed (SPM)','Depth','Nurture','Nature (Hz)']},
+      {k:'from',l:'From',t:'num',min:0},
+      {k:'to',l:'To',t:'num',min:0},
+      {k:'dur',l:'Duration (s)',t:'num',min:1},
+      {k:'block',l:'Wait for ramp to finish',t:'chk'},
+    ],
+    sm:c=>`${c.param||'Speed'} ${c.from??20}→${c.to??120} over ${c.dur||30}s${c.block?' ⏸':''}`
   },
   hue_set:  { label:'SET HUE',   icon:'☀', bg:'#12101a', bd:'#a78bfa', tx:'#c4b5fd', ports:{i:['i'],o:['o']},
     dc:{hueTarget:'',action:'on',bri:80},
@@ -6405,25 +6445,18 @@ function devDefs() {
         })
       }
     } else if (d.type === 'estim') {
+      const estimModes=['Pulse','Bounce','Continuous','A Split','B Split','Wave','Waterfall','Squeeze','Milk','Throb','Thrust','Random','Step','Training','Microphone','Stereo','Tickle','Pwr Level','Mic Level','A&B Link']
       defs.push({
         id: d.id+'_AB', devRef: d.id, channel: null,
         label: d.name, sub: 'E-Stim 2B',
         icon: '⚡', bg: '#221600', bd: '#f59e0b', tx: '#fcd34d',
-        dc: { powerA: 20, powerB: 20 },
+        dc: { mode: 'Pulse', powerA: 20, powerB: 20 },
         sc: [
+          { k:'mode',   l:'Mode',           t:'sel',   opts: estimModes },
           { k:'powerA', l:'Power Ch A (%)', t:'range', min:0, max:100 },
           { k:'powerB', l:'Power Ch B (%)', t:'range', min:0, max:100 }
         ],
-        sm: c => `A:${c.powerA??20}% B:${c.powerB??20}%`
-      })
-    } else if (d.type === 'nimble') {
-      defs.push({
-        id: d.id+'_spd', devRef: d.id, channel: null,
-        label: d.name, sub: 'Nimble',
-        icon: '↕', bg: '#0a1a20', bd: '#22d3ee', tx: '#67e8f9',
-        dc: { speed: 20 },
-        sc: [{ k:'speed', l:'Speed (%)', t:'range', min:0, max:100 }],
-        sm: c => `Speed ${c.speed??20}%`
+        sm: c => `${c.mode||'Pulse'} · A:${c.powerA??20}% B:${c.powerB??20}%`
       })
     }
   }
@@ -6733,6 +6766,20 @@ function renderMeCfg() {
       pps.forEach(d=>h+=`<option value="${d.id}"${String(v||'')==d.id?' selected':''}>${d.name}</option>`)
       h+=`</select>`
     }
+    else if(f.t==='nimblesel') {
+      const nimbles=Object.values(S.devices).filter(d=>d.type==='nimble')
+      h+=`<select class="mci" onchange="meCfgUp('${b.id}','${f.k}',this.value)">`
+      h+=`<option value="">Any Nimble</option>`
+      nimbles.forEach(d=>h+=`<option value="${d.id}"${String(v||'')==d.id?' selected':''}>${d.name}</option>`)
+      h+=`</select>`
+    }
+    else if(f.t==='estimsel') {
+      const estims=Object.values(S.devices).filter(d=>d.type==='estim')
+      h+=`<select class="mci" onchange="meCfgUp('${b.id}','${f.k}',this.value)">`
+      h+=`<option value="">Any E-Stim</option>`
+      estims.forEach(d=>h+=`<option value="${d.id}"${String(v||'')==d.id?' selected':''}>${d.name}</option>`)
+      h+=`</select>`
+    }
     else if(f.t==='ppcal') {
       h+=`<div style="margin:8px 0 4px;padding:8px;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:6px">`
       h+=`<div style="font-size:10px;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Calibrate position</div>`
@@ -6823,7 +6870,8 @@ function buildMePalette() {
   pal.innerHTML=''
   const secs=[
     {title:'Control',items:['start','end','stop_all','run_macro']},
-    {title:'Timing', items:['delay','ramp']},
+    {title:'Timing', items:['delay']},
+    {title:'Nimble', items:['nimble_start','nimble_stop','nimble_ramp']},
     {title:'Hue',    items:['hue_set','hue_ramp']},
     {title:'I/O',    items:['io_set']},
     {title:'Triggers',items:['wait_eom','wait_manual','wait_pawprints']},
@@ -6843,11 +6891,35 @@ function buildMePalette() {
     pal.appendChild(d)
   })
   const dds=devDefs()
-  if(dds.length){
+  const ddGroups={}
+  dds.forEach(def=>{
+    const dev=S.devices[def.devRef]
+    const type=dev?.type||'other'
+    if(!ddGroups[type]) ddGroups[type]=[]
+    ddGroups[type].push(def)
+  })
+  const typeLabels={coyote:'Coyote',estim:'E-Stim'}
+  Object.entries(ddGroups).forEach(([type,group])=>{
     const sep=document.createElement('div'); sep.style.cssText='height:1px;background:#1a1a1a;margin:4px 8px'; pal.appendChild(sep)
     const ds=document.createElement('div'); ds.style.cssText='padding:8px 0 4px'
-    const dt=document.createElement('div'); dt.className='mps-title'; dt.textContent='Devices'; ds.appendChild(dt)
-    dds.forEach(def=>{
+    const dt=document.createElement('div'); dt.className='mps-title'; dt.textContent=typeLabels[type]||type; ds.appendChild(dt)
+    if(type==='estim'){
+      const ed=BDef['estim_ramp']
+      const eel=document.createElement('div'); eel.className='mpb'
+      eel.style.cssText=`background:${ed.bg};border-color:${ed.bd}33`
+      eel.innerHTML=`<span style="color:${ed.tx};font-size:13px;width:18px;text-align:center;flex-shrink:0">${ed.icon}</span><div><div style="color:${ed.tx}">${ed.label}</div><div style="font-size:9px;opacity:.55">${ed.sm(ed.dc||{})}</div></div>`
+      eel.addEventListener('mousedown',e=>meStartPalDrag(e,'estim_ramp',null))
+      ds.appendChild(eel)
+    }
+    if(type==='coyote'){
+      const rd=BDef['ramp']
+      const rel=document.createElement('div'); rel.className='mpb'
+      rel.style.cssText=`background:${rd.bg};border-color:${rd.bd}33`
+      rel.innerHTML=`<span style="color:${rd.tx};font-size:13px;width:18px;text-align:center;flex-shrink:0">${rd.icon}</span><div><div style="color:${rd.tx}">${rd.label}</div><div style="font-size:9px;opacity:.55">${rd.sm(rd.dc||{})}</div></div>`
+      rel.addEventListener('mousedown',e=>meStartPalDrag(e,'ramp',null))
+      ds.appendChild(rel)
+    }
+    group.forEach(def=>{
       const el=document.createElement('div'); el.className='mpb'
       el.style.cssText=`background:${def.bg};border-color:${def.bd}33`
       el.innerHTML=`<span style="color:${def.tx};font-size:13px;width:18px;text-align:center;flex-shrink:0">${def.icon}</span><div><div style="color:${def.tx}">SET ${def.label.toUpperCase()}</div><div style="font-size:9px;opacity:.55">${def.sub}</div></div>`
@@ -6855,7 +6927,7 @@ function buildMePalette() {
       ds.appendChild(el)
     })
     pal.appendChild(ds)
-  }
+  })
 }
 
 // ── Macro list ────────────────────────────────────────────────────────────────

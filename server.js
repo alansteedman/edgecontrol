@@ -2965,6 +2965,40 @@ class MacroRunner {
         await this._sleep(180)
         await this._exec(next(), blockMap, adj, depth); break
 
+      case 'estim_ramp': {
+        const prom = this._doEstimRamp(block)
+        if (cfg.block) { await prom; await this._exec(next(), blockMap, adj, depth) }
+        else { prom.catch(() => {}); await this._exec(next(), blockMap, adj, depth) }
+        break
+      }
+
+      case 'nimble_start': {
+        const nimble = cfg.nimbleRef ? devices[cfg.nimbleRef] : Object.values(devices).find(d => d.type === 'nimble' && d.status === 'connected')
+        if (nimble?.status === 'connected') {
+          if (cfg.speed   !== undefined) nimble.setOscillation({ speed:   cfg.speed / 60 })
+          if (cfg.depth   !== undefined) nimble.setOscillation({ depth:   cfg.depth })
+          if (cfg.nurture !== undefined) nimble.setOscillation({ texture: cfg.nurture })
+          if (cfg.nature  !== undefined) nimble.setOscillation({ nature:  cfg.nature })
+          nimble.setOscillation({ running: true })
+        }
+        await this._sleep(180)
+        await this._exec(next(), blockMap, adj, depth); break
+      }
+
+      case 'nimble_stop': {
+        const nimble = cfg.nimbleRef ? devices[cfg.nimbleRef] : Object.values(devices).find(d => d.type === 'nimble' && d.status === 'connected')
+        if (nimble?.status === 'connected') nimble.setOscillation({ running: false })
+        await this._sleep(180)
+        await this._exec(next(), blockMap, adj, depth); break
+      }
+
+      case 'nimble_ramp': {
+        const prom = this._doNimbleRamp(block)
+        if (cfg.block) { await prom; await this._exec(next(), blockMap, adj, depth) }
+        else { prom.catch(() => {}); await this._exec(next(), blockMap, adj, depth) }
+        break
+      }
+
       case 'hue_set': {
         const [devId, targetType, targetId] = (cfg.hueTarget || '').split(':')
         const hue = devId ? devices[devId] : Object.values(devices).find(d => d.type === 'hue' && d.status === 'connected')
@@ -3087,6 +3121,44 @@ class MacroRunner {
       broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: val, from, to, elapsed: t * total, total })
       hue.setGroup(groupId, { bri: val, on: true, transitiontime: Math.round(stepMs / 100) })
       if (i < steps) await this._sleep(stepMs)
+    }
+  }
+
+  async _doEstimRamp(block) {
+    const { config: cfg = {} } = block
+    const estim = cfg.estimRef ? devices[cfg.estimRef] : Object.values(devices).find(d => d.type === 'estim' && d.status === 'connected')
+    const from = cfg.from ?? 0, to = cfg.to ?? 80, durMs = (cfg.dur || 30) * 1000
+    const steps = Math.max(10, Math.round(durMs / 200))
+    const total = cfg.dur || 30
+    for (let i = 0; i <= steps && !this._abort; i++) {
+      const t = i / steps, val = Math.round(from + (to - from) * t)
+      broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: val, from, to, elapsed: t * total, total })
+      if (estim?.status === 'connected' && estim.setChannel) {
+        const ch = cfg.channel || 'Both'
+        if (ch === 'A' || ch === 'Both') estim.setChannel('A', { power: val })
+        if (ch === 'B' || ch === 'Both') estim.setChannel('B', { power: val })
+      }
+      if (i < steps) await this._sleep(durMs / steps)
+    }
+  }
+
+  async _doNimbleRamp(block) {
+    const { config: cfg = {} } = block
+    const nimble = cfg.nimbleRef ? devices[cfg.nimbleRef] : Object.values(devices).find(d => d.type === 'nimble' && d.status === 'connected')
+    const from = cfg.from ?? 20, to = cfg.to ?? 120, durMs = (cfg.dur || 30) * 1000
+    const steps = Math.max(10, Math.round(durMs / 200))
+    const total = cfg.dur || 30
+    for (let i = 0; i <= steps && !this._abort; i++) {
+      const t = i / steps, val = from + (to - from) * t
+      broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: Math.round(val), from, to, elapsed: t * total, total })
+      if (nimble?.status === 'connected') {
+        const param = cfg.param || 'Speed (SPM)'
+        if      (param === 'Speed (SPM)')  nimble.setOscillation({ speed:   val / 60 })
+        else if (param === 'Depth')        nimble.setOscillation({ depth:   Math.round(val) })
+        else if (param === 'Nurture')      nimble.setOscillation({ texture: Math.round(val) })
+        else if (param === 'Nature (Hz)')  nimble.setOscillation({ nature:  Math.round(val * 10) / 10 })
+      }
+      if (i < steps) await this._sleep(durMs / steps)
     }
   }
 

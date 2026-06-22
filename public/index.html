@@ -1011,7 +1011,9 @@ function handle(m) {
       if(S.devices[m.id]){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused; bmTickPulse(m.id, m.paused) } break
     case 'device:status':
       if(S.devices[m.id]){ S.devices[m.id].status=m.status; if(S.devices[m.id].type==='shelly') renderShellyCards() }
-      renderDevList(); renderCoyoteCards(); renderEomCards(); renderNimbleCards(); renderEstimCards(); renderPawPrintsCards(); if(!_hueDragging) renderHueCards(); break
+      renderDevList(); renderCoyoteCards(); renderEomCards();
+      if(S.devices[m.id]?.type==='nimble') renderNimbleCards();
+      renderEstimCards(); renderPawPrintsCards(); if(!_hueDragging) renderHueCards(); break
     case 'device:state':
       if(S.devices[m.id]){
         if(m.channels) S.devices[m.id].channels=m.channels
@@ -2434,7 +2436,6 @@ function buildNimbleCard(dev) {
       ${sliderRow('Stroke Depth','#a78bfa',`nc-depth-${id}`,dev.oscDepth??500,0,1000,10,`nimbleSetDepth('${id}',this.value)`)}
       ${sliderRow('Nurture (Vibration Intensity)','#f472b6',`nc-tex-${id}`,dev.nsTexture??0,0,200,1,`nimbleSetTexture('${id}',this.value)`)}
       ${sliderRow('Nature (Vibration Speed)','#fb923c',`nc-nat-${id}`,dev.nsNature??20,0.5,50,0.5,`nimbleSetNature('${id}',this.value)`)}
-      ${sliderRow('Force','#34d399',`nc-force-${id}`,dev.force??500,0,1023,8,`nimbleSetForce('${id}',this.value)`)}
 
       <!-- Air In / Air Out -->
       <div style="display:flex;gap:8px;margin-bottom:10px">
@@ -2477,13 +2478,15 @@ function nimbleUpdateFeedback(id, fb) {
 
 const _nimbleDebounce={}
 function _nimbleSend(id, params) {
-  clearTimeout(_nimbleDebounce[id])
-  _nimbleDebounce[id]=setTimeout(()=>send({type:'nimble:setOscillation',deviceId:id,params}),80)
+  const key=id+':'+Object.keys(params)[0]
+  clearTimeout(_nimbleDebounce[key])
+  _nimbleDebounce[key]=setTimeout(()=>send({type:'nimble:setOscillation',deviceId:id,params}),80)
 }
 
 function nimbleToggleOsc(id) {
   const d=S.devices[id]; if(!d) return
   const running=!d.oscillating
+  d.oscillating=running  // optimistic — prevents card rebuild from racing the server echo
   send({type:'nimble:setOscillation',deviceId:id,params:{running}})
   nimbleUpdateRunBtn(id,running)
 }

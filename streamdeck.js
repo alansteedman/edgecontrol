@@ -720,6 +720,71 @@ function renderHomeLcd(devices, devicePageOffset) {
 }
 
 // ─── EoM LCD strip — arousal top, knob labels/values bottom ─────────────
+function renderNimbleLcd(dev) {
+  const W = 800, H = 100
+  const canvas = createCanvas(W, H)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, W, H)
+
+  const conn = dev?.status === 'connected'
+  const spm    = conn ? Math.round((dev.oscSpeed ?? 0.5) * 60) : 0
+  const depth  = conn ? (dev.oscDepth  ?? 500) : 0
+  const nurture= conn ? (dev.nsTexture ?? 0)   : 0
+  const nature = conn ? (dev.nsNature  ?? 20)  : 0
+
+  const knobs = [
+    { label:'SPEED',   value: spm,    max:300,  unit:' SPM', color:'#4fc3f7' },
+    { label:'DEPTH',   value: depth,  max:1000, unit:'',     color:'#a78bfa' },
+    { label:'NURTURE', value: nurture,max:200,  unit:'',     color:'#f472b6' },
+    { label:'NATURE',  value: nature, max:50,   unit:' Hz',  color:'#fb923c' },
+  ]
+
+  knobs.forEach((k, i) => {
+    const cx = i * 200 + 100, cy = 58, r = 30
+    const startA = Math.PI * 0.75, sweep = Math.PI * 1.5
+    const pct = conn ? Math.min(1, Math.max(0, k.value / k.max)) : 0
+
+    // Label
+    ctx.font = '8px monospace'; ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'; ctx.fillStyle = '#444'
+    ctx.fillText(k.label, cx, 4)
+
+    if (!conn) {
+      ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 18px monospace'
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+      ctx.fillText('—', cx, cy)
+      return
+    }
+
+    // Track
+    ctx.beginPath(); ctx.arc(cx, cy, r, startA, startA + sweep)
+    ctx.strokeStyle = '#1c1c1c'; ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.stroke()
+
+    // Fill arc
+    if (pct > 0) {
+      ctx.beginPath(); ctx.arc(cx, cy, r, startA, startA + pct * sweep)
+      ctx.strokeStyle = k.color; ctx.lineWidth = 7; ctx.stroke()
+      ctx.beginPath(); ctx.arc(cx, cy, r, startA, startA + pct * sweep)
+      ctx.strokeStyle = k.color; ctx.lineWidth = 12; ctx.globalAlpha = 0.15; ctx.stroke()
+      ctx.globalAlpha = 1
+    }
+
+    // Value
+    const disp = `${k.value}${k.unit}`
+    ctx.font = `bold ${disp.length > 6 ? 12 : 15}px monospace`
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillStyle = k.color; ctx.fillText(disp, cx, cy)
+
+    // Divider
+    if (i < 3) {
+      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(i * 200 + 200, 10); ctx.lineTo(i * 200 + 200, 90); ctx.stroke()
+    }
+  })
+
+  return rgba(canvas)
+}
+
 function renderEomLcd(eomDev) {
   const W = 800, H = 100
   const canvas = createCanvas(W, H)
@@ -1388,6 +1453,28 @@ function getEomKeys(eomDev) {
   ]
 }
 
+function getNimbleKeys(dev, paused=false, tick=0) {
+  const airIn    = dev?.airIn      || false
+  const airOut   = dev?.airOut     || false
+  const running  = dev?.oscillating || false
+  const flashOn  = paused && (tick % 2 === 0)
+  const runKey   = running
+    ? { icon:'⏹', label:'Stop',   color:'red',   active:true }
+    : paused
+      ? { icon:'▶', label:'Resume', color: flashOn ? 'green' : 'dim', active: flashOn }
+      : { icon:'▶', label:'Run',    color:'green' }
+  return [
+    { houseIcon:true, label:'Home',    color:'blue' },
+    { icon:'',        label:'',        color:'dim'  },
+    { icon:'',        label:'',        color:'dim'  },
+    { stopSign:true,  label:'E-Stop',  color:'red'  },
+    { icon:'▲',       label:'Air In',  color: airIn  ? 'green' : 'teal', active: airIn  },
+    { icon:'▼',       label:'Air Out', color: airOut ? 'green' : 'teal', active: airOut },
+    runKey,
+    { icon:'',        label:'',        color:'dim'  },
+  ]
+}
+
 // ─── E-Stim 2B mode definitions ──────────────────────────────────────────
 const ESTIM_MODES = [
   'Pulse','Bounce','Continuous','A Split','B Split','Wave','Waterfall',
@@ -1547,6 +1634,7 @@ export class StreamDeckController {
     this._estimEncMode = ['power', 'power', 'power', 'power']
     this._estimSelected = false  // true = unit1 channels highlighted for mode assignment
     this._devicePageOffset = 0
+    this._nimblePaused = false
     this._hueSceneOffset = 0
     this._hueKnobTimers = {}
     this._shellyPageOffset = 0
@@ -1576,6 +1664,9 @@ export class StreamDeckController {
       if (ctrl.type === 'button')  this._onKey(ctrl.index)
       if (ctrl.type === 'encoder') this._onEncoderPress(ctrl.index)
     })
+    this.deck.on('up', ctrl => {
+      if (ctrl.type === 'button') this._onKeyUp(ctrl.index)
+    })
     this.deck.on('rotate', (ctrl, ticks) => this._onRotate(ctrl.index, ticks))
     this.deck.on('lcdShortPress', (ctrl, pos) => this._onLcdTouch(pos))
     this.deck.on('error', err => console.error('[deck] error:', err.message))
@@ -1583,10 +1674,11 @@ export class StreamDeckController {
     this._ready = true
     await this.render()
 
-    // Refresh LCD every 500ms for live data
+    // Refresh LCD every 500ms for live data; also flash Stop button when nimble is paused
     this._timer = setInterval(() => {
       this._tick++
       this._refreshLcd()
+      if (this._nimblePaused) this._renderKeys().catch(()=>{})
     }, 500)
 
     return true
@@ -1603,6 +1695,7 @@ export class StreamDeckController {
       case 'macro':   this._macroKey(idx);   break
       case 'hue':     this._hueKey(idx);     break
       case 'shelly':  this._shellyKey(idx);  break
+      case 'nimble':  this._nimbleKey(idx);  break
       default: if (idx === 0) this.setPage('home'); break
     }
   }
@@ -1811,6 +1904,51 @@ export class StreamDeckController {
     }
   }
 
+  _onKeyUp(idx) {
+    if (this.page === 'nimble') this._nimbleKeyUp(idx)
+  }
+
+  _nimbleKey(idx) {
+    const nimble = this._findDev('nimble')
+    if (idx === 0) { this._nimblePaused = false; this.setPage('home'); return }
+    if (idx === 3) {
+      // E-Stop: kill everything
+      this._nimblePaused = false
+      this._stopAll()
+      this._renderKeys()
+      return
+    }
+    if (idx === 4 && nimble) {
+      nimble.setAir({ airIn: true, airOut: false })
+      this._renderKeys()
+      return
+    }
+    if (idx === 5 && nimble) {
+      nimble.setAir({ airOut: true, airIn: false })
+      this._renderKeys()
+      return
+    }
+    if (idx === 6 && nimble) {
+      if (nimble.oscillating) {
+        nimble.setOscillation({ running: false })
+        this._nimblePaused = true
+      } else {
+        nimble.setOscillation({ running: true })
+        this._nimblePaused = false
+      }
+      this._renderKeys()
+      return
+    }
+  }
+
+  _nimbleKeyUp(idx) {
+    const nimble = this._findDev('nimble')
+    if ((idx === 4 || idx === 5) && nimble) {
+      nimble.setAir({ airIn: false, airOut: false })
+      this._renderKeys()
+    }
+  }
+
   // ── Encoder rotation ───────────────────────────────────────────
   _onRotate(idx, ticks) {
     console.log(`[deck] encoder ${idx} ticks ${ticks} on page ${this.page}`)
@@ -1819,6 +1957,7 @@ export class StreamDeckController {
       case 'coyote': this._coyoteRotate(idx, ticks); break
       case 'estim':  this._estimRotate(idx, ticks);  break
       case 'hue':    this._hueRotate(idx, ticks);    break
+      case 'nimble': this._nimbleRotate(idx, ticks); break
     }
   }
 
@@ -1921,6 +2060,27 @@ export class StreamDeckController {
       if (dev.setRate) dev.setRate(Math.min(99, Math.max(0, (dev.rate ?? 50) + ticks)))
     } else {
       if (dev.setChannel) dev.setChannel(ch, { power: Math.min(99, Math.max(0, (dev.channels?.[ch]?.power ?? 0) + ticks)) })
+    }
+    this._renderEncoders()
+  }
+
+  _nimbleRotate(idx, ticks) {
+    const nimble = this._findDev('nimble')
+    if (!nimble) return
+    if (idx === 0) {  // Stroke Speed (SPM)
+      const spm = Math.round((nimble.oscSpeed ?? 0.5) * 60)
+      const newSpm = Math.min(300, Math.max(6, spm + ticks * 5))
+      nimble.setOscillation({ speed: newSpm / 60 })
+    }
+    if (idx === 1) {  // Stroke Depth
+      nimble.setOscillation({ depth: Math.min(1000, Math.max(0, (nimble.oscDepth ?? 500) + ticks * 10)) })
+    }
+    if (idx === 2) {  // Nurture — Vibration Intensity
+      nimble.setOscillation({ texture: Math.min(200, Math.max(0, (nimble.nsTexture ?? 0) + ticks * 2)) })
+    }
+    if (idx === 3) {  // Nature — Vibration Speed
+      const newNat = Math.min(50, Math.max(0.5, (nimble.nsNature ?? 20) + ticks * 0.5))
+      nimble.setOscillation({ nature: Math.round(newNat * 10) / 10 })
     }
     this._renderEncoders()
   }
@@ -2080,6 +2240,7 @@ export class StreamDeckController {
       }
       if (d.type === 'estim' && d.stop) d.stop()
       if (d.type === 'eom') d.setConfig?.({ motor: 0 })
+      if (d.type === 'nimble' && d.stop) d.stop()
     }
     this._renderEncoders().catch(()=>{})
   }
@@ -2318,8 +2479,9 @@ export class StreamDeckController {
     }
 
     let keys
-    if (this.page === 'home')      keys = getHomeKeys(this.devices, this._devicePageOffset)
-    else if (this.page === 'eom')  keys = getEomKeys(this._findDev('eom'))
+    if (this.page === 'home')        keys = getHomeKeys(this.devices, this._devicePageOffset)
+    else if (this.page === 'eom')   keys = getEomKeys(this._findDev('eom'))
+    else if (this.page === 'nimble') keys = getNimbleKeys(this._findDev('nimble'), this._nimblePaused, this._tick)
     else {
       keys = Array(8).fill({ icon:'', label:'', color:'dim' })
       keys[0] = { houseIcon:true, label:'Home', color:'blue' }
@@ -2334,7 +2496,7 @@ export class StreamDeckController {
   async _renderEncoders() {
     if (!this.deck) return
     let encs
-    if (this.page === 'eom' || this.page === 'hue') {
+    if (this.page === 'eom' || this.page === 'hue' || this.page === 'nimble') {
       // Full-strip LCD render — handled by _refreshLcd
       return
     } else if (this.page === 'coyote') {
@@ -2430,7 +2592,8 @@ export class StreamDeckController {
       }
       let buf
       if (this.page === 'home')      buf = renderHomeLcd(this.devices, this._devicePageOffset)
-      else if (this.page === 'eom')  buf = renderEomLcd(this._findDev('eom'))
+      else if (this.page === 'eom')    buf = renderEomLcd(this._findDev('eom'))
+      else if (this.page === 'nimble') buf = renderNimbleLcd(this._findDev('nimble'))
       else {
         const W=800, H=100, c=createCanvas(W,H)
         c.getContext('2d').fillStyle='#060606'; c.getContext('2d').fillRect(0,0,W,H)

@@ -983,20 +983,18 @@ class NimbleDevice {
 
   _startOscillation() {
     if(this._oscTimer) return
-    const dt=0.01  // 100Hz
+    const dt=0.02
     this._oscTimer=setInterval(()=>{
       if(!this.oscillating||!this.activated) return
       this._oscPhase+=2*Math.PI*this.oscSpeed*dt
       this._vibPhase+=2*Math.PI*this.nsNature*dt
       const strokeAmp=Math.max(0, this.oscDepth-this.nsTexture)
-      const strokePos=this.oscOffset+strokeAmp*Math.sin(this._oscPhase)
-      const vibPos=this.nsTexture*Math.sin(this._vibPhase)
-      const target=Math.round(strokePos+vibPos)
-      // Clamp position delta to avoid mechanical shudder
-      const delta=Math.max(-50,Math.min(50,target-this._lastPosition))
-      this.position=Math.max(-1000,Math.min(1000,this._lastPosition+delta))
-      this._lastPosition=this.position
-    }, 10)
+      const target=Math.round(this.oscOffset+strokeAmp*Math.sin(this._oscPhase)+this.nsTexture*Math.sin(this._vibPhase))
+      // Rate-limit to 300 units/frame — prevents servo overload while still allowing full
+      // stroke at any speed up to ~240 SPM. Above that, clipping appears but not vibration.
+      const delta=Math.max(-300,Math.min(300,target-this.position))
+      this.position=Math.max(-1000,Math.min(1000,this.position+delta))
+    }, 20)
   }
 
   async connect() {
@@ -1011,16 +1009,16 @@ class NimbleDevice {
       broadcast({type:'device:status',id:this.id,status:'connected'})
       console.log(`[${this.id}] Nimble connected on ${this.ttyPath}`)
 
-      // Send loop 200Hz — well within 50ms device timeout, smooth position updates
+      // Send loop 50Hz — well within 50ms device timeout
       this._sendTimer=setInterval(()=>{
         if(this._fd===null) return
         const buf=this._buildPacket()
         fsWrite(this._fd,buf,0,buf.length,null,(err)=>{
           if(err&&this._fd!==null){ console.error(`[${this.id}] write err:`,err.message); this._cleanup('error') }
         })
-      },5)
+      },20)
 
-      // Oscillation timer
+      // Oscillation timer — same rate as send to avoid position jump artifacts
       this._startOscillation()
 
       // Read loop — blocks in libuv thread pool until bytes arrive (no busy-wait)
@@ -1036,11 +1034,12 @@ class NimbleDevice {
             while(this._rxBuf.length>=7){
               if(this._parsePacket(this._rxBuf.slice(0,7))){
                 this._rxBuf=this._rxBuf.slice(7)
-                broadcast({type:'nimble:feedback',id:this.id,feedback:this.feedback})
+                const now=Date.now()
+                if(!this._lastFbBcast||now-this._lastFbBcast>100){ this._lastFbBcast=now; broadcast({type:'nimble:feedback',id:this.id,feedback:this.feedback}) }
               } else { this._rxBuf=this._rxBuf.slice(1) }
             }
           }
-          setImmediate(readLoop)
+          setTimeout(readLoop, 10)
         })
       }
       readLoop()
@@ -1079,7 +1078,12 @@ class NimbleDevice {
     if(running!==undefined){
       this.oscillating=!!running
       this.activated=!!running
-      if(!running){ this.position=this.oscOffset; this._lastPosition=this.oscOffset }
+      if(running){
+        this._oscPhase=0; this._vibPhase=0
+        if(this.force<100) this.force=600  // ensure minimum force on Run
+      } else {
+        this.position=this.oscOffset
+      }
     }
     broadcast({type:'device:state',id:this.id,...this.toJSON()})
   }

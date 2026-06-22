@@ -410,6 +410,7 @@ select.mci{cursor:pointer}
             oninput="macroNameChanged()" onfocus="this.style.borderColor='#4fc3f7'" onblur="this.style.borderColor='#2a2a2a'">
           <div style="flex:1"></div>
           <span id="macro-run-status" style="font-size:10px;color:#444;letter-spacing:.5px">● IDLE</span>
+          <button class="btn btn-ghost btn-sm" onclick="macroHelpOpen()" title="Open macro help">? Help</button>
           <button class="btn btn-ghost btn-sm" onclick="macroOpenMonitor()" title="Open full-screen monitor window">📺 Monitor</button>
           <button class="btn btn-ghost btn-sm" onclick="macroClearCanvas()" title="Clear all blocks">✕ Clear</button>
           <button id="macro-save-btn" class="btn btn-sm" style="background:#1a2535;border-color:#2a4060;color:#4fc3f7" onclick="macroSave()">💾 Save</button>
@@ -2133,7 +2134,7 @@ function renderCommFleet() {
   const cards = _commFleetDevices.map(d => {
     const online = d.last_seen && (now - d.last_seen) < 90
     const meta = (() => { try { return JSON.parse(d.meta || '{}') } catch { return {} } })()
-    const ago = d.last_seen ? commTimeAgo(now - d.last_seen) : 'never'
+    const ago = d.last_seen ? commTimeAgo(d.last_seen) : 'never'
     const deviceGroups = {
       BLE:     { types: ['coyote','pawprints'], color: '#6d28d9', bg: '#1a1030' },
       USB:     { types: ['estim','nimble','streamdeck'], color: '#0369a1', bg: '#0a1a28' },
@@ -6951,6 +6952,28 @@ function renderMacroList() {
 }
 
 // ── Monitor window ────────────────────────────────────────────────────────────
+window.macroHelpOpen = function() {
+  let overlay = document.getElementById('macro-help-overlay')
+  if (!overlay) {
+    overlay = document.createElement('div')
+    overlay.id = 'macro-help-overlay'
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center'
+    overlay.innerHTML = `
+      <div style="width:min(960px,95vw);height:min(820px,90vh);background:#0a0a0a;border:1px solid #2a2a2a;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px #000">
+        <div style="display:flex;align-items:center;background:#111;border-bottom:1px solid #1e1e1e;padding:0 16px;height:44px;gap:12px;flex-shrink:0">
+          <span style="font-size:13px;font-weight:700;color:#ccc;letter-spacing:.3px">Macro Help</span>
+          <div style="flex:1"></div>
+          <button onclick="document.getElementById('macro-help-overlay').style.display='none'" style="background:#1a1a1a;border:1px solid #2a2a2a;color:#888;padding:4px 12px;border-radius:5px;cursor:pointer;font-size:12px">✕ Close</button>
+        </div>
+        <iframe src="/macro-help.html" style="flex:1;border:none;width:100%"></iframe>
+      </div>`
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.style.display = 'none' })
+    document.body.appendChild(overlay)
+  } else {
+    overlay.style.display = 'flex'
+  }
+}
+
 let _monitorWin = null
 
 window.macroOpenMonitor = function() {

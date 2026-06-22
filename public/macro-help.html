@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Macro Editor — Help</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+  body { background: #0a0a0a; color: #c8c8c8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.6 }
+
+  .sidebar { position: fixed; top: 0; left: 0; width: 220px; height: 100vh; background: #0f0f0f; border-right: 1px solid #1e1e1e; overflow-y: auto; padding: 16px 0 }
+  .sidebar-title { padding: 0 16px 12px; font-size: 10px; letter-spacing: 1px; color: #444; text-transform: uppercase }
+  .sidebar a { display: block; padding: 5px 16px; font-size: 12px; color: #666; text-decoration: none; border-left: 2px solid transparent; transition: all .15s }
+  .sidebar a:hover { color: #aaa; background: #141414 }
+  .sidebar a.active { color: #4fc3f7; border-left-color: #4fc3f7; background: #0d1e2a }
+  .sidebar .sec { padding: 10px 16px 4px; font-size: 9px; letter-spacing: 1px; color: #333; text-transform: uppercase }
+
+  .content { margin-left: 220px; padding: 32px 40px 80px; max-width: 860px }
+
+  h1 { font-size: 22px; color: #e0e0e0; margin-bottom: 6px }
+  h2 { font-size: 15px; color: #e0e0e0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid #1e1e1e }
+  h3 { font-size: 13px; color: #bbb; margin: 0 0 6px }
+  p { margin-bottom: 10px; color: #999 }
+  .lead { font-size: 14px; color: #aaa; margin-bottom: 24px }
+
+  .block-grid { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px }
+  .block-card { border-radius: 8px; border: 1px solid #1e1e1e; overflow: hidden }
+  .block-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #111 }
+  .block-icon { font-size: 16px; width: 24px; text-align: center; flex-shrink: 0 }
+  .block-name { font-size: 13px; font-weight: 700; letter-spacing: .3px }
+  .block-body { padding: 12px 14px; background: #0d0d0d }
+  .block-desc { color: #888; margin-bottom: 10px; font-size: 12px }
+  .block-desc:last-child { margin-bottom: 0 }
+
+  .params { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 12px }
+  .params th { text-align: left; padding: 5px 10px; color: #555; font-size: 10px; letter-spacing: .5px; text-transform: uppercase; border-bottom: 1px solid #1a1a1a }
+  .params td { padding: 5px 10px; border-bottom: 1px solid #141414; color: #888; vertical-align: top }
+  .params td:first-child { color: #ccc; white-space: nowrap }
+  .params tr:last-child td { border-bottom: none }
+
+  .example { background: #0a1a0a; border: 1px solid #1a2a1a; border-radius: 6px; padding: 12px 14px; margin-top: 10px; font-size: 12px }
+  .example-title { font-size: 10px; color: #4ade80; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 8px }
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 }
+  .fblock { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid transparent }
+  .farrow { color: #333; font-size: 14px }
+
+  .tip { background: #0d1a2a; border-left: 3px solid #4fc3f7; padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 12px 0; font-size: 12px; color: #888 }
+  .tip strong { color: #4fc3f7 }
+  .warn { background: #1a1200; border-left: 3px solid #fbbf24; padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 12px 0; font-size: 12px; color: #888 }
+  .warn strong { color: #fbbf24 }
+
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; letter-spacing: .3px; margin-left: 6px; vertical-align: middle }
+  .tag-blocking { background: #1a0d00; color: #f97316; border: 1px solid #f9731644 }
+  .tag-async { background: #0d1a00; color: #86efac; border: 1px solid #86efac44 }
+  .tag-branch { background: #1a0d2a; color: #d8b4fe; border: 1px solid #d8b4fe44 }
+
+  /* Block colour themes */
+  .c-control  { background: #0e2614; border-color: #4ade8044 }
+  .c-timing   { background: #0d1a2e; border-color: #60a5fa44 }
+  .c-nimble   { background: #061a26; border-color: #4fc3f744 }
+  .c-coyote   { background: #280d0d; border-color: #ef444444 }
+  .c-estim    { background: #221600; border-color: #f59e0b44 }
+  .c-hue      { background: #12101a; border-color: #a78bfa44 }
+  .c-io       { background: #1a1400; border-color: #f0c04044 }
+  .c-trigger  { background: #261500; border-color: #f9731644 }
+  .c-logic    { background: #1a0d2e; border-color: #818cf844 }
+
+  .tx-control { color: #4ade80 }
+  .tx-timing  { color: #93c5fd }
+  .tx-nimble  { color: #7dd3fc }
+  .tx-coyote  { color: #fca5a5 }
+  .tx-estim   { color: #fcd34d }
+  .tx-hue     { color: #c4b5fd }
+  .tx-io      { color: #f0c040 }
+  .tx-trigger { color: #fdba74 }
+  .tx-logic   { color: #a5b4fc }
+
+  /* Fblock colours */
+  .fb-start   { background: #0e2614; border-color: #4ade8066; color: #4ade80 }
+  .fb-end     { background: #260e0e; border-color: #f8717166; color: #f87171 }
+  .fb-delay   { background: #0d1a2e; border-color: #60a5fa66; color: #93c5fd }
+  .fb-nimble  { background: #061a26; border-color: #4fc3f766; color: #7dd3fc }
+  .fb-coyote  { background: #280d0d; border-color: #ef444466; color: #fca5a5 }
+  .fb-estim   { background: #221600; border-color: #f59e0b66; color: #fcd34d }
+  .fb-hue     { background: #12101a; border-color: #a78bfa66; color: #c4b5fd }
+  .fb-logic   { background: #1a0d2e; border-color: #818cf866; color: #a5b4fc }
+  .fb-trigger { background: #261500; border-color: #f9731666; color: #fdba74 }
+  .fb-stop    { background: #2a0808; border-color: #dc262666; color: #fca5a5 }
+  .fb-io      { background: #1a1400; border-color: #f0c04066; color: #f0c040 }
+
+  .section-intro { color: #666; font-size: 12px; margin-bottom: 16px; padding: 10px 14px; background: #0d0d0d; border-radius: 6px; border: 1px solid #1a1a1a }
+
+  .worked { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 8px; padding: 16px 18px; margin: 20px 0 }
+  .worked h3 { color: #e0e0e0; margin-bottom: 10px; font-size: 14px }
+  .worked p { color: #777; font-size: 12px; margin-bottom: 12px }
+  .worked .step { display: flex; gap: 10px; margin-bottom: 8px; align-items: flex-start }
+  .worked .step-num { background: #1a1a1a; color: #555; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; margin-top: 2px }
+  .worked .step-text { font-size: 12px; color: #888 }
+  .worked .step-text strong { color: #bbb }
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="sidebar-title">Macro Help</div>
+  <a href="#overview" onclick="setActive(this)">Overview</a>
+  <a href="#building" onclick="setActive(this)">Building a Macro</a>
+  <div class="sec">Block Types</div>
+  <a href="#control" onclick="setActive(this)">Control</a>
+  <a href="#timing" onclick="setActive(this)">Timing</a>
+  <a href="#nimble" onclick="setActive(this)">Nimble</a>
+  <a href="#coyote" onclick="setActive(this)">Coyote</a>
+  <a href="#estim" onclick="setActive(this)">E-Stim 2B</a>
+  <a href="#hue" onclick="setActive(this)">Hue</a>
+  <a href="#io" onclick="setActive(this)">I/O</a>
+  <a href="#triggers" onclick="setActive(this)">Triggers</a>
+  <a href="#logic" onclick="setActive(this)">Logic</a>
+  <div class="sec">Examples</div>
+  <a href="#ex-warmup" onclick="setActive(this)">Warm-up Ramp</a>
+  <a href="#ex-scene" onclick="setActive(this)">Scene with Lighting</a>
+  <a href="#ex-adaptive" onclick="setActive(this)">Adaptive Intensity</a>
+  <a href="#ex-nimble-session" onclick="setActive(this)">Full Nimble Session</a>
+  <a href="#ex-combined" onclick="setActive(this)">Multi-Device Scene</a>
+</nav>
+
+<div class="content">
+
+  <h1>Macro Editor</h1>
+  <p class="lead">Build automated multi-device sequences using a visual node-based flow editor. Connect blocks together to create timing sequences, ramps, conditional branches, and loops across all your connected devices.</p>
+
+  <!-- ── Overview ─────────────────────────────────────────── -->
+  <h2 id="overview">Overview</h2>
+  <p>A macro is a directed graph of <strong>blocks</strong> connected by <strong>wires</strong>. Execution starts at the <strong>START</strong> block and follows wires from one block to the next, running each block's action in order. Blocks can branch (If/Else), loop, or fire in parallel when a non-blocking ramp is followed immediately by a delay.</p>
+  <div class="tip"><strong>Non-blocking ramps:</strong> Ramp blocks (Coyote Ramp, E-Stim Ramp, Nimble Ramp, Hue Ramp) run in the background by default. This lets you ramp intensity over 60 seconds while simultaneously running delays, triggers, and device changes on the same macro path.</div>
+
+  <!-- ── Building a Macro ──────────────────────────────────── -->
+  <h2 id="building">Building a Macro</h2>
+  <div class="block-grid">
+    <div class="block-card">
+      <div class="block-body">
+        <div class="block-desc"><strong style="color:#ccc">1. Drag blocks</strong> from the left palette onto the canvas.</div>
+        <div class="block-desc"><strong style="color:#ccc">2. Connect blocks</strong> by dragging from an output port (right side of a block) to an input port (left side of another block).</div>
+        <div class="block-desc"><strong style="color:#ccc">3. Configure blocks</strong> by clicking a block — its settings appear in the panel on the right.</div>
+        <div class="block-desc"><strong style="color:#ccc">4. Every macro must have a START and at least one END block.</strong> START has no input, END has no output.</div>
+        <div class="block-desc"><strong style="color:#ccc">5. Save</strong> with the 💾 button, then <strong style="color:#ccc">Run</strong> with ▶. Use ■ Stop to abort mid-run.</div>
+      </div>
+    </div>
+  </div>
+  <div class="tip"><strong>Tip:</strong> Open the 📺 Monitor window for a full-screen live view showing which block is currently executing, countdown timers, and ramp progress bars.</div>
+
+  <!-- ── Control ───────────────────────────────────────────── -->
+  <h2 id="control">Control Blocks</h2>
+  <p class="section-intro">Every macro starts with START and ends at one or more END blocks. These blocks control macro flow at the top level.</p>
+
+  <div class="block-grid">
+
+    <div class="block-card">
+      <div class="block-header c-control">
+        <div class="block-icon tx-control">▶</div>
+        <div class="block-name tx-control">START</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">The entry point of every macro. Execution begins here. Every macro must have exactly one START block. No configuration required.</div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header" style="background:#260e0e;border-color:#f8717144">
+        <div class="block-icon" style="color:#f87171">■</div>
+        <div class="block-name" style="color:#f87171">END</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Marks the end of a macro path. When execution reaches END the macro finishes successfully. You can have multiple END blocks in a macro (e.g. at the end of each branch of an If/Else).</div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header" style="background:#2a0808;border-color:#dc262644">
+        <div class="block-icon" style="color:#fca5a5">⛔</div>
+        <div class="block-name" style="color:#fca5a5">STOP ALL</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Immediately zeros all connected devices — sets Coyote intensity to 0, E-Stim power to 0, stops Nimble oscillation. Execution continues to the next block after a brief pause. Use this as an emergency reset within a sequence.</div>
+        <div class="example">
+          <div class="example-title">Example — safety reset before a new scene</div>
+          <div class="flow">
+            <span class="fblock fb-start">▶ START</span><span class="farrow">→</span>
+            <span class="fblock fb-stop">⛔ STOP ALL</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 2s</span><span class="farrow">→</span>
+            <span class="fblock fb-coyote">⚡ SET Coyote A</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-control">
+        <div class="block-icon tx-control">▷</div>
+        <div class="block-name tx-control">SUB MACRO</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Runs another saved macro as a sub-routine, then continues. The sub-macro runs to completion (or until the parent is stopped) before the next block fires.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Macro</td><td>Which saved macro to run</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — reusable warm-up routine</div>
+          <div class="flow">
+            <span class="fblock fb-start">▶ START</span><span class="farrow">→</span>
+            <span class="fblock fb-logic">▷ SUB MACRO: Warm-up</span><span class="farrow">→</span>
+            <span class="fblock fb-coyote">↗ COYOTE RAMP 80→160</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Timing ────────────────────────────────────────────── -->
+  <h2 id="timing">Timing Blocks</h2>
+  <p class="section-intro">Timing blocks control pacing within a sequence.</p>
+
+  <div class="block-grid">
+    <div class="block-card">
+      <div class="block-header c-timing">
+        <div class="block-icon tx-timing">⏱</div>
+        <div class="block-name tx-timing">DELAY</div>
+        <span class="tag tag-blocking">Blocking</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Pauses execution for a fixed duration. The macro monitor shows a live countdown. All devices continue running at their current settings during a delay.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Duration (s)</td><td>How long to wait. Minimum 0.5s, no maximum.</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — hold intensity for 30 seconds</div>
+          <div class="flow">
+            <span class="fblock fb-coyote">↗ COYOTE RAMP 0→100</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 30s</span><span class="farrow">→</span>
+            <span class="fblock fb-coyote">↗ COYOTE RAMP 100→0</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Nimble ────────────────────────────────────────────── -->
+  <h2 id="nimble">Nimble Blocks</h2>
+  <p class="section-intro">Control the NimbleStroker linear actuator — start and stop stroke oscillation, and ramp parameters smoothly over time.</p>
+
+  <div class="block-grid">
+
+    <div class="block-card">
+      <div class="block-header c-nimble">
+        <div class="block-icon tx-nimble">▶</div>
+        <div class="block-name tx-nimble">NIMBLE START</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Sets all stroke parameters and starts the oscillation. Use this at the beginning of a sequence or after a Nimble Stop to restart with new settings.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Device</td><td>Which Nimble to control (defaults to first connected)</td></tr>
+          <tr><td>Speed (SPM)</td><td>Strokes per minute — 6 to 300</td></tr>
+          <tr><td>Depth (0–1000)</td><td>Stroke amplitude. 1000 = full range</td></tr>
+          <tr><td>Nurture (0–200)</td><td>Adds a gentle vibration texture on top of the stroke</td></tr>
+          <tr><td>Nature (Hz)</td><td>Frequency of the nurture vibration — 0.5 to 50 Hz</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — start a slow, shallow stroke</div>
+          <div class="flow">
+            <span class="fblock fb-start">▶ START</span><span class="farrow">→</span>
+            <span class="fblock fb-nimble">▶ NIMBLE START 20 SPM / depth 300</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 60s</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header" style="background:#1a0606;border-color:#f8717144">
+        <div class="block-icon" style="color:#fca5a5">⏹</div>
+        <div class="block-name" style="color:#fca5a5">NIMBLE STOP</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Stops the stroke oscillation. The device holds its last position. Use before a long delay where you want the device to be still, or at the end of a session.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Device</td><td>Which Nimble to stop (defaults to first connected)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-nimble">
+        <div class="block-icon tx-nimble">↗</div>
+        <div class="block-name tx-nimble">NIMBLE RAMP</div>
+        <span class="tag tag-async">Async</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Smoothly ramps one stroke parameter from a starting value to a target value over a set duration. Non-blocking by default — the next block fires immediately while the ramp runs in the background.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Device</td><td>Which Nimble to control</td></tr>
+          <tr><td>Parameter</td><td>Speed (SPM), Depth, Nurture, or Nature (Hz)</td></tr>
+          <tr><td>From</td><td>Starting value</td></tr>
+          <tr><td>To</td><td>Target value</td></tr>
+          <tr><td>Duration (s)</td><td>How long the ramp takes</td></tr>
+          <tr><td>Wait for finish</td><td>If checked, next block waits until ramp completes</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — speed ramp from slow to fast</div>
+          <div class="flow">
+            <span class="fblock fb-nimble">▶ NIMBLE START 20 SPM</span><span class="farrow">→</span>
+            <span class="fblock fb-nimble">↗ NIMBLE RAMP Speed 20→120 / 60s</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 60s</span><span class="farrow">→</span>
+            <span class="fblock fb-nimble">⏹ NIMBLE STOP</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+          <p style="margin-top:8px;color:#555;font-size:11px">The ramp and delay run simultaneously — speed climbs to 120 SPM while the macro waits 60 seconds.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Coyote ────────────────────────────────────────────── -->
+  <h2 id="coyote">Coyote Blocks</h2>
+  <p class="section-intro">Control the DG-Lab Coyote e-stim device — set waveform and intensity instantly or ramp smoothly.</p>
+
+  <div class="block-grid">
+
+    <div class="block-card">
+      <div class="block-header c-coyote">
+        <div class="block-icon tx-coyote">↗</div>
+        <div class="block-name tx-coyote">COYOTE RAMP</div>
+        <span class="tag tag-async">Async</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Smoothly ramps intensity on a Coyote channel from a start value to a target value. Non-blocking by default so you can run delays or device changes in parallel.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Device</td><td>Specific Coyote, or leave blank for all connected Coyotes</td></tr>
+          <tr><td>Channel</td><td>A, B</td></tr>
+          <tr><td>From (0–200)</td><td>Starting intensity</td></tr>
+          <tr><td>To (0–200)</td><td>Target intensity</td></tr>
+          <tr><td>Duration (s)</td><td>Ramp duration</td></tr>
+          <tr><td>Wait for finish</td><td>If checked, macro waits for the ramp to complete before continuing</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — parallel ramp on both channels</div>
+          <div class="flow">
+            <span class="fblock fb-start">▶ START</span><span class="farrow">→</span>
+            <span class="fblock fb-coyote">↗ COYOTE RAMP A: 0→120 / 60s</span>
+          </div>
+          <div class="flow" style="margin-top:4px">
+            <span style="width:80px;display:inline-block"></span>
+            <span class="farrow">→</span>
+            <span class="fblock fb-coyote">↗ COYOTE RAMP B: 0→80 / 60s</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 60s ⏸</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+          <p style="margin-top:8px;color:#555;font-size:11px">Connect both ramps to the delay — A and B ramp simultaneously while the delay counts down.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-coyote">
+        <div class="block-icon tx-coyote">⚡</div>
+        <div class="block-name tx-coyote">SET COYOTE (per device/channel)</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Instantly sets waveform, intensity, and speed on one channel of a specific Coyote. A separate SET block appears in the palette for each connected Coyote channel (Channel A and Channel B independently).</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Waveform</td><td>Built-in or custom audio waveform to play on this channel</td></tr>
+          <tr><td>Intensity (0–200)</td><td>Output intensity</td></tr>
+          <tr><td>Speed</td><td>Waveform playback speed multiplier (0.25× to 4×)</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — switch waveform mid-sequence</div>
+          <div class="flow">
+            <span class="fblock fb-coyote">⚡ SET A: Pulse · 80</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 30s</span><span class="farrow">→</span>
+            <span class="fblock fb-coyote">⚡ SET A: Wave · 120</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── E-Stim ─────────────────────────────────────────────── -->
+  <h2 id="estim">E-Stim 2B Blocks</h2>
+  <p class="section-intro">Control the E-Stim 2B unit — set mode and power instantly or ramp power smoothly on individual channels.</p>
+
+  <div class="block-grid">
+
+    <div class="block-card">
+      <div class="block-header c-estim">
+        <div class="block-icon tx-estim">↗</div>
+        <div class="block-name tx-estim">ESTIM RAMP</div>
+        <span class="tag tag-async">Async</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Smoothly ramps power on one or both E-Stim channels. Non-blocking by default.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Device</td><td>Which E-Stim unit (defaults to first connected)</td></tr>
+          <tr><td>Channel</td><td>A, B, or Both</td></tr>
+          <tr><td>From (%)</td><td>Starting power level (0–100)</td></tr>
+          <tr><td>To (%)</td><td>Target power level (0–100)</td></tr>
+          <tr><td>Duration (s)</td><td>Ramp duration</td></tr>
+          <tr><td>Wait for finish</td><td>If checked, macro waits for the ramp to complete</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — slow build on channel A only</div>
+          <div class="flow">
+            <span class="fblock fb-estim">↗ ESTIM RAMP A: 0→75% / 45s</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 45s ⏸</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-estim">
+        <div class="block-icon tx-estim">⚡</div>
+        <div class="block-name tx-estim">SET E-STIM</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Instantly sets the mode (waveform) and power levels on both channels of the E-Stim 2B.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Mode</td><td>One of 20 modes: Pulse, Bounce, Continuous, A Split, B Split, Wave, Waterfall, Squeeze, Milk, Throb, Thrust, Random, Step, Training, Microphone, Stereo, Tickle, Pwr Level, Mic Level, A&amp;B Link</td></tr>
+          <tr><td>Power Ch A (%)</td><td>Channel A output power 0–100%</td></tr>
+          <tr><td>Power Ch B (%)</td><td>Channel B output power 0–100%</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — change mode mid-sequence</div>
+          <div class="flow">
+            <span class="fblock fb-estim">⚡ SET: Pulse · A:40% B:40%</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 60s</span><span class="farrow">→</span>
+            <span class="fblock fb-estim">⚡ SET: Wave · A:60% B:60%</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Hue ───────────────────────────────────────────────── -->
+  <h2 id="hue">Hue Blocks</h2>
+  <p class="section-intro">Control Philips Hue lighting — activate scenes and ramp brightness to create atmosphere.</p>
+
+  <div class="block-grid">
+
+    <div class="block-card">
+      <div class="block-header c-hue">
+        <div class="block-icon tx-hue">☀</div>
+        <div class="block-name tx-hue">SET HUE</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Activates a Hue scene or turns a room on/off at a set brightness.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Scene or Room</td><td>Select from your configured Hue scenes and rooms</td></tr>
+          <tr><td>Action</td><td>On (activate) or Off (turn off)</td></tr>
+          <tr><td>Brightness (%)</td><td>1–100%. Only applies when Action is On.</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-hue">
+        <div class="block-icon tx-hue">↗</div>
+        <div class="block-name tx-hue">HUE RAMP</div>
+        <span class="tag tag-async">Async</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Smoothly ramps a room's brightness from one level to another over time. Great for gradually dimming or brightening the room in sync with intensity changes on other devices.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Scene or Room</td><td>Target Hue room or scene group</td></tr>
+          <tr><td>From (%)</td><td>Starting brightness</td></tr>
+          <tr><td>To (%)</td><td>Target brightness</td></tr>
+          <tr><td>Duration (s)</td><td>Ramp duration</td></tr>
+          <tr><td>Wait for finish</td><td>If checked, macro waits before continuing</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — dim lights as intensity rises</div>
+          <div class="flow">
+            <span class="fblock fb-hue">☀ HUE RAMP 80%→10% / 60s</span>
+          </div>
+          <div class="flow" style="margin-top:4px">
+            <span style="width:20px;display:inline-block"></span>
+            <span class="farrow">→</span>
+            <span class="fblock fb-coyote">↗ COYOTE RAMP 0→160 / 60s</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 60s ⏸</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── I/O ───────────────────────────────────────────────── -->
+  <h2 id="io">I/O Blocks</h2>
+  <p class="section-intro">Control Shelly relays and dimmers.</p>
+
+  <div class="block-grid">
+    <div class="block-card">
+      <div class="block-header c-io">
+        <div class="block-icon tx-io">⚡</div>
+        <div class="block-name tx-io">I/O SET</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Turns a Shelly relay or dimmer switch on or off.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Switch / Light</td><td>Select from connected Shelly components</td></tr>
+          <tr><td>Action</td><td>On or Off</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — power on a device before a session</div>
+          <div class="flow">
+            <span class="fblock fb-start">▶ START</span><span class="farrow">→</span>
+            <span class="fblock fb-io">⚡ I/O SET: Device Power ON</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 3s</span><span class="farrow">→</span>
+            <span class="fblock fb-nimble">▶ NIMBLE START</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Triggers ──────────────────────────────────────────── -->
+  <h2 id="triggers">Trigger Blocks</h2>
+  <p class="section-intro">Pause execution until an external condition is met. Great for making macros responsive to sensors and user input.</p>
+
+  <div class="block-grid">
+
+    <div class="block-card">
+      <div class="block-header c-trigger">
+        <div class="block-icon tx-trigger">◈</div>
+        <div class="block-name tx-trigger">WAIT: EOM</div>
+        <span class="tag tag-blocking">Blocking</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Pauses until the EOM arousal sensor crosses a threshold. Use this to make the macro respond to real-time arousal levels.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Condition</td><td>Arousal &gt; threshold, or Arousal &lt; threshold</td></tr>
+          <tr><td>Threshold (%)</td><td>0–100. The arousal level that triggers continuation</td></tr>
+          <tr><td>Timeout (s)</td><td>Maximum wait. 0 = wait indefinitely</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — ramp up until high arousal, then hold</div>
+          <div class="flow">
+            <span class="fblock fb-coyote">↗ COYOTE RAMP 0→160 / 120s</span><span class="farrow">→</span>
+            <span class="fblock fb-trigger">◈ WAIT EOM &gt; 85%</span><span class="farrow">→</span>
+            <span class="fblock fb-coyote">⚡ SET A: Pulse · 40</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-trigger">
+        <div class="block-icon tx-trigger">⏸</div>
+        <div class="block-name tx-trigger">WAIT: MANUAL</div>
+        <span class="tag tag-blocking">Blocking</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Pauses the macro and shows a prompt in the UI. A <strong>▶ Continue</strong> banner appears at the top of the macro page. Click it to resume. Useful for multi-stage sessions where a human decision is needed.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Prompt text</td><td>Message shown on the Continue banner (e.g. "Reposition and click to continue")</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-trigger">
+        <div class="block-icon tx-trigger">🐾</div>
+        <div class="block-name tx-trigger">WAIT: PAW</div>
+        <span class="tag tag-blocking">Blocking</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Pauses until a PawPrints sensor fires — either a button press or a tilt angle. Use as a hands-free input device.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Device</td><td>Specific PawPrints device, or any</td></tr>
+          <tr><td>Wait for</td><td>Button Press or Tilt Angle</td></tr>
+          <tr><td>Button</td><td>B1, B2, B3, or Any (press mode only)</td></tr>
+          <tr><td>Axis</td><td>X, Y, Z, or Any (tilt mode only)</td></tr>
+          <tr><td>Calibrate</td><td>Set the reference position for tilt detection</td></tr>
+          <tr><td>Sensitivity</td><td>How far the sensor must move to trigger</td></tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Logic ─────────────────────────────────────────────── -->
+  <h2 id="logic">Logic Blocks</h2>
+  <p class="section-intro">Branch and repeat — build adaptive sequences that respond to sensor readings.</p>
+
+  <div class="block-grid">
+
+    <div class="block-card">
+      <div class="block-header c-logic">
+        <div class="block-icon tx-logic">⋈</div>
+        <div class="block-name tx-logic">IF / ELSE</div>
+        <span class="tag tag-branch">Branch</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Checks the current EOM arousal level at this moment and takes the YES or NO output accordingly. Both outputs can lead to different paths that reconverge at an END block.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Condition</td><td>Arousal &gt; or Arousal &lt;</td></tr>
+          <tr><td>Threshold (%)</td><td>The level to compare against</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — high arousal takes a different path</div>
+          <div class="flow">
+            <span class="fblock fb-logic">⋈ IF Arousal &gt; 80%</span>
+            <span style="color:#4ade80;font-size:11px;margin-left:4px">YES →</span>
+            <span class="fblock fb-coyote">⚡ SET A: 160</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+          <div class="flow" style="margin-top:4px">
+            <span style="width:160px;display:inline-block"></span>
+            <span style="color:#f87171;font-size:11px">NO →</span>
+            <span class="fblock fb-coyote">↗ COYOTE RAMP 0→120 / 30s</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-logic">
+        <div class="block-icon tx-logic">🐾</div>
+        <div class="block-name tx-logic">PAW: IF / ELSE</div>
+        <span class="tag tag-branch">Branch</span>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Waits for a PawPrints input, then branches based on which button was pressed or whether the tilt matched the configured axis. YES if the condition matches, NO otherwise.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Device</td><td>Specific PawPrints or any</td></tr>
+          <tr><td>Check</td><td>Button Press or Tilt Angle</td></tr>
+          <tr><td>Button</td><td>B1, B2, B3, or Any</td></tr>
+        </table>
+        <div class="tip"><strong>Example use:</strong> Offer the user a choice — B1 = more intensity (YES path), B2/B3 = stop (NO path).</div>
+      </div>
+    </div>
+
+    <div class="block-card">
+      <div class="block-header c-logic">
+        <div class="block-icon tx-logic">↺</div>
+        <div class="block-name tx-logic">LOOP</div>
+      </div>
+      <div class="block-body">
+        <div class="block-desc">Loops back to repeat a section of the macro. The loop body connects from the output of LOOP back to an earlier block, then LOOP's output continues the main sequence when the loop exits.</div>
+        <table class="params">
+          <tr><th>Parameter</th><th>Description</th></tr>
+          <tr><td>Mode</td><td><strong>Repeat N times</strong> — loops a fixed number of times.<br><strong>EOM loop</strong> — keeps looping while arousal is above or below a threshold.</td></tr>
+          <tr><td>Count</td><td>Number of repetitions (Repeat N times mode)</td></tr>
+          <tr><td>Condition / Threshold</td><td>Arousal threshold to exit the loop (EOM mode)</td></tr>
+        </table>
+        <div class="example">
+          <div class="example-title">Example — pulse 5 times then ramp</div>
+          <div class="flow">
+            <span class="fblock fb-coyote">⚡ SET A: Pulse · 80</span><span class="farrow">→</span>
+            <span class="fblock fb-delay">⏱ DELAY 2s</span><span class="farrow">→</span>
+            <span class="fblock fb-stop">⛔ STOP ALL</span><span class="farrow">→</span>
+            <span class="fblock fb-logic">↺ LOOP ×5</span><span class="farrow">→</span>
+            <span class="fblock fb-coyote">↗ RAMP 0→160</span><span class="farrow">→</span>
+            <span class="fblock fb-end">■ END</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Worked Examples ───────────────────────────────────── -->
+
+  <h2 id="ex-warmup">Worked Example: Warm-up Ramp</h2>
+  <div class="worked">
+    <h3>Gentle 5-minute warm-up on Coyote, both channels</h3>
+    <p>Starts from zero, slowly builds both channels to a comfortable mid-level over 5 minutes, then holds for another 2 minutes.</p>
+    <div class="step"><div class="step-num">1</div><div class="step-text"><strong>START</strong> — entry point</div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-text"><strong>SET Coyote A:</strong> Waveform = Breathe, Intensity = 0 — set waveform before ramping</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-text"><strong>SET Coyote B:</strong> Waveform = Breathe, Intensity = 0</div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-text"><strong>COYOTE RAMP</strong> Ch A: 0 → 80, Duration = 300s (non-blocking) — starts ramp in background</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-text"><strong>COYOTE RAMP</strong> Ch B: 0 → 60, Duration = 300s (non-blocking) — B slightly lower than A</div></div>
+    <div class="step"><div class="step-num">6</div><div class="step-text"><strong>DELAY</strong> 300s — holds while both ramps run</div></div>
+    <div class="step"><div class="step-num">7</div><div class="step-text"><strong>DELAY</strong> 120s — additional hold at target level</div></div>
+    <div class="step"><div class="step-num">8</div><div class="step-text"><strong>END</strong></div></div>
+    <div class="flow" style="margin-top:14px">
+      <span class="fblock fb-start">▶ START</span><span class="farrow">→</span>
+      <span class="fblock fb-coyote">⚡ SET A:0</span><span class="farrow">→</span>
+      <span class="fblock fb-coyote">⚡ SET B:0</span><span class="farrow">→</span>
+      <span class="fblock fb-coyote">↗ RAMP A 0→80 / 300s</span><span class="farrow">→</span>
+      <span class="fblock fb-coyote">↗ RAMP B 0→60 / 300s</span><span class="farrow">→</span>
+      <span class="fblock fb-delay">⏱ 300s</span><span class="farrow">→</span>
+      <span class="fblock fb-delay">⏱ 120s</span><span class="farrow">→</span>
+      <span class="fblock fb-end">■ END</span>
+    </div>
+  </div>
+
+  <h2 id="ex-scene">Worked Example: Scene with Lighting</h2>
+  <div class="worked">
+    <h3>Set the mood — lights dim as Coyote intensity rises</h3>
+    <p>Activates a Hue scene at full brightness, then dims the lights and ramps the Coyote simultaneously over 2 minutes.</p>
+    <div class="step"><div class="step-num">1</div><div class="step-text"><strong>START</strong></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-text"><strong>SET HUE:</strong> Scene = "Relax", Action = On, Brightness = 80%</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-text"><strong>SET Coyote A:</strong> Waveform = Wave, Intensity = 20</div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-text"><strong>HUE RAMP</strong> 80% → 10%, Duration = 120s (non-blocking) — lights dim slowly</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-text"><strong>COYOTE RAMP</strong> Ch A: 20 → 140, Duration = 120s (non-blocking) — intensity rises</div></div>
+    <div class="step"><div class="step-num">6</div><div class="step-text"><strong>DELAY</strong> 120s — waits while both ramps finish</div></div>
+    <div class="step"><div class="step-num">7</div><div class="step-text"><strong>END</strong></div></div>
+  </div>
+
+  <h2 id="ex-adaptive">Worked Example: Adaptive Intensity</h2>
+  <div class="worked">
+    <h3>Respond to arousal — loop until high, then escalate</h3>
+    <p>Uses EOM sensor to keep checking arousal in a loop. When arousal exceeds 75%, exits the loop and escalates intensity.</p>
+    <div class="step"><div class="step-num">1</div><div class="step-text"><strong>START</strong></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-text"><strong>SET Coyote A:</strong> Waveform = Pulse, Intensity = 60</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-text"><strong>LOOP</strong> Mode = EOM loop, Condition = Arousal &lt; 75% — body of loop:</div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-text">&nbsp;&nbsp;<strong>DELAY</strong> 10s — check every 10 seconds (LOOP body connects back here)</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-text"><strong>COYOTE RAMP</strong> Ch A: 60 → 180, Duration = 30s, Wait for finish = ✓ — escalate</div></div>
+    <div class="step"><div class="step-num">6</div><div class="step-text"><strong>END</strong></div></div>
+  </div>
+
+  <h2 id="ex-nimble-session">Worked Example: Full Nimble Session</h2>
+  <div class="worked">
+    <h3>Nimble warm-up → speed ramp → texture build → stop</h3>
+    <p>A complete session using the NimbleStroker — starts slow and shallow, ramps speed and depth over time, adds nurture texture, then stops cleanly.</p>
+    <div class="step"><div class="step-num">1</div><div class="step-text"><strong>START</strong></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-text"><strong>NIMBLE START:</strong> Speed = 15 SPM, Depth = 300, Nurture = 0, Nature = 10 Hz</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-text"><strong>NIMBLE RAMP</strong> Depth: 300 → 800 over 60s (non-blocking) — depth builds up</div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-text"><strong>NIMBLE RAMP</strong> Speed: 15 → 60 SPM over 90s (non-blocking) — speed ramps</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-text"><strong>DELAY</strong> 90s — hold while ramps complete</div></div>
+    <div class="step"><div class="step-num">6</div><div class="step-text"><strong>NIMBLE RAMP</strong> Nurture: 0 → 80 over 30s, Wait = ✓ — add texture</div></div>
+    <div class="step"><div class="step-num">7</div><div class="step-text"><strong>DELAY</strong> 60s — hold at full texture</div></div>
+    <div class="step"><div class="step-num">8</div><div class="step-text"><strong>NIMBLE STOP</strong></div></div>
+    <div class="step"><div class="step-num">9</div><div class="step-text"><strong>END</strong></div></div>
+  </div>
+
+  <h2 id="ex-combined">Worked Example: Multi-Device Scene</h2>
+  <div class="worked">
+    <h3>Nimble + Coyote + E-Stim + Hue all in sync</h3>
+    <p>Activates all devices simultaneously with a coordinated ramp sequence and atmospheric lighting.</p>
+    <div class="step"><div class="step-num">1</div><div class="step-text"><strong>START</strong></div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-text"><strong>SET HUE:</strong> Scene = "Deep Red", Brightness = 60%</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-text"><strong>NIMBLE START:</strong> Speed = 20 SPM, Depth = 400</div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-text"><strong>SET E-STIM:</strong> Mode = Wave, A = 20%, B = 20%</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-text"><strong>SET Coyote A:</strong> Waveform = Throb, Intensity = 40</div></div>
+    <div class="step"><div class="step-num">6</div><div class="step-text"><strong>HUE RAMP</strong> 60% → 15% / 120s (background) — lights dim</div></div>
+    <div class="step"><div class="step-num">7</div><div class="step-text"><strong>NIMBLE RAMP</strong> Speed 20 → 80 SPM / 120s (background)</div></div>
+    <div class="step"><div class="step-num">8</div><div class="step-text"><strong>ESTIM RAMP</strong> Both: 20% → 65% / 120s (background)</div></div>
+    <div class="step"><div class="step-num">9</div><div class="step-text"><strong>COYOTE RAMP</strong> A: 40 → 140 / 120s (background)</div></div>
+    <div class="step"><div class="step-num">10</div><div class="step-text"><strong>DELAY</strong> 120s — all four ramps run in parallel</div></div>
+    <div class="step"><div class="step-num">11</div><div class="step-text"><strong>WAIT: MANUAL</strong> "Ready to continue?"</div></div>
+    <div class="step"><div class="step-num">12</div><div class="step-text"><strong>STOP ALL</strong></div></div>
+    <div class="step"><div class="step-num">13</div><div class="step-text"><strong>END</strong></div></div>
+    <div class="warn" style="margin-top:12px"><strong>Tip:</strong> Steps 6–9 are all non-blocking ramps connected in a chain — they each fire immediately, so all four ramps start at the same moment and run concurrently through the 120-second DELAY.</div>
+  </div>
+
+</div>
+
+<script>
+function setActive(el) {
+  document.querySelectorAll('.sidebar a').forEach(a => a.classList.remove('active'))
+  el.classList.add('active')
+}
+
+// Highlight active section on scroll
+const sections = document.querySelectorAll('h2[id]')
+window.addEventListener('scroll', () => {
+  let current = ''
+  sections.forEach(s => { if (window.scrollY >= s.offsetTop - 60) current = s.id })
+  document.querySelectorAll('.sidebar a').forEach(a => {
+    a.classList.toggle('active', a.getAttribute('href') === '#' + current)
+  })
+}, { passive: true })
+</script>
+</body>
+</html>

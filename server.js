@@ -2061,6 +2061,55 @@ wss.on('connection', (ws, request) => {
 
 // ── REST API ──────────────────────────────────────────────────────────────────
 app.get('/api/status',  (req,res) => res.json({ ok:true, boxId:config.boxId, version:APP_VERSION, uptime:process.uptime(), deviceCount:Object.keys(devices).length }))
+
+// ── Backup / Restore ──────────────────────────────────────────────────────
+app.get('/api/backup', requireAdmin, (req, res) => {
+  try {
+    const cfgClean = { ...config }
+    delete cfgClean.sessionSecret
+    delete cfgClean.communityDeviceToken
+    const audioMeta = {}
+    if (existsSync(AUDIO_DIR)) {
+      for (const f of readdirSync(AUDIO_DIR).filter(f => f.endsWith('.json'))) {
+        try { audioMeta[f] = JSON.parse(readFileSync(join(AUDIO_DIR, f), 'utf8')) } catch {}
+      }
+    }
+    const backup = {
+      _type: 'edgecontroller-backup',
+      _version: APP_VERSION,
+      config: cfgClean,
+      macros: existsSync(MACROS_PATH) ? JSON.parse(readFileSync(MACROS_PATH, 'utf8')) : {},
+      waveforms: existsSync(WAVEFORMS_PATH) ? JSON.parse(readFileSync(WAVEFORMS_PATH, 'utf8')) : {},
+      audioMeta,
+    }
+    const filename = `edgecontroller-backup-${config.boxId}-${new Date().toISOString().slice(0,10)}.json`
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.setHeader('Content-Type', 'application/json')
+    res.send(JSON.stringify(backup, null, 2))
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/restore', requireAdmin, express.json({ limit: '20mb' }), async (req, res) => {
+  try {
+    const b = req.body
+    if (b?._type !== 'edgecontroller-backup') return res.status(400).json({ error: 'Invalid backup file' })
+    if (b.macros)    writeFileSync(MACROS_PATH,    JSON.stringify(b.macros,    null, 2))
+    if (b.waveforms) writeFileSync(WAVEFORMS_PATH, JSON.stringify(b.waveforms, null, 2))
+    if (b.audioMeta) {
+      if (!existsSync(AUDIO_DIR)) mkdirSync(AUDIO_DIR, { recursive: true })
+      for (const [f, data] of Object.entries(b.audioMeta)) {
+        writeFileSync(join(AUDIO_DIR, f), JSON.stringify(data, null, 2))
+      }
+    }
+    if (b.config) {
+      const keep = { sessionSecret: config.sessionSecret, communityDeviceToken: config.communityDeviceToken, boxId: config.boxId }
+      Object.assign(config, b.config, keep)
+      saveConfig(config)
+    }
+    res.json({ ok: true })
+    setTimeout(() => process.exit(0), 500)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
 app.get('/api/devices', (req,res) => res.json(Object.values(devices).map(d=>d.toJSON())))
 app.post('/api/scan',   (req,res) => { doScan(); res.json({scanning:true}) })
 app.get('/api/serial-ports', async (req,res) => {

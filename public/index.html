@@ -759,6 +759,20 @@ select.mci{cursor:pointer}
         <div style="font-size:10px;color:#2e2e2e;line-height:1.6">If locked out, SSH in and set <span style="font-family:monospace;color:#444">auth.enabled: false</span> in config.json.</div>
       </div>
 
+      <!-- Backup & Restore -->
+      <div class="cfg-card">
+        <div class="sec-label" style="margin-bottom:6px">Backup &amp; Restore</div>
+        <div style="font-size:11px;color:#444;margin-bottom:14px;line-height:1.6">Backup saves your devices, macros, waveforms and audio metadata. Audio files are not included.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="configBackup()">⬇ Download Backup</button>
+          <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
+            ⬆ Restore Backup
+            <input type="file" accept=".json" style="display:none" onchange="configRestore(this)">
+          </label>
+        </div>
+        <div id="backup-status" style="font-size:11px;margin-top:10px;display:none"></div>
+      </div>
+
     </div>
   </div>
 
@@ -5754,6 +5768,32 @@ async function saveAuth(enable){
   lg('Auth '+(enable?'enabled — login required on next visit':'credentials saved'))
   updateAuthUI({enabled:enable||S.authEnabled, adminUsername:adminUser, userUsername:userUser})
 }
+function configBackup() {
+  window.location.href = '/api/backup'
+}
+
+async function configRestore(input) {
+  const file = input.files[0]; if (!file) return
+  const status = document.getElementById('backup-status')
+  status.style.display = 'block'; status.style.color = '#888'; status.textContent = 'Reading backup…'
+  try {
+    const text = await file.text()
+    const data = JSON.parse(text)
+    if (data._type !== 'edgecontroller-backup') { status.style.color='#f87171'; status.textContent='Not a valid backup file.'; return }
+    const version = data._version || '?'
+    if (!confirm(`Restore backup from v${version}?\n\nThis will overwrite your devices, macros, waveforms and audio metadata, then restart the controller.`)) {
+      status.style.display = 'none'; input.value = ''; return
+    }
+    status.textContent = 'Uploading…'
+    const r = await fetch('/api/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: text })
+    const d = await r.json()
+    if (d.error) { status.style.color='#f87171'; status.textContent='Error: '+d.error; return }
+    status.style.color = '#4ade80'; status.textContent = 'Restored — restarting…'
+    setTimeout(() => window.location.reload(), 3000)
+  } catch(e) { status.style.color='#f87171'; status.textContent='Failed: '+e.message }
+  input.value = ''
+}
+
 async function disableAuth(){
   if(!confirm('Disable password protection? Anyone on the network can access the controller.')) return
   const r=await fetch('/api/auth',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})})

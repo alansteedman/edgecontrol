@@ -966,6 +966,43 @@ select.mci{cursor:pointer}
       </div>
     </div>
 
+    <div id="step-nimble" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <button class="btn btn-ghost btn-xs" onclick="showTypeStep()">← Back</button>
+        <span style="font-size:13px;font-weight:600">◎ NimbleStroker</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button onclick="selectNimbleUsb()" style="background:#181818;border:1px solid #2a2a2a;border-radius:8px;padding:14px;cursor:pointer;text-align:left;color:#e0e0e0;transition:border-color .15s" onmouseover="this.style.borderColor='#4fc3f7'" onmouseout="this.style.borderColor='#2a2a2a'">
+          <div style="font-size:13px;font-weight:600;margin-bottom:3px">🔌 USB Serial</div>
+          <div style="font-size:11px;color:#555">Direct cable connection to this device</div>
+        </button>
+        <button onclick="selectNimbleBridge()" style="background:#181818;border:1px solid #2a2a2a;border-radius:8px;padding:14px;cursor:pointer;text-align:left;color:#e0e0e0;transition:border-color .15s" onmouseover="this.style.borderColor='#4fc3f7'" onmouseout="this.style.borderColor='#2a2a2a'">
+          <div style="font-size:13px;font-weight:600;margin-bottom:3px">📡 WiFi Bridge</div>
+          <div style="font-size:11px;color:#555">NimbleBridge ESP32 over the network</div>
+        </button>
+      </div>
+    </div>
+
+    <div id="step-nimble-bridge" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <button class="btn btn-ghost btn-xs" onclick="showNimbleStep()">← Back</button>
+        <span style="font-size:13px;font-weight:600">📡 WiFi Bridge</span>
+      </div>
+      <div style="margin-bottom:10px">
+        <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">IP Address</label>
+        <div style="display:flex;gap:8px;margin-bottom:6px">
+          <input id="bridge-ip" type="text" placeholder="192.168.1.95" style="flex:1;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+          <button class="btn btn-ghost btn-sm" onclick="scanBridges()" id="bridge-scan-btn">Scan</button>
+        </div>
+        <div id="bridge-scan-results" style="display:none;margin-bottom:8px;max-height:120px;overflow-y:auto;border:1px solid #2a2a2a;border-radius:7px"></div>
+      </div>
+      <div style="margin-bottom:10px">
+        <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Display Name</label>
+        <input id="bridge-name" type="text" placeholder="NimbleBridge 1" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+      </div>
+      <button class="btn btn-primary btn-sm" style="width:100%" onclick="addBridgeDevice()">Add Device</button>
+    </div>
+
     <div id="step-usb" style="display:none">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
         <button class="btn btn-ghost btn-xs" onclick="showTypeStep()">← Back</button>
@@ -2428,7 +2465,7 @@ function buildNimbleCard(dev) {
       <div style="display:flex;align-items:center;gap:8px">
         <span class="status-pill ${sc}"></span>
         <span style="font-weight:600;font-size:13px">${dev.name}</span>
-        <span style="font-size:10px;color:#555">${dev.ttyPath||''}</span>
+        <span style="font-size:10px;color:#555">${dev.tcpHost?dev.tcpHost+':'+dev.tcpPort:(dev.ttyPath||'')}</span>
       </div>
       ${conn
         ?`<button class="btn btn-ghost btn-xs" onclick="discDev('${id}')">Disconnect</button>`
@@ -5573,7 +5610,7 @@ async function wifiResetSetup() {
 const DEVICE_TYPES = [
   {type:'coyote', icon:'⚡', label:'Coyote',      sub:'BLE e-stim',  step:'ble'},
   {type:'eom',    icon:'〰', label:'EoM',          sub:'WiFi',        step:'wifi'},
-  {type:'nimble', icon:'◎', label:'NimbleStroker', sub:'USB serial',  step:'usb'},
+  {type:'nimble', icon:'◎', label:'NimbleStroker', sub:'USB or WiFi', step:'nimble'},
   {type:'estim',  icon:'⚡', label:'E-Stim 2B',    sub:'USB serial',  step:'usb'},
   {type:'camera',    icon:'📷', label:'IP Camera',    sub:'RTSP / ONVIF',step:'camera'},
   {type:'pawprints', icon:'🐾', label:'PawPrints',    sub:'BLE sensor',  step:'ble'},
@@ -5597,7 +5634,7 @@ function openScan(){
   })
 }
 function selectDeviceType(dt){
-  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-usb,#step-camera,#step-hue,#step-shelly').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly').forEach(el=>el.style.display='none')
   if(dt.step==='camera'){
     document.getElementById('step-camera').style.display='block'
     document.getElementById('cam-name').value=''
@@ -5625,6 +5662,8 @@ function selectDeviceType(dt){
     document.getElementById('hue-add-form').style.display='block'
     document.getElementById('hue-pairing-status').style.display='none'
     document.getElementById('hue-discover-results').style.display='none'
+  } else if(dt.step==='nimble') {
+    document.getElementById('step-nimble').style.display='block'
   } else {
     scanSerialPorts()
     document.getElementById('usb-title').textContent = dt.icon+' '+dt.label+' — USB'
@@ -5635,8 +5674,63 @@ function selectDeviceType(dt){
   }
 }
 function showTypeStep(){
-  document.querySelectorAll('#step-ble,#step-wifi,#step-usb,#step-camera,#step-hue,#step-shelly').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly').forEach(el=>el.style.display='none')
   document.getElementById('step-type').style.display='block'
+}
+function showNimbleStep(){
+  document.querySelectorAll('#step-nimble-bridge,#step-usb').forEach(el=>el.style.display='none')
+  document.getElementById('step-nimble').style.display='block'
+}
+function selectNimbleUsb(){
+  document.getElementById('step-nimble').style.display='none'
+  scanSerialPorts()
+  document.getElementById('usb-title').textContent='◎ NimbleStroker — USB'
+  document.getElementById('nimble-name').placeholder='e.g. Nimble 1'
+  document.getElementById('usb-add-btn').textContent='Add NimbleStroker'
+  document.getElementById('step-usb').dataset.devtype='nimble'
+  document.getElementById('step-usb').style.display='block'
+}
+function selectNimbleBridge(){
+  document.getElementById('step-nimble').style.display='none'
+  document.getElementById('bridge-ip').value=''
+  document.getElementById('bridge-name').value=''
+  document.getElementById('bridge-scan-results').style.display='none'
+  document.getElementById('bridge-scan-results').innerHTML=''
+  document.getElementById('step-nimble-bridge').style.display='block'
+}
+async function scanBridges(){
+  const btn=document.getElementById('bridge-scan-btn')
+  const res=document.getElementById('bridge-scan-results')
+  btn.textContent='Scanning…'; btn.disabled=true
+  res.style.display='none'; res.innerHTML=''
+  try {
+    const data=await fetch('/api/scan-bridges').then(r=>r.json())
+    if(data.length===0){
+      res.innerHTML='<div style="padding:10px;font-size:12px;color:#555">No bridges found on local network</div>'
+    } else {
+      data.forEach(b=>{
+        const row=document.createElement('div')
+        row.style.cssText='padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #1a1a1a'
+        row.onmouseover=()=>row.style.background='#1a1a1a'
+        row.onmouseout=()=>row.style.background=''
+        row.textContent=`${b.ip}:${b.port}`
+        row.onclick=()=>{ document.getElementById('bridge-ip').value=b.ip; if(!document.getElementById('bridge-name').value) document.getElementById('bridge-name').value='NimbleBridge' }
+        res.appendChild(row)
+      })
+    }
+    res.style.display='block'
+  } catch(e){ res.innerHTML='<div style="padding:10px;font-size:12px;color:#f87171">Scan failed</div>'; res.style.display='block' }
+  btn.textContent='Scan'; btn.disabled=false
+}
+async function addBridgeDevice(){
+  const ip=document.getElementById('bridge-ip').value.trim()
+  const name=document.getElementById('bridge-name').value.trim()||'NimbleBridge'
+  if(!ip) return alert('Enter an IP address')
+  try {
+    const r=await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'nimble',name,tcpHost:ip,tcpPort:8765})})
+    if(!r.ok) throw new Error(await r.text())
+    closeScan(); lg('Added '+name)
+  } catch(e){ alert('Error: '+e.message) }
 }
 function closeScan(){ document.getElementById('scan-overlay').classList.remove('open') }
 function doScan(){ fetch('/api/scan',{method:'POST'}).catch(()=>{}) }

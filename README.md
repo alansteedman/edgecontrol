@@ -18,7 +18,7 @@ A self-hosted BLE and USB device controller that runs on a Raspberry Pi 5. Provi
 | DG-Lab Coyote | Haptic/E-stim | BLE |
 | DG-Lab PawPrints (47L120100) | Motion sensor / buttons | BLE |
 | E-Stim 2B | E-stim | USB Serial |
-| Nimble | Motor | USB Serial |
+| Nimble | Motor | USB Serial or WiFi (NimbleBridge ESP32) |
 | EOM | Arousal sensor | Network |
 | IP Camera | Video | Network |
 | Philips Hue | Smart lighting | Network (local bridge) |
@@ -73,8 +73,49 @@ After reboot, open `http://<device-id>.local:3000` in your browser. The device I
 
 If you need to connect the Pi to WiFi after a fresh install, the device will broadcast a `EdgeController-Setup` hotspot. Connect to it, open any webpage, and you'll be redirected to the WiFi setup page. Enter your network credentials and the device will connect and restart.
 
+## NimbleBridge (ESP32 WiFi Adapter)
+
+The `esp32/nimble-bridge/` directory contains MicroPython firmware for an ESP32-WROOM-32 that bridges the NimbleStroker over WiFi, removing the need for a USB cable to the Pi.
+
+### How it works
+
+- On first boot the ESP32 broadcasts a `NimbleBridge-Setup` hotspot
+- Connect to it, open `192.168.4.1` in a browser, and enter your home WiFi credentials
+- After reboot the ESP32 connects to your network and displays its IP on the built-in TFT screen
+- The Pi discovers it automatically via **Add Device → NimbleStroker → WiFi Bridge → Scan**
+- Once connected, the Pi sends oscillation parameters (speed, depth, nurture, nature) to the ESP32 over TCP port 8765
+- The ESP32 runs the sine-wave oscillation **locally** at a hard 20ms tick and drives the NimbleStroker over UART — WiFi jitter never affects motion smoothness
+- Force is auto-calculated from speed × depth: `force = clamp(100 + 0.08 × speed_hz × depth, 100, 900)`
+
+### Standalone web UI
+
+The ESP32 also serves a control page at `http://<esp32-ip>/` — identical controls to the Pi UI (Run, Speed, Depth, Nurture, Nature, Air In/Out, live feedback) so you can use the NimbleStroker from any phone or browser without the Pi.
+
+### Hardware
+
+- ESP32-WROOM-32 dev board
+- ST7789 170×320 TFT display (SPI)
+- NimbleStroker connected via UART2 (TX=GPIO17, RX=GPIO16)
+- MicroPython v1.28.0 — router must be set to **WPA2** (not WPA1)
+
+### Flashing
+
+```bash
+# Erase and flash MicroPython v1.28.0
+esptool.py --chip esp32 erase_flash
+esptool.py --chip esp32 write_flash -z 0x1000 ESP32_GENERIC-20260406-v1.28.0.bin
+
+# Upload firmware files
+cd esp32/nimble-bridge
+mpremote connect /dev/cu.usbserial-XXX cp boot.py :boot.py
+mpremote connect /dev/cu.usbserial-XXX cp main.py :main.py
+mpremote connect /dev/cu.usbserial-XXX cp display.py :display.py
+mpremote connect /dev/cu.usbserial-XXX reset
+```
+
 ## Versions
 
+- **v2.0.8** — NimbleBridge ESP32 WiFi adapter: local sine-wave oscillation on ESP32 (eliminates WiFi jitter), 12-byte TCP control packet protocol, auto-force scaling (force = 100 + 0.08 × speed_hz × depth), standalone web UI served from ESP32 (no Pi needed), network scan to discover bridge, WPA2 requirement fix for MicroPython v1.28.0, WiFi power-saving disabled for consistent latency; Pi UI: Add Device WiFi Bridge flow with scan/manual IP entry
 - **v2.0.7** — NimbleStroker full control: stroke oscillation (speed/depth/nurture/nature), air in/out, Stream Deck+ page with knobs controlling all four parameters, arc dial LCD strip, momentary air buttons, Run/Stop toggle with flash-on-pause, E-Stop wired to system stop; macro palette reorganised into device sections (Nimble, Coyote, E-Stim); new macro blocks: Nimble Start/Stop/Ramp, E-Stim Ramp (with A/B/Both channel selector), E-Stim SET now includes mode/waveform selection
 - **v2.0.6** — Nimble stroker initial integration: USB serial connection, oscillation engine with delta clamping, force control, web UI card with speed/depth/nurture/nature sliders, air in/out hold buttons
 - **v2.0.5** — Community login system: username + password registration, Log In tab for returning users on any browser/device, legacy accounts can log in by username and set a password on first login, change password in profile; Fleet dashboard (admin): Pis self-register with community server on first boot, heartbeat every 60s with version/uptime/BLE devices/tunnel status, Fleet tab shows all Pis as online/offline cards with clickable tunnel links

@@ -925,11 +925,13 @@ class PawPrintsDevice {
 // Byte1-2: position (sign-magnitude 10-bit), Byte3-4: force (10-bit)
 // Bytes5-6: checksum (sum of bytes 0-4, little-endian)
 class NimbleDevice {
-  constructor(id, name, ttyPath) {
+  constructor(id, name, ttyPath, tcpHost, tcpPort) {
     this.id=id; this.name=name; this.type='nimble'
-    this.ttyPath=ttyPath||'/dev/ttyUSB0'
+    this.ttyPath=ttyPath||null
+    this.tcpHost=tcpHost||null
+    this.tcpPort=tcpPort||8765
     this.status='disconnected'
-    this._fd=null; this._sendTimer=null; this._oscTimer=null; this._rxBuf=Buffer.alloc(0)
+    this._fd=null; this._socket=null; this._sendTimer=null; this._oscTimer=null; this._rxBuf=Buffer.alloc(0)
     // Command state
     this.position=0       // -1000 to +1000
     this.force=0          // 0 to 1023
@@ -967,6 +969,21 @@ class NimbleDevice {
     return buf
   }
 
+  // 12-byte control packet for the WiFi bridge — ESP32 runs oscillation locally
+  _buildControlPacket() {
+    const buf=Buffer.alloc(12)
+    buf[0]=0xFE
+    buf[1]=(this.activated?1:0)|(this.oscillating?2:0)|(this.airOut?4:0)|(this.airIn?8:0)
+    const frc=Math.max(0,Math.min(1023,Math.round(this.force)))
+    buf.writeUInt16LE(frc, 2)
+    buf.writeUInt16LE(Math.round(Math.max(0.1,Math.min(5,this.oscSpeed))*1000), 4)
+    buf.writeUInt16LE(Math.max(0,Math.min(1000,Math.round(this.oscDepth))), 6)
+    buf.writeInt16LE(Math.max(-500,Math.min(500,Math.round(this.oscOffset))), 8)
+    buf[10]=Math.max(0,Math.min(200,Math.round(this.nsTexture)))
+    buf[11]=Math.max(0,Math.min(50,Math.round(this.nsNature)))
+    return buf
+  }
+
   _parsePacket(buf) {
     if(buf.length<7) return false
     const ck=buf[0]+buf[1]+buf[2]+buf[3]+buf[4]
@@ -998,9 +1015,10 @@ class NimbleDevice {
   }
 
   async connect() {
-    if(this._fd!==null) return
+    if(this._fd!==null||this._socket!==null) return
     this.status='connecting'
     broadcast({type:'device:status',id:this.id,status:'connecting'})
+    if(this.tcpHost) return this._connectTCP()
     try {
       const fd=await new Promise((res,rej)=>fsOpen(this.ttyPath,'r+',(e,fd)=>e?rej(e):res(fd)))
       this._fd=fd
@@ -1050,10 +1068,50 @@ class NimbleDevice {
     }
   }
 
+  _connectTCP() {
+    return new Promise((resolve, reject) => {
+      const sock=net.createConnection(this.tcpPort, this.tcpHost)
+      sock.setTimeout(5000)
+      sock.once('connect', ()=>{
+        sock.setTimeout(0)
+        sock.setNoDelay(true)
+        this._socket=sock
+        this.status='connected'; this.activated=false; this.force=500
+        broadcast({type:'device:status',id:this.id,status:'connected'})
+        console.log(`[${this.id}] Nimble connected via TCP ${this.tcpHost}:${this.tcpPort}`)
+
+        this._sendTimer=setInterval(()=>{
+          if(!this._socket) return
+          const buf=this._buildControlPacket()
+          this._socket.write(buf, err=>{ if(err&&this._socket){ console.error(`[${this.id}] TCP write err:`,err.message); this._cleanup('error') } })
+        },20)
+
+        this._startOscillation()
+
+        sock.on('data', data=>{
+          this._rxBuf=Buffer.concat([this._rxBuf,data])
+          while(this._rxBuf.length>=7){
+            if(this._parsePacket(this._rxBuf.slice(0,7))){
+              this._rxBuf=this._rxBuf.slice(7)
+              const now=Date.now()
+              if(!this._lastFbBcast||now-this._lastFbBcast>100){ this._lastFbBcast=now; broadcast({type:'nimble:feedback',id:this.id,feedback:this.feedback}) }
+            } else { this._rxBuf=this._rxBuf.slice(1) }
+          }
+        })
+        sock.on('close', ()=>{ if(this._socket) this._cleanup('disconnected') })
+        sock.on('error', err=>{ console.error(`[${this.id}] TCP err:`,err.message); this._cleanup('error') })
+        resolve()
+      })
+      sock.once('timeout', ()=>{ sock.destroy(); reject(new Error('Connection timeout')) })
+      sock.once('error', err=>{ reject(err) })
+    }).catch(e=>{ this._cleanup('error'); console.error(`[${this.id}] TCP connect failed:`,e.message); throw e })
+  }
+
   _cleanup(status='disconnected') {
     if(this._sendTimer){ clearInterval(this._sendTimer); this._sendTimer=null }
     if(this._oscTimer){ clearInterval(this._oscTimer); this._oscTimer=null }
     this.activated=false; this.oscillating=false
+    if(this._socket){ const s=this._socket; this._socket=null; s.destroy() }
     if(this._fd!==null){ const fd=this._fd; this._fd=null; fsClose(fd,()=>{}) }
     if(this.status!==status){ this.status=status; broadcast({type:'device:status',id:this.id,status}) }
   }
@@ -1080,11 +1138,12 @@ class NimbleDevice {
       this.activated=!!running
       if(running){
         this._oscPhase=0; this._vibPhase=0
-        if(this.force<100) this.force=600  // ensure minimum force on Run
       } else {
         this.position=this.oscOffset
       }
     }
+    // Auto-scale force to speed × depth — matches ESP32 bridge formula
+    this.force=Math.max(100,Math.min(900,Math.round(100+0.08*this.oscSpeed*this.oscDepth)))
     broadcast({type:'device:state',id:this.id,...this.toJSON()})
   }
 
@@ -1106,6 +1165,7 @@ class NimbleDevice {
 
   toJSON() {
     return { id:this.id, type:'nimble', name:this.name, ttyPath:this.ttyPath,
+             tcpHost:this.tcpHost, tcpPort:this.tcpPort,
              status:this.status, position:this.position, force:this.force,
              activated:this.activated, oscillating:this.oscillating,
              oscSpeed:this.oscSpeed, oscDepth:this.oscDepth, oscOffset:this.oscOffset,
@@ -1679,7 +1739,7 @@ function createDevice(cfg) {
   if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
   if (cfg.type==='pawprints') return new PawPrintsDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
   if (cfg.type==='eom')    return new EomDevice(cfg.id,cfg.name,cfg.ip,cfg.port)
-  if (cfg.type==='nimble') return new NimbleDevice(cfg.id,cfg.name,cfg.ttyPath)
+  if (cfg.type==='nimble') return new NimbleDevice(cfg.id,cfg.name,cfg.ttyPath,cfg.tcpHost,cfg.tcpPort)
   if (cfg.type==='estim')  return new EstimDevice(cfg.id,cfg.name,cfg.ttyPath)
   if (cfg.type==='camera') return new CameraDevice(cfg.id,cfg.name,cfg.ip,cfg.username,cfg.password,cfg.streamPath,cfg.hasPTZ,cfg.ptzProfileToken,cfg.ptzServiceUrl)
   if (cfg.type==='hue')    return new HueBridge(cfg.id,cfg.name,cfg.ip,cfg.token,cfg.selectedLights,cfg.selectedGroups,cfg.selectedScenes)
@@ -2118,10 +2178,37 @@ app.get('/api/serial-ports', async (req,res) => {
 })
 app.get('/api/scan/results', (req,res) => res.json({scanning:isScanning,results:scanResults}))
 
+app.get('/api/scan-bridges', async (req,res) => {
+  const ifaces=networkInterfaces()
+  let localIp=null
+  for (const addrs of Object.values(ifaces)) {
+    for (const a of addrs) {
+      if (a.family==='IPv4'&&!a.internal){ localIp=a.address; break }
+    }
+    if (localIp) break
+  }
+  if (!localIp) return res.json([])
+  const subnet=localIp.split('.').slice(0,3).join('.')
+  const found=new Map()
+  const tryIp=(ip,timeout)=>new Promise(resolve=>{
+    const sock=new net.Socket()
+    sock.setTimeout(timeout)
+    sock.connect(8765, ip, ()=>{ found.set(ip,{ip,port:8765}); sock.destroy(); resolve() })
+    sock.on('error',()=>{ sock.destroy(); resolve() })
+    sock.on('timeout',()=>{ sock.destroy(); resolve() })
+  })
+  // Scan in batches of 32 to avoid flooding the ESP32's TCP stack
+  const ips=Array.from({length:254},(_,i)=>`${subnet}.${i+1}`)
+  const BATCH=32, TIMEOUT=600
+  for (let i=0;i<ips.length;i+=BATCH)
+    await Promise.all(ips.slice(i,i+BATCH).map(ip=>tryIp(ip,TIMEOUT)))
+  res.json([...found.values()])
+})
+
 app.post('/api/devices', async (req,res) => {
-  const {type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath,token,hasPTZ,ptzProfileToken,ptzServiceUrl} = req.body
+  const {type,name,mac,bleName,ip,port,ttyPath,tcpHost,tcpPort,username,password,streamPath,token,hasPTZ,ptzProfileToken,ptzServiceUrl} = req.body
   if (!type||!name) return res.status(400).json({error:'type and name required'})
-  const id=`${type}-${Date.now()}`, cfg={id,type,name,mac,bleName,ip,port,ttyPath,username,password,streamPath,token,hasPTZ,ptzProfileToken,ptzServiceUrl}
+  const id=`${type}-${Date.now()}`, cfg={id,type,name,mac,bleName,ip,port,ttyPath,tcpHost,tcpPort,username,password,streamPath,token,hasPTZ,ptzProfileToken,ptzServiceUrl}
   try {
     const dev=createDevice(cfg); devices[id]=dev; config.devices.push(cfg); saveConfig(config)
     if (type==='camera') rebuildGo2rtcConfig()

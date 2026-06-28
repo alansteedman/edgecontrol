@@ -366,6 +366,12 @@ async def run():
         print(f"[main] AP mode — connect to '{boot.AP_SSID}' and open http://{boot.IP}")
         asyncio.create_task(asyncio.start_server(handle_setup, '0.0.0.0', 80))
     else:
+        # Re-apply power saving disable — boot.py retries reset it
+        try:
+            import network as _net
+            _sta = _net.WLAN(_net.STA_IF)
+            _sta.config(pm=_net.WLAN.PM_NONE)
+        except: pass
         screen_waiting(boot.IP)
         print(f"[main] Bridge ready at {boot.IP}:{TCP_PORT}")
         asyncio.create_task(uart_sender())

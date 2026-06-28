@@ -2,7 +2,7 @@ import machine
 import utime
 import framebuf
 
-# RGB565 colors (big-endian for ST7789)
+# RGB565 colors (big-endian, RGB order)
 BLACK  = 0x0000
 WHITE  = 0xFFFF
 CYAN   = 0x07FF
@@ -13,19 +13,17 @@ GRAY   = 0x8410
 DKGRAY = 0x2945
 
 class ST7789:
-    # ideaspark 1.9" 170x320 — the ST7789 chip has 240x320 RAM;
-    # this panel is offset 35 pixels in X
-    W, H = 170, 320
-    X_OFF, Y_OFF = 35, 0
+    # DollaTek 2.4" ILI9341 — 240x320, full frame (no pixel offset)
+    W, H = 240, 320
 
     def __init__(self):
-        self.spi = machine.SPI(1, baudrate=20_000_000, polarity=0, phase=0,
+        self.spi = machine.SPI(1, baudrate=40_000_000, polarity=0, phase=0,
                                sck=machine.Pin(18), mosi=machine.Pin(23))
         self.cs  = machine.Pin(15, machine.Pin.OUT)
         self.dc  = machine.Pin(2,  machine.Pin.OUT)
         self.rst = machine.Pin(4,  machine.Pin.OUT)
         self.cs(1)
-        self._init_display()
+        self._init()
 
     def _cmd(self, cmd, *data):
         self.cs(0); self.dc(0)
@@ -35,29 +33,37 @@ class ST7789:
             self.spi.write(bytes(data))
         self.cs(1)
 
-    def _init_display(self):
+    def _init(self):
         self.rst(0); utime.sleep_ms(50)
         self.rst(1); utime.sleep_ms(150)
         self._cmd(0x01)                              # software reset
         utime.sleep_ms(150)
         self._cmd(0x11)                              # sleep out
-        utime.sleep_ms(500)
-        self._cmd(0x3A, 0x55)                        # 16-bit RGB565 color
-        self._cmd(0x36, 0x00)                        # portrait, RGB order
-        self._cmd(0xB2, 0x0C,0x0C,0x00,0x33,0x33)   # porch control
-        self._cmd(0xB7, 0x35)                        # gate control
-        self._cmd(0xBB, 0x19)                        # VCOMS
-        self._cmd(0xC0, 0x2C)                        # LCM control
-        self._cmd(0xC2, 0x01); self._cmd(0xC3, 0x12) # VDV/VRH
-        self._cmd(0xC4, 0x20)                        # VDV set
-        self._cmd(0xC6, 0x0F)                        # frame rate 60Hz
-        self._cmd(0xD0, 0xA4, 0xA1)                  # power control
+        utime.sleep_ms(120)
+        self._cmd(0xCF, 0x00, 0xC1, 0x30)           # power control B
+        self._cmd(0xED, 0x64, 0x03, 0x12, 0x81)     # power on sequence
+        self._cmd(0xE8, 0x85, 0x00, 0x78)           # driver timing A
+        self._cmd(0xCB, 0x39, 0x2C, 0x00, 0x34, 0x02)  # power control A
+        self._cmd(0xF7, 0x20)                        # pump ratio
+        self._cmd(0xEA, 0x00, 0x00)                 # driver timing B
+        self._cmd(0xC0, 0x23)                        # power control 1: VRH=4.60V
+        self._cmd(0xC1, 0x10)                        # power control 2
+        self._cmd(0xC5, 0x3E, 0x28)                 # VCOM 1
+        self._cmd(0xC7, 0x86)                        # VCOM 2
+        self._cmd(0x36, 0x40)                        # MADCTL: MX=1, RGB order, portrait
+        self._cmd(0x3A, 0x55)                        # 16-bit RGB565
+        self._cmd(0xB1, 0x00, 0x18)                 # frame rate ~79Hz
+        self._cmd(0xB6, 0x08, 0x82, 0x27)           # display function control
+        self._cmd(0xF2, 0x00)                        # 3-gamma disable
+        self._cmd(0x26, 0x01)                        # gamma curve 1
+        self._cmd(0xE0, 0x0F,0x31,0x2B,0x0C,0x0E,0x08,  # positive gamma
+                         0x4E,0xF1,0x37,0x07,0x10,0x03,0x0E,0x09,0x00)
+        self._cmd(0xE1, 0x00,0x0E,0x14,0x03,0x11,0x07,  # negative gamma
+                         0x31,0xC1,0x48,0x08,0x0F,0x0C,0x31,0x36,0x0F)
         self._cmd(0x29)                              # display on
         utime.sleep_ms(100)
 
     def _window(self, x0, y0, x1, y1):
-        x0 += self.X_OFF; x1 += self.X_OFF
-        y0 += self.Y_OFF; y1 += self.Y_OFF
         self._cmd(0x2A, x0>>8, x0&0xFF, x1>>8, x1&0xFF)
         self._cmd(0x2B, y0>>8, y0&0xFF, y1>>8, y1&0xFF)
         self.cs(0); self.dc(0); self.spi.write(b'\x2C'); self.dc(1)
@@ -78,8 +84,7 @@ class ST7789:
         self.cs(1)
 
     def text(self, s, x, y, fg=WHITE, bg=BLACK, scale=2):
-        """Draw a string using the built-in 8×8 font, scaled up by `scale`."""
-        tmp = bytearray(128)  # 8×8 pixels × 2 bytes
+        tmp = bytearray(128)
         fb  = framebuf.FrameBuffer(tmp, 8, 8, framebuf.RGB565)
         cw  = 8 * scale
         ch  = 8 * scale
@@ -94,7 +99,6 @@ class ST7789:
             buf = bytearray(cw * ch * 2)
             out = 0
             for py in range(8):
-                # build one source row: cw pixels of fg or bg
                 row = bytearray()
                 for px in range(8):
                     i = (py * 8 + px) * 2

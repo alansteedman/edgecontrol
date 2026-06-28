@@ -291,6 +291,9 @@ body{font-family:system-ui,sans-serif;background:#111;color:#e0e0e0;padding:12px
 <button id='air-out' onpointerdown='air("airOut",true)' onpointerup='air("airOut",false)' onpointerleave='air("airOut",false)'>&#9660; Air Out</button>
 </div>
 <div class='fb'><span>POS: <b id='fbp'>0</b></span><span>FORCE (auto): <b id='fbauto'>-</b></span><span>PRESENT: <b id='fbr'>-</b></span></div>
+<div style='margin-top:16px;padding-top:12px;border-top:1px solid #1e1e1e;text-align:right'>
+<button onclick='resetWifi()' style='padding:6px 12px;background:none;border:1px solid #3a1a1a;border-radius:6px;color:#555;font-size:11px;cursor:pointer'>Reset WiFi</button>
+</div>
 </div>
 <script>
 var st={activated:false,running:false,force:0,speed:0.5,depth:500,texture:0,nature:20};
@@ -303,6 +306,7 @@ function toggleRun(){send({running:!st.running});}
 function dv(k,v,vid,disp){document.getElementById(vid).textContent=disp;clearTimeout(tmr[k]);tmr[k]=setTimeout(()=>send({[k]:v}),80);if(st.running)document.getElementById('fbauto').textContent=autoForce(st.speed,st.depth);}
 function air(k,v){document.getElementById(k==='airIn'?'air-in':'air-out').className=v?'on':'';send({[k]:v});}
 function pollFb(){fetch('/api/feedback').then(r=>r.json()).then(f=>{document.getElementById('fbp').textContent=f.pos;document.getElementById('fbr').textContent=f.present?'✓':'-';}).catch(()=>{});setTimeout(pollFb,500);}
+function resetWifi(){if(confirm('Delete WiFi config and restart in setup mode?'))fetch('/api/reset-wifi',{method:'POST'});}
 fetch('/api/state').then(r=>r.json()).then(s=>{st=s;render();
   document.getElementById('spm').value=Math.round(s.speed*60);document.getElementById('vspm').textContent=Math.round(s.speed*60);
   document.getElementById('dep').value=s.depth;document.getElementById('vdep').textContent=s.depth;
@@ -349,6 +353,17 @@ async def handle_web(reader, writer):
                 except: pass
             writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n')
             writer.write(_ctl_json().encode())
+        elif method == 'POST' and path == '/api/reset-wifi':
+            writer.write(b'HTTP/1.1 200 OK\r\n\r\n')
+            await writer.drain()
+            await writer.aclose()
+            try:
+                import os
+                os.remove(boot.WIFI_FILE)
+            except:
+                pass
+            machine.reset()
+            return
         else:
             writer.write(b'HTTP/1.1 404 Not Found\r\n\r\n')
         await writer.drain()

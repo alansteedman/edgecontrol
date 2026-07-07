@@ -19,41 +19,45 @@ TCP_PORT = 8765
 # ── Screens ───────────────────────────────────────────────────────────────
 def screen_ap():
     disp.fill(BLACK)
-    disp.text("NimbleBridge", 5, 15, CYAN, BLACK, 2)
-    disp.text("Setup Mode",   5, 35, WHITE, BLACK, 2)
-    disp.hline(60)
-    disp.text("1. Connect to WiFi:", 5, 72, GRAY, BLACK, 1)
-    disp.text("NimbleBridge-Setup", 5, 84, WHITE, BLACK, 1)
-    disp.text("   nimble123",       5, 96, GRAY, BLACK, 1)
-    disp.hline(112)
-    disp.text("2. Open browser:", 5, 120, GRAY, BLACK, 1)
-    disp.text("192.168.4.1",     5, 132, CYAN, BLACK, 1)
-    disp.hline(150)
-    disp.text("Enter your home", 5, 158, GRAY, BLACK, 1)
-    disp.text("WiFi details", 5, 170, GRAY, BLACK, 1)
-    disp.text("and hit Save.", 5, 182, GRAY, BLACK, 1)
+    disp.text("NimbleBridge", 5, 5, CYAN, BLACK, 2)
+    disp.text("Setup Mode", 5, 25, WHITE, BLACK, 1)
+    disp.hline(45)
+    disp.text("1. WiFi:", 5, 55, GRAY, BLACK, 1)
+    disp.text("NimbleBridge-Setup", 5, 70, WHITE, BLACK, 1)
+    disp.text("pass: nimble123", 5, 85, GRAY, BLACK, 1)
+    disp.hline(105)
+    disp.text("2. Browser: 192.168.4.1", 5, 120, CYAN, BLACK, 1)
+    disp.hline(140)
+    disp.text("Enter WiFi details and Save", 5, 155, GRAY, BLACK, 1)
 
 def screen_waiting(ip):
     disp.fill(BLACK)
-    disp.text("NimbleBridge", 5, 15, CYAN, BLACK, 2)
-    disp.hline(40)
-    disp.text("IP address:", 5, 52, GRAY, BLACK, 1)
-    disp.text(ip,            5, 64, WHITE, BLACK, 1)
-    disp.hline(80)
-    disp.text("Waiting for Pi", 5, 92, GRAY, BLACK, 1)
-    disp.text("to connect...",  5, 104, GRAY, BLACK, 1)
+    disp.text("NimbleBridge", 5, 5, CYAN, BLACK, 2)
+    disp.hline(30)
+    disp.text(f"IP: {ip}", 5, 45, WHITE, BLACK, 1)
+    disp.hline(65)
+    disp.text("Waiting for Pi connection...", 5, 80, GRAY, BLACK, 1)
+
+def screen_web(ip):
+    disp.fill(BLACK)
+    disp.text("NimbleBridge", 5, 5, CYAN, BLACK, 2)
+    disp.hline(30)
+    disp.text(f"IP: {ip}", 5, 45, WHITE, BLACK, 1)
+    disp.hline(65)
+    disp.text("Web UI Active", 5, 80, GREEN, BLACK, 1)
+    running = _ctl.get('running', False)
+    status = "Running" if running else "Stopped"
+    disp.text(status, 5, 100, WHITE if running else GRAY, BLACK, 1)
 
 def screen_connected(ip, peer):
     disp.fill(BLACK)
-    disp.text("NimbleBridge", 5, 15, CYAN, BLACK, 2)
-    disp.hline(40)
-    disp.text("IP address:", 5, 52, GRAY, BLACK, 1)
-    disp.text(ip,            5, 64, WHITE, BLACK, 1)
-    disp.hline(80)
-    disp.text("Pi connected:", 5, 92, GREEN, BLACK, 1)
-    disp.text(peer,           5, 104, WHITE, BLACK, 1)
-    disp.hline(120)
-    disp.text("Bridge active", 5, 132, GREEN, BLACK, 2)
+    disp.text("NimbleBridge", 5, 5, CYAN, BLACK, 2)
+    disp.hline(30)
+    disp.text(f"IP: {ip}", 5, 45, WHITE, BLACK, 1)
+    disp.hline(65)
+    disp.text(f"Pi: {peer}", 5, 80, GREEN, BLACK, 1)
+    disp.hline(105)
+    disp.text("Bridge Active", 5, 120, GREEN, BLACK, 2)
 
 # ── WiFi setup HTTP server (AP mode) ─────────────────────────────────────
 FORM_HTML = b"""HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<!DOCTYPE html>
@@ -110,11 +114,10 @@ async def handle_setup(reader, writer):
                 print(f"[setup] Saving WiFi: ssid={repr(ssid)} pw={repr(pw)}")
                 # Show saving screen
                 disp.fill(BLACK)
-                disp.text("NimbleBridge", 5, 15, CYAN, BLACK, 2)
-                disp.hline(40)
-                disp.text("Saving...", 5, 60, WHITE, BLACK, 2)
-                disp.text("Connecting to:", 5, 90, GRAY, BLACK, 1)
-                disp.text(ssid, 5, 102, WHITE, BLACK, 1)
+                disp.text("NimbleBridge", 5, 5, CYAN, BLACK, 2)
+                disp.hline(30)
+                disp.text("Saving & Connecting...", 5, 50, WHITE, BLACK, 1)
+                disp.text(ssid, 5, 70, CYAN, BLACK, 1)
                 boot.save_wifi(ssid, pw)
                 await asyncio.sleep(2)
                 machine.reset()
@@ -321,20 +324,27 @@ def _ctl_json():
         'force':_ctl['force'],'speed':_ctl['speed'],'depth':_ctl['depth'],
         'offset':_ctl['offset'],'texture':_ctl['texture'],'nature':_ctl['nature']})
 
+_HDR_JSON = b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n'
+_HDR_HTML = b'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n'
+_HDR_404  = b'HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'
+
 async def handle_web(reader, writer):
     try:
-        req = await asyncio.wait_for(reader.read(512), timeout=3)
+        req = await asyncio.wait_for(reader.read(1024), timeout=3)
         s = req.decode('utf-8', 'ignore')
         line = s.split('\r\n', 1)[0].split(' ')
         method, path = line[0], (line[1] if len(line)>1 else '/')
         if method == 'GET' and path in ('/', '/index.html'):
-            writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n')
+            writer.write(_HDR_HTML)
             writer.write(_WEB_HTML)
+            if _client_writer is None:
+                global _screen_dirty
+                _screen_dirty = True
         elif path == '/api/state':
-            writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n')
+            writer.write(_HDR_JSON)
             writer.write(_ctl_json().encode())
         elif path == '/api/feedback':
-            writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n')
+            writer.write(_HDR_JSON)
             writer.write(_json.dumps(_feedback).encode())
         elif method == 'POST' and path == '/api/ctrl':
             body = s.split('\r\n\r\n', 1)
@@ -350,22 +360,24 @@ async def handle_web(reader, writer):
                         _ctl['running'] = r
                         _ctl['activated'] = r
                         if r and _ctl['force'] < 100: _ctl['force'] = 600
+                        if _client_writer is None:
+                            global _screen_dirty
+                            _screen_dirty = True
                 except: pass
-            writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n')
+            writer.write(_HDR_JSON)
             writer.write(_ctl_json().encode())
         elif method == 'POST' and path == '/api/reset-wifi':
-            writer.write(b'HTTP/1.1 200 OK\r\n\r\n')
+            writer.write(b'HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n')
             await writer.drain()
             await writer.aclose()
             try:
                 import os
                 os.remove(boot.WIFI_FILE)
-            except:
-                pass
+            except: pass
             machine.reset()
             return
         else:
-            writer.write(b'HTTP/1.1 404 Not Found\r\n\r\n')
+            writer.write(_HDR_404)
         await writer.drain()
     except Exception as e:
         print(f"[web] {e}")
@@ -373,15 +385,39 @@ async def handle_web(reader, writer):
         try: await writer.aclose()
         except: pass
 
+_screen_dirty = False
+
+async def _server(handler, port):
+    while True:
+        srv = None
+        try:
+            srv = await asyncio.start_server(handler, '0.0.0.0', port)
+            print(f"[srv] listening on :{port}")
+            while True:
+                await asyncio.sleep(10)
+                gc.collect()
+        except OSError as e:
+            # EADDRINUSE — wait longer before retry so the socket times out
+            print(f"[srv:{port}] {e}")
+            await asyncio.sleep(10)
+        except Exception as e:
+            print(f"[srv:{port}] {e}")
+            await asyncio.sleep(2)
+        finally:
+            if srv:
+                try: srv.close()
+                except: pass
+            gc.collect()
+
 # ── Main ──────────────────────────────────────────────────────────────────
 async def run():
+    global _screen_dirty
     if boot.MODE == 'ap':
         screen_ap()
         gc.collect()
         print(f"[main] AP mode — connect to '{boot.AP_SSID}' and open http://{boot.IP}")
-        asyncio.create_task(asyncio.start_server(handle_setup, '0.0.0.0', 80))
+        asyncio.create_task(_server(handle_setup, 80))
     else:
-        # Re-apply power saving disable — boot.py retries reset it
         try:
             import network as _net
             _sta = _net.WLAN(_net.STA_IF)
@@ -391,9 +427,12 @@ async def run():
         print(f"[main] Bridge ready at {boot.IP}:{TCP_PORT}")
         asyncio.create_task(uart_sender())
         asyncio.create_task(uart_to_tcp())
-        asyncio.create_task(asyncio.start_server(handle_bridge, '0.0.0.0', TCP_PORT))
-        asyncio.create_task(asyncio.start_server(handle_web, '0.0.0.0', 80))
+        asyncio.create_task(_server(handle_bridge, TCP_PORT))
+        asyncio.create_task(_server(handle_web, 80))
     while True:
+        if _screen_dirty and _client_writer is None:
+            _screen_dirty = False
+            screen_web(boot.IP)
         await asyncio.sleep(1)
 
 asyncio.run(run())

@@ -3,9 +3,8 @@ import network
 import time
 import json
 
-# Deselect display immediately — CS/RST float on cold boot can draw
-# current through SPI and destabilise the 3.3V rail during WiFi init.
-machine.Pin(15, machine.Pin.OUT).value(1)  # CS HIGH = deselected
+# Hold RST high and DC low during WiFi init to prevent SPI bus noise
+# from being interpreted as display commands on cold boot.
 machine.Pin(4,  machine.Pin.OUT).value(1)  # RST HIGH = not in reset
 machine.Pin(2,  machine.Pin.OUT).value(0)  # DC LOW = idle
 
@@ -103,10 +102,10 @@ def _show_connecting(ssid):
         from display import ST7789, BLACK, WHITE, CYAN, GRAY
         d = ST7789()
         d.fill(BLACK)
-        d.text("NimbleBridge", 5, 10, CYAN, BLACK, 2)
-        d.hline(34)
-        d.text("Connecting to WiFi...", 5, 46, GRAY, BLACK, 1)
-        d.text(ssid, 5, 64, WHITE, BLACK, 1)
+        d.text("NimbleBridge", 5, 5, CYAN, BLACK, 2)
+        d.hline(30)
+        d.text("Connecting to WiFi...", 5, 50, GRAY, BLACK, 1)
+        d.text(ssid, 5, 70, WHITE, BLACK, 1)
     except Exception as e:
         print(f"[boot] display: {e}")
 

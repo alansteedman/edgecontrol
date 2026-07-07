@@ -12,26 +12,28 @@ RED    = 0xF800
 GRAY   = 0x8410
 DKGRAY = 0x2945
 
+_spi = None  # module-level singleton — survives across multiple ST7789() calls in same boot
+
 class ST7789:
-    # DollaTek 2.4" ILI9341 — 240x320, full frame (no pixel offset)
-    W, H = 240, 320
+    # DollaTek 2.4" ILI9341 — 320x240 landscape, full frame (no pixel offset)
+    W, H = 320, 240
 
     def __init__(self):
-        self.spi = machine.SPI(1, baudrate=40_000_000, polarity=0, phase=0,
+        global _spi
+        if _spi is None:
+            _spi = machine.SPI(1, baudrate=20_000_000, polarity=0, phase=0,
                                sck=machine.Pin(18), mosi=machine.Pin(23))
-        self.cs  = machine.Pin(15, machine.Pin.OUT)
+        self.spi = _spi
         self.dc  = machine.Pin(2,  machine.Pin.OUT)
         self.rst = machine.Pin(4,  machine.Pin.OUT)
-        self.cs(1)
         self._init()
 
     def _cmd(self, cmd, *data):
-        self.cs(0); self.dc(0)
+        self.dc(0)
         self.spi.write(bytes([cmd]))
         if data:
             self.dc(1)
             self.spi.write(bytes(data))
-        self.cs(1)
 
     def _init(self):
         self.rst(0); utime.sleep_ms(50)
@@ -50,7 +52,7 @@ class ST7789:
         self._cmd(0xC1, 0x10)                        # power control 2
         self._cmd(0xC5, 0x3E, 0x28)                 # VCOM 1
         self._cmd(0xC7, 0x86)                        # VCOM 2
-        self._cmd(0x36, 0x40)                        # MADCTL: MX=1, RGB order, portrait
+        self._cmd(0x36, 0xE8)                        # MADCTL: MY=1, MX=1, MV=1 (180° flipped), BGR order
         self._cmd(0x3A, 0x55)                        # 16-bit RGB565
         self._cmd(0xB1, 0x00, 0x18)                 # frame rate ~79Hz
         self._cmd(0xB6, 0x08, 0x82, 0x27)           # display function control
@@ -66,7 +68,7 @@ class ST7789:
     def _window(self, x0, y0, x1, y1):
         self._cmd(0x2A, x0>>8, x0&0xFF, x1>>8, x1&0xFF)
         self._cmd(0x2B, y0>>8, y0&0xFF, y1>>8, y1&0xFF)
-        self.cs(0); self.dc(0); self.spi.write(b'\x2C'); self.dc(1)
+        self.dc(0); self.spi.write(b'\x2C'); self.dc(1)
 
     def fill(self, color, x=0, y=0, w=None, h=None):
         if w is None: w = self.W - x
@@ -75,13 +77,11 @@ class ST7789:
         hi, lo = color >> 8, color & 0xFF
         chunk = bytes([hi, lo] * 128)
         total = w * h
-        self.cs(0)
         for _ in range(total // 128):
             self.spi.write(chunk)
         rem = total % 128
         if rem:
             self.spi.write(bytes([hi, lo] * rem))
-        self.cs(1)
 
     def text(self, s, x, y, fg=WHITE, bg=BLACK, scale=2):
         tmp = bytearray(128)
@@ -109,9 +109,7 @@ class ST7789:
                     buf[out:out+len(row)] = row
                     out += len(row)
             self._window(cx, y, cx+cw-1, y+ch-1)
-            self.cs(0)
             self.spi.write(buf)
-            self.cs(1)
 
     def hline(self, y, color=DKGRAY):
         self.fill(color, x=0, y=y, w=self.W, h=1)

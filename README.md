@@ -73,6 +73,56 @@ After reboot, open `http://<device-id>.local:3000` in your browser. The device I
 
 If you need to connect the Pi to WiFi after a fresh install, the device will broadcast a `EdgeController-Setup` hotspot. Connect to it, open any webpage, and you'll be redirected to the WiFi setup page. Enter your network credentials and the device will connect and restart.
 
+## Touchscreen UI
+
+The `touchscreen/` directory contains a Python UI for an ILI9341 320×240 TFT with XPT2046 touch controller, giving the Pi a standalone interface without needing a browser.
+
+### Screens
+
+- **Status** — shows WiFi SSID, IP address, Cloudflare tunnel URL and external URL; tap "WiFi Setup" to change network
+- **Scan** — scans for nearby networks via NetworkManager
+- **SSID list** — scrollable list of networks with signal strength and security; tap to select, "← Back" to cancel
+- **Password** — on-screen keyboard (lower/upper/symbols); "← Back" returns to SSID list
+- **Confirm** — shows network name before connecting; Cancel or Connect
+- **Result** — success (IP shown) or failure message
+
+### Hardware
+
+| Component | Detail |
+|-----------|--------|
+| Display | ILI9341 320×240 TFT, hardware SPI0 (CE0), DC=GPIO24, RST=GPIO25 |
+| Touch | XPT2046, software SPI: CS=GPIO5, CLK=GPIO6, DIN=GPIO13, DO=GPIO19, IRQ=GPIO26 |
+| Orientation | Landscape, 180° rotation (MADCTL=0xE8) |
+
+### Dependencies
+
+```bash
+pip3 install spidev lgpio numpy Pillow
+```
+
+### Running
+
+The touchscreen starts automatically at boot via systemd:
+
+```bash
+systemctl status touchscreen.service
+journalctl -u touchscreen.service -f
+```
+
+To run manually:
+
+```bash
+python3 /home/alans/touchscreen/touchscreen.py
+```
+
+### Touch calibration
+
+Run this if taps don't register in the right place (outputs new `TOUCH_X_MIN/MAX` and `TOUCH_Y_MIN/MAX` constants):
+
+```bash
+python3 /home/alans/touchscreen/touchscreen.py calibrate
+```
+
 ## NimbleBridge (ESP32 WiFi Adapter)
 
 The `esp32/nimble-bridge/` directory contains MicroPython firmware for an ESP32-WROOM-32 that bridges the NimbleStroker over WiFi, removing the need for a USB cable to the Pi.
@@ -115,6 +165,7 @@ mpremote connect /dev/cu.usbserial-XXX reset
 
 ## Versions
 
+- **v2.0.9** — ILI9341 touchscreen UI for Pi: network status screen (WiFi SSID, IP address, Cloudflare tunnel status), WiFi setup flow (scan → SSID list → password entry → confirm → connect), touch calibration tool, 180° display rotation support, systemd service for boot-time autostart; XPT2046 touch controller with 12-sample noise rejection and debounce
 - **v2.0.8** — NimbleBridge ESP32 WiFi adapter: local sine-wave oscillation on ESP32 (eliminates WiFi jitter), 12-byte TCP control packet protocol, auto-force scaling (force = 100 + 0.08 × speed_hz × depth), standalone web UI served from ESP32 (no Pi needed), network scan to discover bridge, WPA2 requirement fix for MicroPython v1.28.0, WiFi power-saving disabled for consistent latency; Pi UI: Add Device WiFi Bridge flow with scan/manual IP entry
 - **v2.0.7** — NimbleStroker full control: stroke oscillation (speed/depth/nurture/nature), air in/out, Stream Deck+ page with knobs controlling all four parameters, arc dial LCD strip, momentary air buttons, Run/Stop toggle with flash-on-pause, E-Stop wired to system stop; macro palette reorganised into device sections (Nimble, Coyote, E-Stim); new macro blocks: Nimble Start/Stop/Ramp, E-Stim Ramp (with A/B/Both channel selector), E-Stim SET now includes mode/waveform selection
 - **v2.0.6** — Nimble stroker initial integration: USB serial connection, oscillation engine with delta clamping, force control, web UI card with speed/depth/nurture/nature sliders, air in/out hold buttons

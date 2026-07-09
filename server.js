@@ -194,12 +194,14 @@ if (!existsSync(AUDIO_DIR)) mkdirSync(AUDIO_DIR, { recursive: true })
 const LIVE_AUDIO_PATH = join(__dirname, 'live-audio.json')
 function loadLiveAudio() { try { return JSON.parse(readFileSync(LIVE_AUDIO_PATH,'utf8')) } catch { return [] } }
 function saveLiveAudio() {
-  const toSave = [...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,gain,enabled})=>({id,card,device,name,lowCut,highCut,baseFreq,gain:gain??1,enabled}))
+  const toSave = [...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,gain,enabled,channel})=>({id,card,device,name,lowCut,highCut,baseFreq,gain:gain??1,enabled,channel:channel||'mix'}))
   writeFileSync(LIVE_AUDIO_PATH, JSON.stringify(toSave, null, 2))
 }
 
-// Map: id (e.g. "hw:1,0") → { id, card, device, name, lowCut, highCut, baseFreq, enabled, current, proc }
+// Map: id (e.g. "hw:0,0:L") → { id, card, device, channel, name, lowCut, highCut, baseFreq, enabled, current, proc }
 const liveAudioStore = new Map()
+// One stereo ffmpeg process per physical device shared across L/R/mix logical inputs
+const captureProcs = new Map()  // 'hw:0,0' → { proc, refs: Set<logicalId> }
 
 function listAlsaDevices() {
   try {
@@ -250,72 +252,135 @@ function _fftInPlace(re, im) {
 function startLiveCapture(id) {
   const li = liveAudioStore.get(id)
   if (!li || li.proc) return
+  const baseDevId = `hw:${li.card},${li.device}`
+
+  // Attach to existing capture process for this physical device if one is running
+  if (captureProcs.has(baseDevId)) {
+    const entry = captureProcs.get(baseDevId)
+    entry.refs.add(id)
+    li.proc = entry.proc; li.current = 0
+    console.log(`[live-audio:${id}] attached to existing capture for ${baseDevId}`)
+    return
+  }
+
+  // Start a single stereo capture process shared by all logical inputs on this device
   const SR = 44100
-  const CHUNK = Math.floor(SR * 0.1)  // 4410 samples = 100ms
-  const BYTES = CHUNK * 4
-  const FFT_N = 2048
-  const half = FFT_N >> 1
-  const nyquist = SR / 2
-  const LOG_MIN = Math.log10(20), LOG_MAX = Math.log10(20000)
-  const NUM_BANDS = 24
-  // Hann window coefficients
+  const CHUNK = Math.floor(SR * 0.1)  // 4410 samples per channel = 100ms
+  const BYTES = CHUNK * 2 * 4         // stereo interleaved f32le
+  const FFT_N = 2048, half = FFT_N >> 1, nyquist = SR / 2
+  const LOG_MIN = Math.log10(20), LOG_MAX = Math.log10(20000), NUM_BANDS = 24
   const hann = new Float32Array(FFT_N)
   for (let i = 0; i < FFT_N; i++) hann[i] = 0.5*(1-Math.cos(2*Math.PI*i/(FFT_N-1)))
-  // No ffmpeg filters — raw PCM for full spectrum, band filter applied in JS
-  const args = ['-f','alsa','-i',`plughw:${li.card},${li.device}`,'-ac','1','-ar',String(SR),'-f','f32le','pipe:1']
-  let leftover = Buffer.alloc(0)
+
+  const args = ['-f','alsa','-i',`plughw:${li.card},${li.device}`,'-ac','2','-ar',String(SR),'-f','f32le','pipe:1']
   const proc = spawn('ffmpeg', args, { stdio:['ignore','pipe','ignore'] })
+  const refs = new Set([id])
+  const monitors = new Set()  // active monitor encoder stdinStreams
+  const wsMonitors = new Set()  // WS clients receiving raw PCM for low-latency monitoring
+  captureProcs.set(baseDevId, { proc, refs, monitors, wsMonitors })
   li.proc = proc; li.current = 0
+
+  // Compute FFT + normalised bands + RMS for one stereo channel (byteOffset 0=L, 4=R)
+  const computeCh = (buf, pos, byteOffset) => {
+    const re = new Float32Array(FFT_N), im = new Float32Array(FFT_N)
+    for (let i = 0; i < FFT_N; i++) re[i] = buf.readFloatLE(pos + byteOffset + i*8) * hann[i]
+    _fftInPlace(re, im)
+    const mags = new Float32Array(half)
+    let maxMag = 1e-12
+    for (let j = 0; j < half; j++) {
+      mags[j] = Math.sqrt(re[j]*re[j]+im[j]*im[j])
+      if (mags[j] > maxMag) maxMag = mags[j]
+    }
+    const bands = new Array(NUM_BANDS).fill(0)
+    for (let j = 1; j < half; j++) {
+      const hz = j/half*nyquist
+      if (hz < 20 || hz > 20000) continue
+      const b = Math.floor((Math.log10(hz)-LOG_MIN)/(LOG_MAX-LOG_MIN)*NUM_BANDS)
+      if (b >= 0 && b < NUM_BANDS) { const v=mags[j]/maxMag; if(v>bands[b]) bands[b]=v }
+    }
+    let tdSum = 0
+    for (let i=0; i<CHUNK; i++) { const s=buf.readFloatLE(pos+byteOffset+i*8); tdSum+=s*s }
+    return { mags, bands, rms: Math.sqrt(tdSum/CHUNK) }
+  }
+
+  let leftover = Buffer.alloc(0)
   proc.stdout.on('data', chunk => {
     const buf = Buffer.concat([leftover, chunk])
     let pos = 0
     while (pos + BYTES <= buf.length) {
-      // FFT on first FFT_N samples of chunk
-      const re = new Float32Array(FFT_N), im = new Float32Array(FFT_N)
-      for (let i = 0; i < FFT_N; i++) re[i] = buf.readFloatLE(pos + i*4) * hann[i]
-      _fftInPlace(re, im)
-      // Magnitudes
-      const mags = new Float32Array(half)
-      let maxMag = 1e-12
-      for (let j = 0; j < half; j++) {
-        mags[j] = Math.sqrt(re[j]*re[j]+im[j]*im[j])
-        if (mags[j] > maxMag) maxMag = mags[j]
+      const chL = computeCh(buf, pos, 0)
+      const chR = computeCh(buf, pos, 4)
+      for (const refId of refs) {
+        const refLi = liveAudioStore.get(refId)
+        if (!refLi) continue
+        const ch = refLi.channel || 'mix'
+        // Select mags, bands, and rms for this logical channel
+        let mags, bands, rms
+        if (ch === 'L') { ({ mags, bands, rms } = chL) }
+        else if (ch === 'R') { ({ mags, bands, rms } = chR) }
+        else {
+          mags = new Float32Array(half)
+          bands = new Array(NUM_BANDS).fill(0)
+          for (let j = 0; j < half; j++) mags[j] = (chL.mags[j]+chR.mags[j])*0.5
+          for (let b = 0; b < NUM_BANDS; b++) bands[b] = (chL.bands[b]+chR.bands[b])*0.5
+          rms = (chL.rms+chR.rms)*0.5
+        }
+        // Band-filtered level using this input's individual lowCut/highCut/gain
+        const lo=refLi.lowCut||20, hi=refLi.highCut||8000
+        let totalSum=0, bandSum=0
+        for (let j = 1; j < half; j++) {
+          const m2=mags[j]*mags[j]; totalSum+=m2
+          const hz=j/half*nyquist; if(hz>=lo&&hz<=hi) bandSum+=m2
+        }
+        const bandFrac = totalSum>0 ? Math.sqrt(bandSum/totalSum) : 0
+        refLi.current = Math.min(100, Math.round(rms*500*bandFrac*(refLi.gain??1)))
+        broadcast({ type:'live:audio:spectrum', id:refId, bands })
+        broadcast({ type:'live:audio:level', id:refId, level:refLi.current })
       }
-      // Map to log-scale display bands (normalised 0-1)
-      const bands = new Array(NUM_BANDS).fill(0)
-      for (let j = 1; j < half; j++) {
-        const hz = j/half*nyquist
-        if (hz < 20 || hz > 20000) continue
-        const b = Math.floor((Math.log10(hz)-LOG_MIN)/(LOG_MAX-LOG_MIN)*NUM_BANDS)
-        if (b >= 0 && b < NUM_BANDS) { const v=mags[j]/maxMag; if(v>bands[b]) bands[b]=v }
-      }
-      broadcast({ type:'live:audio:spectrum', id, bands })
-      // Band-filtered level: energy ratio in [lowCut, highCut]
-      let totalSum=0, bandSum=0, bandCount=0
-      const lo=li.lowCut||20, hi=li.highCut||8000
-      for (let j = 1; j < half; j++) {
-        const m2=mags[j]*mags[j]; totalSum+=m2
-        const hz=j/half*nyquist; if(hz>=lo&&hz<=hi){bandSum+=m2;bandCount++}
-      }
-      const bandFrac = totalSum>0 ? Math.sqrt(bandSum/totalSum) : 0
-      let tdSum=0
-      for (let i=0;i<CHUNK;i++) tdSum+=Math.pow(buf.readFloatLE(pos+i*4),2)
-      li.current = Math.min(100, Math.round(Math.sqrt(tdSum/CHUNK)*500*bandFrac*(li.gain??1)))
-      broadcast({ type:'live:audio:level', id, level:li.current })
       pos += BYTES
     }
     leftover = buf.slice(pos)
+    // Forward raw stereo PCM to any active monitor encoders
+    for (const stdin of monitors) {
+      try { stdin.write(chunk) } catch { monitors.delete(stdin) }
+    }
+    // Forward raw stereo f32le PCM to WebSocket monitors (low-latency path)
+    for (const wsClient of wsMonitors) {
+      if (wsClient.readyState === 1) {
+        try { wsClient.send(chunk) } catch { wsMonitors.delete(wsClient) }
+      } else {
+        wsMonitors.delete(wsClient)
+      }
+    }
   })
-  proc.on('close', () => { li.proc=null; li.current=0; broadcast({ type:'live:audio:level', id, level:0 }) })
-  proc.on('error', e => console.error(`[live-audio:${id}]`, e.message))
-  console.log(`[live-audio:${id}] capture started`)
+  proc.on('close', () => {
+    captureProcs.delete(baseDevId)
+    for (const refId of refs) {
+      const refLi = liveAudioStore.get(refId)
+      if (refLi) { refLi.proc=null; refLi.current=0; broadcast({type:'live:audio:level', id:refId, level:0}) }
+    }
+    broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
+  })
+  proc.on('error', e => console.error(`[live-audio:${baseDevId}]`, e.message))
+  console.log(`[live-audio:${baseDevId}] capture started`)
 }
 
 function stopLiveCapture(id) {
   const li = liveAudioStore.get(id)
-  if (!li?.proc) return
-  li.proc.kill(); li.proc=null; li.current=0
-  console.log(`[live-audio:${id}] capture stopped`)
+  if (!li) return
+  const baseDevId = `hw:${li.card},${li.device}`
+  const entry = captureProcs.get(baseDevId)
+  if (entry) {
+    entry.refs.delete(id)
+    if (entry.refs.size === 0) {
+      entry.proc.kill()
+      captureProcs.delete(baseDevId)
+      console.log(`[live-audio:${baseDevId}] capture stopped`)
+    } else {
+      console.log(`[live-audio:${id}] detached, ${entry.refs.size} inputs still running on ${baseDevId}`)
+    }
+  }
+  li.proc = null; li.current = 0
 }
 
 // Restore saved live audio inputs on startup
@@ -2141,6 +2206,8 @@ function requireAuth(req, res, next) {
   if (req.path === '/login' || req.path === '/setup.html' || req.path.startsWith('/api/auth')) return next()
   // WiFi/status endpoints always accessible — needed during AP setup mode
   if (req.path === '/api/status' || req.path === '/api/wifi/ap-status' || req.path === '/api/wifi/scan' || req.path === '/api/wifi/connect') return next()
+  // Audio monitor stream — <audio> elements don't forward session cookies reliably; the capture being active is auth enough
+  if (req.method === 'GET' && req.path.endsWith('/stream') && req.path.startsWith('/api/live-audio/')) return next()
   if (req.headers.accept?.includes('application/json')) return res.status(401).json({ error: 'Unauthorized' })
   res.redirect('/login')
 }
@@ -2338,7 +2405,8 @@ function waveformsMeta() {
     ),
     live: [...liveAudioStore.values()].map(li => ({
       id: 'live-input:' + li.id, name: li.name, type: 'live-audio',
-      active: !!li.proc, baseFreq: li.baseFreq||25, lowCut: li.lowCut||20, highCut: li.highCut||8000, gain: li.gain??1
+      active: !!li.proc, baseFreq: li.baseFreq||25, lowCut: li.lowCut||20, highCut: li.highCut||8000,
+      gain: li.gain??1, channel: li.channel||'mix'
     }))
   }
 }
@@ -2347,7 +2415,6 @@ wss.on('connection', (ws, request) => {
   ws.role = request.session?.role || (config.auth?.enabled ? 'user' : 'admin')
   clients.add(ws)
   ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
-  ws.on('close', () => clients.delete(ws))
   ws.on('message', raw => {
     try {
       const msg = JSON.parse(raw)
@@ -2461,7 +2528,34 @@ wss.on('connection', (ws, request) => {
         else broadcast({ type:'deck:status', status:'connected', name:streamDeck.deck?.PRODUCT_NAME||null })
       }
       if (msg.type==='deck:disconnect') disconnectStreamDeck()
+      if (msg.type==='monitor:start') {
+        const li = liveAudioStore.get(msg.id)
+        if (li) {
+          const baseDevId = `hw:${li.card},${li.device}`
+          const entry = captureProcs.get(baseDevId)
+          if (entry) {
+            // Remove from any previous device monitor
+            if (ws._monitorDevId && ws._monitorDevId !== baseDevId) {
+              captureProcs.get(ws._monitorDevId)?.wsMonitors.delete(ws)
+            }
+            entry.wsMonitors.add(ws)
+            ws._monitorDevId = baseDevId
+            console.log(`[monitor:ws] ${baseDevId} — client connected`)
+          }
+        }
+      }
+      if (msg.type==='monitor:stop') {
+        if (ws._monitorDevId) {
+          captureProcs.get(ws._monitorDevId)?.wsMonitors.delete(ws)
+          console.log(`[monitor:ws] ${ws._monitorDevId} — client disconnected`)
+          ws._monitorDevId = null
+        }
+      }
     } catch {}
+  })
+  ws.on('close', () => {
+    clients.delete(ws)
+    if (ws._monitorDevId) captureProcs.get(ws._monitorDevId)?.wsMonitors.delete(ws)
   })
 })
 
@@ -3870,10 +3964,13 @@ app.get('/api/live-audio/inputs', (req,res) => {
 })
 
 app.post('/api/live-audio/inputs', (req,res) => {
-  const {id,card,device,name,lowCut=20,highCut=8000,baseFreq=25,gain=1} = req.body
-  if (!id || card==null || device==null || !name) return res.status(400).json({error:'id, card, device, name required'})
+  const {card, device, name, channel='mix', lowCut=20, highCut=8000, baseFreq=25, gain=1} = req.body
+  if (card==null || device==null || !name) return res.status(400).json({error:'card, device, name required'})
+  const ch = ['L','R','mix'].includes(channel) ? channel : 'mix'
+  const id = `hw:${card},${device}:${ch}`
   if (liveAudioStore.has(id)) return res.status(409).json({error:'already exists'})
-  const li = { id, card:parseInt(card), device:parseInt(device), name, lowCut:parseInt(lowCut), highCut:parseInt(highCut), baseFreq:parseInt(baseFreq), gain:parseFloat(gain)||1, enabled:false, current:0, proc:null }
+  const chLabel = ch === 'L' ? ' — L' : ch === 'R' ? ' — R' : ' — Mix'
+  const li = { id, card:parseInt(card), device:parseInt(device), name: name + chLabel, channel: ch, lowCut:parseInt(lowCut), highCut:parseInt(highCut), baseFreq:parseInt(baseFreq), gain:parseFloat(gain)||1, enabled:false, current:0, proc:null }
   liveAudioStore.set(id, li)
   saveLiveAudio()
   broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
@@ -3927,18 +4024,28 @@ app.delete('/api/live-audio/inputs/:id', (req,res) => {
   res.json({ok:true})
 })
 
-// Browser monitoring stream: ffmpeg ALSA → webm/opus chunked response
+// Browser monitoring stream — pipes raw PCM from the shared capture process through an opus encoder
 app.get('/api/live-audio/inputs/:id/stream', (req,res) => {
   const li = liveAudioStore.get(req.params.id)
-  if (!li) return res.status(404).json({error:'not found'})
-  res.setHeader('Content-Type','audio/webm')
-  res.setHeader('Transfer-Encoding','chunked')
+  if (!li) { console.log(`[monitor] 404 id=${req.params.id}`); return res.status(404).json({error:'not found'}) }
+  const baseDevId = `hw:${li.card},${li.device}`
+  const entry = captureProcs.get(baseDevId)
+  if (!entry) { console.log(`[monitor] 503 capture not running for ${baseDevId}`); return res.status(503).json({error:'input not running'}) }
+  console.log(`[monitor] starting encoder for ${req.params.id}`)
+  res.setHeader('Content-Type','audio/mpeg')
   res.setHeader('Cache-Control','no-cache')
-  const args = ['-f','alsa','-i',`plughw:${li.card},${li.device}`,'-ac','1','-ar','22050','-c:a','libopus','-b:a','32k','-f','webm','pipe:1']
-  const proc = spawn('ffmpeg', args, { stdio:['ignore','pipe','ignore'] })
-  proc.stdout.pipe(res)
-  req.on('close', () => proc.kill())
-  proc.on('error', () => res.end())
+  // Encoder reads raw stereo f32le 44100Hz from stdin, outputs mp3
+  const enc = spawn('ffmpeg', [
+    '-f','f32le','-ar','44100','-ac','2','-i','pipe:0',
+    '-c:a','libmp3lame','-b:a','128k','-f','mp3','pipe:1'
+  ], { stdio:['pipe','pipe','pipe'] })
+  enc.stderr.on('data', d => console.error('[monitor-enc]', d.toString().split('\n')[0]))
+  enc.stdin.on('error', () => {})  // suppress EPIPE on client disconnect
+  enc.stdout.pipe(res)
+  entry.monitors.add(enc.stdin)
+  req.on('close', () => { enc.stdin.end(); entry.monitors.delete(enc.stdin); enc.kill() })
+  enc.on('error', e => { console.error('[monitor-enc] error:', e.message); res.end() })
+  enc.on('close', code => { if (code) console.error(`[monitor-enc] exited ${code}`) })
 })
 
 // ── Community share proxy ─────────────────────────────────────────────────────

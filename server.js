@@ -190,6 +190,140 @@ const BUILTIN_WAVEFORMS = [
 const AUDIO_DIR = join(__dirname, 'audio')
 if (!existsSync(AUDIO_DIR)) mkdirSync(AUDIO_DIR, { recursive: true })
 
+// ── Live audio inputs ─────────────────────────────────────────────────────────
+const LIVE_AUDIO_PATH = join(__dirname, 'live-audio.json')
+function loadLiveAudio() { try { return JSON.parse(readFileSync(LIVE_AUDIO_PATH,'utf8')) } catch { return [] } }
+function saveLiveAudio() {
+  const toSave = [...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,gain,enabled})=>({id,card,device,name,lowCut,highCut,baseFreq,gain:gain??1,enabled}))
+  writeFileSync(LIVE_AUDIO_PATH, JSON.stringify(toSave, null, 2))
+}
+
+// Map: id (e.g. "hw:1,0") → { id, card, device, name, lowCut, highCut, baseFreq, enabled, current, proc }
+const liveAudioStore = new Map()
+
+function listAlsaDevices() {
+  try {
+    const pcm = readFileSync('/proc/asound/pcm', 'utf8')
+    const cards = readFileSync('/proc/asound/cards', 'utf8')
+    const cardNames = {}
+    for (const line of cards.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+\[.*?\]:\s+\S+\s+-\s+(.+)/)
+      if (m) cardNames[m[1]] = m[2].trim()
+    }
+    const devs = []
+    for (const line of pcm.split('\n')) {
+      // format: "CC-DD: name : name : playback N : capture N"
+      const m = line.match(/^(\d+)-(\d+):.+capture\s+\d+/)
+      if (m) {
+        const card = parseInt(m[1]), device = parseInt(m[2])
+        const name = cardNames[m[1]] || `Card ${card}`
+        devs.push({ id:`hw:${card},${device}`, card, device, name })
+      }
+    }
+    return devs
+  } catch { return [] }
+}
+
+// Cooley-Tukey in-place FFT (complex interleaved re[], im[])
+function _fftInPlace(re, im) {
+  const N = re.length
+  for (let i = 1, j = 0; i < N; i++) {
+    let bit = N >> 1
+    for (; j & bit; bit >>= 1) j ^= bit
+    j ^= bit
+    if (i < j) { let t=re[i];re[i]=re[j];re[j]=t; t=im[i];im[i]=im[j];im[j]=t }
+  }
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = -2*Math.PI/len, wR=Math.cos(ang), wI=Math.sin(ang)
+    for (let i = 0; i < N; i += len) {
+      let cR=1, cI=0
+      for (let k = 0; k < (len>>1); k++) {
+        const uR=re[i+k],uI=im[i+k],h=i+k+(len>>1)
+        const vR=re[h]*cR-im[h]*cI, vI=re[h]*cI+im[h]*cR
+        re[i+k]=uR+vR; im[i+k]=uI+vI; re[h]=uR-vR; im[h]=uI-vI
+        const nR=cR*wR-cI*wI; cI=cR*wI+cI*wR; cR=nR
+      }
+    }
+  }
+}
+
+function startLiveCapture(id) {
+  const li = liveAudioStore.get(id)
+  if (!li || li.proc) return
+  const SR = 44100
+  const CHUNK = Math.floor(SR * 0.1)  // 4410 samples = 100ms
+  const BYTES = CHUNK * 4
+  const FFT_N = 2048
+  const half = FFT_N >> 1
+  const nyquist = SR / 2
+  const LOG_MIN = Math.log10(20), LOG_MAX = Math.log10(20000)
+  const NUM_BANDS = 24
+  // Hann window coefficients
+  const hann = new Float32Array(FFT_N)
+  for (let i = 0; i < FFT_N; i++) hann[i] = 0.5*(1-Math.cos(2*Math.PI*i/(FFT_N-1)))
+  // No ffmpeg filters — raw PCM for full spectrum, band filter applied in JS
+  const args = ['-f','alsa','-i',`plughw:${li.card},${li.device}`,'-ac','1','-ar',String(SR),'-f','f32le','pipe:1']
+  let leftover = Buffer.alloc(0)
+  const proc = spawn('ffmpeg', args, { stdio:['ignore','pipe','ignore'] })
+  li.proc = proc; li.current = 0
+  proc.stdout.on('data', chunk => {
+    const buf = Buffer.concat([leftover, chunk])
+    let pos = 0
+    while (pos + BYTES <= buf.length) {
+      // FFT on first FFT_N samples of chunk
+      const re = new Float32Array(FFT_N), im = new Float32Array(FFT_N)
+      for (let i = 0; i < FFT_N; i++) re[i] = buf.readFloatLE(pos + i*4) * hann[i]
+      _fftInPlace(re, im)
+      // Magnitudes
+      const mags = new Float32Array(half)
+      let maxMag = 1e-12
+      for (let j = 0; j < half; j++) {
+        mags[j] = Math.sqrt(re[j]*re[j]+im[j]*im[j])
+        if (mags[j] > maxMag) maxMag = mags[j]
+      }
+      // Map to log-scale display bands (normalised 0-1)
+      const bands = new Array(NUM_BANDS).fill(0)
+      for (let j = 1; j < half; j++) {
+        const hz = j/half*nyquist
+        if (hz < 20 || hz > 20000) continue
+        const b = Math.floor((Math.log10(hz)-LOG_MIN)/(LOG_MAX-LOG_MIN)*NUM_BANDS)
+        if (b >= 0 && b < NUM_BANDS) { const v=mags[j]/maxMag; if(v>bands[b]) bands[b]=v }
+      }
+      broadcast({ type:'live:audio:spectrum', id, bands })
+      // Band-filtered level: energy ratio in [lowCut, highCut]
+      let totalSum=0, bandSum=0, bandCount=0
+      const lo=li.lowCut||20, hi=li.highCut||8000
+      for (let j = 1; j < half; j++) {
+        const m2=mags[j]*mags[j]; totalSum+=m2
+        const hz=j/half*nyquist; if(hz>=lo&&hz<=hi){bandSum+=m2;bandCount++}
+      }
+      const bandFrac = totalSum>0 ? Math.sqrt(bandSum/totalSum) : 0
+      let tdSum=0
+      for (let i=0;i<CHUNK;i++) tdSum+=Math.pow(buf.readFloatLE(pos+i*4),2)
+      li.current = Math.min(100, Math.round(Math.sqrt(tdSum/CHUNK)*500*bandFrac*(li.gain??1)))
+      broadcast({ type:'live:audio:level', id, level:li.current })
+      pos += BYTES
+    }
+    leftover = buf.slice(pos)
+  })
+  proc.on('close', () => { li.proc=null; li.current=0; broadcast({ type:'live:audio:level', id, level:0 }) })
+  proc.on('error', e => console.error(`[live-audio:${id}]`, e.message))
+  console.log(`[live-audio:${id}] capture started`)
+}
+
+function stopLiveCapture(id) {
+  const li = liveAudioStore.get(id)
+  if (!li?.proc) return
+  li.proc.kill(); li.proc=null; li.current=0
+  console.log(`[live-audio:${id}] capture stopped`)
+}
+
+// Restore saved live audio inputs on startup
+for (const saved of loadLiveAudio()) {
+  liveAudioStore.set(saved.id, { ...saved, current:0, proc:null })
+  if (saved.enabled) setTimeout(() => startLiveCapture(saved.id), 5000)
+}
+
 const audioUpload = multer({
   storage: multer.diskStorage({
     destination: AUDIO_DIR,
@@ -402,7 +536,7 @@ function broadcast(msg) {
   const s = JSON.stringify(msg)
   for (const ws of clients) if (ws.readyState === 1) ws.send(s)
   // Notify Stream Deck on device state changes
-  if (msg.type === 'device:status' || msg.type === 'eom:config' || msg.type === 'eom:denial') {
+  if (msg.type === 'device:status' || msg.type === 'device:state' || msg.type === 'eom:config' || msg.type === 'eom:denial') {
     streamDeck?.onDeviceUpdate()
   }
   // Notify Stream Deck on macro events
@@ -424,6 +558,13 @@ function encodeFreq(hz) {
 }
 
 function computeWave(wfId, tick, amp, speed=1) {
+  if (wfId && wfId.startsWith('live-input:')) {
+    const li = liveAudioStore.get(wfId.slice('live-input:'.length))
+    const lvl = li?.current ?? 0
+    const freq = li?.baseFreq ?? 25
+    const a = Math.min(100, Math.round(lvl * amp / 100))
+    return [[freq,a],[freq,a],[freq,a],[freq,a]]
+  }
   const custom = waveformStore.custom.find(w => w.id === wfId)
   if (custom && custom.frames.length > 0) {
     // speed shifts the frame index — faster speed = advance more frames per tick
@@ -484,12 +625,15 @@ function computeWave(wfId, tick, amp, speed=1) {
 }
 
 class CoyoteDevice {
-  constructor(id, name, mac, bleName) {
+  constructor(id, name, mac, bleName, buttonControl={A:false,B:false}) {
     this.id=id; this.name=name; this.type='coyote'; this.mac=(mac||'').toLowerCase()
     this.bleName=bleName||null; this.status='disconnected'
     this.gattServer=null; this.writeChar=null; this.notifyChar=null
     this.channels={ A:{intensity:0,waveform:'pulse',speed:1}, B:{intensity:0,waveform:'pulse',speed:1} }
     this._smoothA=0; this._smoothB=0  // smoothed intensity (0-200), lerped toward target each packet
+    this._lastSentA=0; this._lastSentB=0; this._deviceA=0; this._deviceB=0; this._lastBtnAt=0; this.battery=null
+    this.buttonControl={ A:!!buttonControl?.A, B:!!buttonControl?.B }  // whether physical buttons control each channel
+    this._analogPrev=null; this._analogPrevB6=null  // last byte[7]/b6 from analog-2a59 heartbeat packets
     this._ticks={A:0,B:0}; this._paused={A:false,B:false}; this._interval=null; this._device=null; this._connectLock=false
     this._connectedAddr=null  // actual BLE address we connected to
     this._retryDelay=5000  // exponential backoff on repeated failures
@@ -566,8 +710,97 @@ class CoyoteDevice {
       this.notifyChar = await svc.getCharacteristic('0000150b-0000-1000-8000-00805f9b34fb')
       await this.notifyChar.startNotifications()
       this.notifyChar.on('valuechanged', buf => {
-        broadcast({ type:'device:notify', id:this.id, hex:Buffer.from(buf).toString('hex') })
+        // Sanity check: must be a valid B1 packet (filters garbage initial notification on subscribe)
+        if (buf[0] !== 0xB1) return
+        const seq = buf[1]
+        const newA = buf[2], newB = buf[3]
+        if (seq !== 0x00) {
+          // B0 ack — update device tracking, but only if not in cooldown after a button press
+          // (stale in-flight acks from before the press would corrupt direction detection)
+          if (Date.now() - this._lastBtnAt > 300) {
+            this._deviceA = newA; this._deviceB = newB
+          }
+          return
+        }
+        // seq=0: physical button press — device self-incremented by ±1 from its current intensity
+        this._lastBtnAt = Date.now()
+        console.log(`[${this.id}] BTN hex=${Buffer.from(buf).toString('hex')} newA=${newA} newB=${newB} dA=${this._deviceA} dB=${this._deviceB} bcA=${this.buttonControl.A} bcB=${this.buttonControl.B}`)
+        const STEP = 5
+        let changed = false
+        if (newA !== this._deviceA && this.buttonControl.A) {
+          let val = this.channels.A.intensity || 0
+          val = newA > this._deviceA ? Math.min(200, val + STEP) : Math.max(0, val - STEP)
+          if (val !== this.channels.A.intensity) { this.channels.A.intensity = val; changed = true }
+        }
+        if (newB !== this._deviceB && this.buttonControl.B) {
+          let val = this.channels.B.intensity || 0
+          val = newB > this._deviceB ? Math.min(200, val + STEP) : Math.max(0, val - STEP)
+          if (val !== this.channels.B.intensity) { this.channels.B.intensity = val; changed = true }
+        }
+        // Track our COMMANDED value (what the next B0 will send), not the device's transient
+        // self-increment. This keeps _deviceA/_deviceB in sync with where we'll actually move
+        // the device, so the next button press compares against the right baseline.
+        this._deviceA = this.buttonControl.A ? this.channels.A.intensity : newA
+        this._deviceB = this.buttonControl.B ? this.channels.B.intensity : newB
+        if (changed) {
+          console.log(`[${this.id}] btn→A=${this.channels.A.intensity} B=${this.channels.B.intensity}`)
+          broadcast({ type:'device:state', id:this.id, channels:this.channels, ticks:this._ticks, paused:this._paused, buttonControl:this.buttonControl })
+        }
       })
+      // Subscribe to notify characteristics for physical button detection
+      try {
+        const analogSvc = await this.gattServer.getPrimaryService('0000180a-0000-1000-8000-00805f9b34fb')
+        const analogChar = await analogSvc.getCharacteristic('00002a59-0000-1000-8000-00805f9b34fb')
+        const initVal = await analogChar.readValue().catch(()=>null)
+        this._analogPrev = initVal ? Buffer.from(initVal)[7] : null
+        console.log(`[${this.id}] analog-2a59 initial: ${initVal ? Buffer.from(initVal).toString('hex') : 'n/a'}`)
+        await analogChar.startNotifications()
+        analogChar.on('valuechanged', buf => this._onAnalog2a59(Buffer.from(buf)))
+        // Also subscribe to status-1500 and custom-0008 to detect UP presses
+        const s1500Char = await analogSvc.getCharacteristic('00001500-0000-1000-8000-00805f9b34fb')
+        const iv1500 = await s1500Char.readValue().catch(()=>null)
+        if (iv1500) {
+          const pct = Buffer.from(iv1500)[0]
+          if (pct >= 0 && pct <= 100) { this.battery = pct; broadcast({ type:'device:state', id:this.id, battery:this.battery }) }
+          console.log(`[${this.id}] battery: ${this.battery}%`)
+        }
+        await s1500Char.startNotifications()
+        s1500Char.on('valuechanged', buf => {
+          const pct = Buffer.from(buf)[0]
+          if (pct >= 0 && pct <= 100) {
+            this.battery = pct
+            broadcast({ type:'device:state', id:this.id, battery:this.battery })
+          }
+        })
+      } catch(e) { console.log(`[${this.id}] analog-2a59 skip: ${e.message}`) }
+      try {
+        const cSvc = await this.gattServer.getPrimaryService('00002003-0000-1000-8000-00805f9b34fb')
+        const c0008 = await cSvc.getCharacteristic('00000008-0000-1000-8000-00805f9b34fb')
+        const iv0008 = await c0008.readValue().catch(()=>null)
+        console.log(`[${this.id}] custom-0008 initial: ${iv0008 ? Buffer.from(iv0008).toString('hex') : 'n/a'}`)
+        await c0008.startNotifications()
+        c0008.on('valuechanged', buf => console.log(`[${this.id}] CUSTOM-0008 CHANGED: ${Buffer.from(buf).toString('hex')}`))
+      } catch(e) { console.log(`[${this.id}] custom-0008 skip: ${e.message}`) }
+      // Try HID service (now bonded — BlueZ may expose GATT even without input plugin)
+      try {
+        const hidSvc = await this.gattServer.getPrimaryService('00001812-0000-1000-8000-00805f9b34fb')
+        console.log(`[${this.id}] HID service accessible!`)
+        const reportMapChar = await hidSvc.getCharacteristic('00002a4b-0000-1000-8000-00805f9b34fb').catch(()=>null)
+        if (reportMapChar) {
+          const rm = await reportMapChar.readValue().catch(()=>null)
+          if (rm) console.log(`[${this.id}] HID Report Map: ${Buffer.from(rm).toString('hex')}`)
+        }
+        const reportChar = await hidSvc.getCharacteristic('00002a4d-0000-1000-8000-00805f9b34fb').catch(()=>null)
+        if (reportChar) {
+          const ir = await reportChar.readValue().catch(()=>null)
+          if (ir) console.log(`[${this.id}] HID Report init: ${Buffer.from(ir).toString('hex')}`)
+          await reportChar.startNotifications()
+          reportChar.on('valuechanged', buf => {
+            console.log(`[${this.id}] HID REPORT: ${Buffer.from(buf).toString('hex')}`)
+          })
+          console.log(`[${this.id}] HID Report subscribed`)
+        }
+      } catch(e) { console.log(`[${this.id}] HID skip: ${e.message}`) }
       // 0xBF init: set limits + frequency/intensity balance to defaults
       await this.writeChar.writeValue(Buffer.from([0xBF, 0xC8, 0xC8, 0x00, 0x00, 0x00, 0x00]), { type:'command' })
       await new Promise(r=>setTimeout(r,200))
@@ -581,7 +814,7 @@ class CoyoteDevice {
         device.helper.on('PropertiesChanged', (iface, props) => {
           if (iface==='org.bluez.Device1' && props.Connected?.value===false) {
             console.log(`[${this.id}] Disconnected`)
-            this._stopSending(); this._connectLock=false; this.status='disconnected'; this._connectedAddr=null; this._smoothA=0; this._smoothB=0
+            this._stopSending(); this._connectLock=false; this.status='disconnected'; this._connectedAddr=null; this._smoothA=0; this._smoothB=0; this.battery=null
             broadcast({ type:'device:status', id:this.id, status:'disconnected' })
           }
         })
@@ -602,15 +835,15 @@ class CoyoteDevice {
   async disconnect() {
     this._stopSending()
     try { if (this._device) await this._device.disconnect() } catch {}
-    this._connectedAddr=null; this._smoothA=0; this._smoothB=0; this.status='disconnected'
+    this._connectedAddr=null; this._smoothA=0; this._smoothB=0; this.status='disconnected'; this.battery=null
     broadcast({ type:'device:status', id:this.id, status:'disconnected' })
   }
 
   setChannel(ch, { intensity, waveform, speed }={}) {
     if (intensity!==undefined) this.channels[ch].intensity=Math.max(0,Math.min(200,intensity))
     if (waveform!==undefined)  this.channels[ch].waveform=waveform
-    if (speed!==undefined)     this.channels[ch].speed=Math.max(0.25,Math.min(4,speed))
-    broadcast({ type:'device:state', id:this.id, channels:this.channels, ticks:this._ticks, paused:this._paused })
+    if (speed!==undefined)     this.channels[ch].speed=Math.max(0.25,Math.min(100,speed))
+    broadcast({ type:'device:state', id:this.id, channels:this.channels, ticks:this._ticks, paused:this._paused, buttonControl:this.buttonControl })
   }
 
   setPlayback(channel, action) {
@@ -625,22 +858,31 @@ class CoyoteDevice {
     const t=tickA  // used for packet sequence nibble only
 
     // Smooth intensity toward target: slow rise (~1s), faster fall (~400ms), fast to zero
+    // Skip smoothing when button control is active so _lastSentA stays stable for delta detection
     const iA=this.channels.A.intensity, iB=this.channels.B.intensity
-    const rateA = iA > this._smoothA ? 0.18 : (iA===0 ? 0.45 : 0.22)
-    const rateB = iB > this._smoothB ? 0.18 : (iB===0 ? 0.45 : 0.22)
-    this._smoothA += (iA - this._smoothA) * rateA
-    this._smoothB += (iB - this._smoothB) * rateB
-    if (Math.abs(this._smoothA - iA) < 0.4) this._smoothA = iA
-    if (Math.abs(this._smoothB - iB) < 0.4) this._smoothB = iB
+    if (this.buttonControl.A) {
+      this._smoothA = iA
+    } else {
+      const rateA = iA > this._smoothA ? 0.18 : (iA===0 ? 0.45 : 0.22)
+      this._smoothA += (iA - this._smoothA) * rateA
+      if (Math.abs(this._smoothA - iA) < 0.4) this._smoothA = iA
+    }
+    if (this.buttonControl.B) {
+      this._smoothB = iB
+    } else {
+      const rateB = iB > this._smoothB ? 0.18 : (iB===0 ? 0.45 : 0.22)
+      this._smoothB += (iB - this._smoothB) * rateB
+      if (Math.abs(this._smoothB - iB) < 0.4) this._smoothB = iB
+    }
 
     const aAmp=Math.min(100,Math.round(this._smoothA/2))
     const bAmp=Math.min(100,Math.round(this._smoothB/2))
     const aW=computeWave(this.channels.A.waveform,tickA,aAmp,this.channels.A.speed||1)
     const bW=computeWave(this.channels.B.waveform,tickB,bAmp,this.channels.B.speed||1)
     const buf=Buffer.alloc(20)
-    buf[0]=0xB0; buf[1]=((t%16)<<4)|0x0F
-    buf[2]=Math.min(200,Math.round(this._smoothA))
-    buf[3]=Math.min(200,Math.round(this._smoothB))
+    buf[0]=0xB0; buf[1]=(((t%15)+1)<<4)|0x0F
+    buf[2]=Math.min(200,Math.round(this._smoothA)); this._lastSentA=buf[2]
+    buf[3]=Math.min(200,Math.round(this._smoothB)); this._lastSentB=buf[3]
     for(let i=0;i<4;i++) buf[4+i]=encodeFreq(aW[i][0])
     for(let i=0;i<4;i++) buf[8+i]=Math.min(100,aW[i][1])
     for(let i=0;i<4;i++) buf[12+i]=encodeFreq(bW[i][0])
@@ -661,14 +903,20 @@ class CoyoteDevice {
           if(!this._paused.B) this._ticks.B++
         } catch(e) {
           console.error(`[${this.id}] send:`, e.message)
-          this._sendActive = false; this.status = 'disconnected'
+          this._sendActive = false; this.status = 'disconnected'; this.battery = null
           broadcast({ type:'device:status', id:this.id, status:'disconnected' })
           return
         }
       }
       if (this._sendActive) {
-        // Target 100ms per cycle; subtract write time so we stay on schedule
-        this._sendTimer = setTimeout(loop, Math.max(5, 100 - (Date.now() - t0)))
+        // When button control is active, slow B0 rate to reduce B1 ack congestion
+        // which was starving button-press notifications out of the BLE queue.
+        // Immediately after a button press, slow down even more to maximise the
+        // window in which the device can send the next button notification.
+        const btnCtrl = this.buttonControl.A || this.buttonControl.B
+        const msSinceBtn = Date.now() - (this._lastBtnAt || 0)
+        const interval = msSinceBtn < 800 ? 800 : (btnCtrl ? 300 : 100)
+        this._sendTimer = setTimeout(loop, Math.max(5, interval - (Date.now() - t0)))
       }
     }
     loop()
@@ -679,8 +927,18 @@ class CoyoteDevice {
     if (this._sendTimer) { clearTimeout(this._sendTimer); this._sendTimer = null }
   }
 
+  _onAnalog2a59(buf) {
+    const pktType = buf[0]
+    if (pktType !== 0x01) return
+    const b6 = buf[6]
+    const val = buf[7]
+    if (this._analogPrev === null || this._analogPrev === undefined) { this._analogPrev = val; this._analogPrevB6 = b6; return }
+    this._analogPrev = val
+    this._analogPrevB6 = b6
+  }
+
   toJSON() {
-    return { id:this.id, type:'coyote', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, channels:this.channels, ticks:this._ticks, paused:this._paused }
+    return { id:this.id, type:'coyote', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, channels:this.channels, ticks:this._ticks, paused:this._paused, buttonControl:this.buttonControl, battery:this.battery }
   }
 }
 
@@ -1735,15 +1993,83 @@ class ShellyDevice {
   }
 }
 
+class TremblrDevice {
+  constructor(id, name) {
+    this.id = id; this.name = name; this.type = 'tremblr'
+    this.status = 'connecting'
+    this.speed = 0; this.running = false; this.paused = false
+    this._pausedSpeed = 0
+    this._airInterval = null
+    this._proc = null
+    this._spawn()
+  }
+  _spawn() {
+    this._proc = spawn('python3', ['-u', '/home/alans/cc1101/tremblr_tx.py'])
+    this._proc.stdout.on('data', d => {
+      const s = d.toString().trim()
+      if (s === 'ready') { this.status = 'connected'; broadcast({type:'device:status', id:this.id, status:'connected'}) }
+    })
+    this._proc.stderr.on('data', d => console.error('[tremblr]', d.toString().trim()))
+    this._proc.on('exit', () => { this.status = 'disconnected'; broadcast({type:'device:status', id:this.id, status:'disconnected'}) })
+  }
+  _send(cmd, repeat=3) { if (this._proc?.stdin?.writable) this._proc.stdin.write(`${cmd} ${repeat}\n`) }
+  _clear() { if (this._proc?.stdin?.writable) this._proc.stdin.write('clear\n') }
+  start() {
+    this._clear()
+    this._send('startstop', 10)
+    this.running = true; this.paused = false; this.speed = 0
+    this._broadcastState()
+  }
+  pause() {
+    this._clear()
+    this._pausedSpeed = this.speed
+    this._send('startstop', 10)
+    this.running = false; this.paused = true; this.speed = 0
+    this._broadcastState()
+  }
+  resume() {
+    this._clear()
+    this._send('startstop', 10)
+    this.running = true; this.paused = false; this.speed = this._pausedSpeed
+    this._broadcastState()
+  }
+  faster() { this._send('faster'); this.speed = Math.min(15, this.speed + 1); this._broadcastState() }
+  slower() { this._send('slower'); this.speed = Math.max(0,  this.speed - 1); this._broadcastState() }
+  air_in_start()  {
+    this._clear()
+    this._send('air_in', 3)
+    this._airInterval = setInterval(() => this._send('air_in', 3), 200)
+  }
+  air_in_stop()   { clearInterval(this._airInterval); this._airInterval = null; this._clear() }
+  air_out_start() {
+    this._clear()
+    this._send('air_out', 3)
+    this._airInterval = setInterval(() => this._send('air_out', 3), 200)
+  }
+  air_out_stop()  { clearInterval(this._airInterval); this._airInterval = null; this._clear() }
+  setSpeed(target) {
+    target = Math.max(0, Math.min(15, parseInt(target)))
+    const delta = target - this.speed
+    const cmd = delta > 0 ? 'faster' : 'slower'
+    this._clear()
+    for (let i = 0; i < Math.abs(delta); i++) this._send(cmd)
+    this.speed = target; this._broadcastState()
+  }
+  stop() { if (this.running) this.pause() }
+  _broadcastState() { broadcast({type:'device:state', id:this.id, speed:this.speed, running:this.running, paused:this.paused}) }
+  toJSON() { return {id:this.id, type:'tremblr', name:this.name, status:this.status, speed:this.speed, running:this.running, paused:this.paused} }
+}
+
 function createDevice(cfg) {
-  if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
+  if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName,cfg.buttonControl)
   if (cfg.type==='pawprints') return new PawPrintsDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
   if (cfg.type==='eom')    return new EomDevice(cfg.id,cfg.name,cfg.ip,cfg.port)
   if (cfg.type==='nimble') return new NimbleDevice(cfg.id,cfg.name,cfg.ttyPath,cfg.tcpHost,cfg.tcpPort)
   if (cfg.type==='estim')  return new EstimDevice(cfg.id,cfg.name,cfg.ttyPath)
   if (cfg.type==='camera') return new CameraDevice(cfg.id,cfg.name,cfg.ip,cfg.username,cfg.password,cfg.streamPath,cfg.hasPTZ,cfg.ptzProfileToken,cfg.ptzServiceUrl)
   if (cfg.type==='hue')    return new HueBridge(cfg.id,cfg.name,cfg.ip,cfg.token,cfg.selectedLights,cfg.selectedGroups,cfg.selectedScenes)
-  if (cfg.type==='shelly') return new ShellyDevice(cfg.id,cfg.name,cfg.ip,cfg.password||'')
+  if (cfg.type==='shelly')   return new ShellyDevice(cfg.id,cfg.name,cfg.ip,cfg.password||'')
+  if (cfg.type==='tremblr')  return new TremblrDevice(cfg.id,cfg.name)
   throw new Error(`Unknown type: ${cfg.type}`)
 }
 for (const d of config.devices) {
@@ -2009,7 +2335,11 @@ function waveformsMeta() {
     builtin: BUILTIN_WAVEFORMS,
     custom: waveformStore.custom.map(w =>
       w.type === 'audio' ? { id:w.id, name:w.name, type:'audio', frames:w.frames?.length||0, baseFreq:w.baseFreq||25 } : w
-    )
+    ),
+    live: [...liveAudioStore.values()].map(li => ({
+      id: 'live-input:' + li.id, name: li.name, type: 'live-audio',
+      active: !!li.proc, baseFreq: li.baseFreq||25, lowCut: li.lowCut||20, highCut: li.highCut||8000, gain: li.gain??1
+    }))
   }
 }
 
@@ -2021,8 +2351,15 @@ wss.on('connection', (ws, request) => {
   ws.on('message', raw => {
     try {
       const msg = JSON.parse(raw)
+      if (msg.type==='ping') { ws.send(JSON.stringify({type:'pong'})); return }
       const dev = devices[msg.deviceId]
       if (msg.type==='device:setChannel' && dev?.setChannel) dev.setChannel(msg.channel, msg.params)
+      if (msg.type==='coyote:setButtonControl' && dev?.type==='coyote') {
+        dev.buttonControl[msg.channel] = !!msg.enabled
+        const cfgDev = config.devices.find(d => d.id === dev.id)
+        if (cfgDev) { cfgDev.buttonControl = { ...dev.buttonControl }; saveConfig(config) }
+        broadcast({ type:'device:state', id:dev.id, channels:dev.channels, ticks:dev._ticks, paused:dev._paused, buttonControl:dev.buttonControl })
+      }
       if (msg.type==='device:stop' && dev) {
         if (dev.type==='eom') dev.stop()
         else { dev.setChannel('A',{intensity:0}); dev.setChannel('B',{intensity:0}) }
@@ -2106,6 +2443,15 @@ wss.on('connection', (ws, request) => {
           dev.rpc(component==='switch'?'Switch.Set':'Light.Set',{id:idx,...params}).catch(e=>console.error(`[${msg.deviceId}] shelly:set:`,e.message))
         }
       }
+      if (msg.type==='tremblr:start')         { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.start() }
+      if (msg.type==='tremblr:pause')         { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.pause() }
+      if (msg.type==='tremblr:resume')        { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.resume() }
+      if (msg.type==='tremblr:faster')        { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.faster() }
+      if (msg.type==='tremblr:slower')        { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.slower() }
+      if (msg.type==='tremblr:air_in_start')  { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.air_in_start() }
+      if (msg.type==='tremblr:air_in_stop')   { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.air_in_stop() }
+      if (msg.type==='tremblr:air_out_start') { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.air_out_start() }
+      if (msg.type==='tremblr:air_out_stop')  { const d=devices[msg.deviceId]; if(d?.type==='tremblr') d.air_out_stop() }
       if (msg.type==='group:setEnabled') {
         const grp=(config.groups||[]).find(g=>g.id===msg.groupId)
         if(grp) { grp.enabled=msg.enabled; saveConfig(config); broadcast({type:'group:updated',group:grp}) }
@@ -3515,6 +3861,86 @@ app.get('/api/audio/:id/frames', (req,res) => {
   res.json(frames)
 })
 
+// ── Live audio input API ──────────────────────────────────────────────────────
+app.get('/api/live-audio/scan', (req,res) => res.json(listAlsaDevices()))
+
+app.get('/api/live-audio/inputs', (req,res) => {
+  res.json([...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,enabled,current,proc})=>
+    ({id,card,device,name,lowCut,highCut,baseFreq,enabled,active:!!proc,level:current||0})))
+})
+
+app.post('/api/live-audio/inputs', (req,res) => {
+  const {id,card,device,name,lowCut=20,highCut=8000,baseFreq=25,gain=1} = req.body
+  if (!id || card==null || device==null || !name) return res.status(400).json({error:'id, card, device, name required'})
+  if (liveAudioStore.has(id)) return res.status(409).json({error:'already exists'})
+  const li = { id, card:parseInt(card), device:parseInt(device), name, lowCut:parseInt(lowCut), highCut:parseInt(highCut), baseFreq:parseInt(baseFreq), gain:parseFloat(gain)||1, enabled:false, current:0, proc:null }
+  liveAudioStore.set(id, li)
+  saveLiveAudio()
+  broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
+  broadcast({ type:'waveforms:updated', waveforms:waveformsMeta() })
+  res.json({ok:true})
+})
+
+app.patch('/api/live-audio/inputs/:id', (req,res) => {
+  const li = liveAudioStore.get(req.params.id)
+  if (!li) return res.status(404).json({error:'not found'})
+  const {name,lowCut,highCut,baseFreq,gain} = req.body
+  if (name)             li.name    = name
+  if (lowCut)           li.lowCut  = parseInt(lowCut)
+  if (highCut)          li.highCut = parseInt(highCut)
+  if (baseFreq)         li.baseFreq= parseInt(baseFreq)
+  if (gain !== undefined) li.gain  = parseFloat(gain)||1
+  saveLiveAudio()
+  broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
+  broadcast({ type:'waveforms:updated', waveforms:waveformsMeta() })
+  res.json({ok:true})
+})
+
+app.post('/api/live-audio/inputs/:id/start', (req,res) => {
+  const li = liveAudioStore.get(req.params.id)
+  if (!li) return res.status(404).json({error:'not found'})
+  li.enabled = true; saveLiveAudio()
+  startLiveCapture(li.id)
+  broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
+  broadcast({ type:'waveforms:updated', waveforms:waveformsMeta() })
+  res.json({ok:true})
+})
+
+app.post('/api/live-audio/inputs/:id/stop', (req,res) => {
+  const li = liveAudioStore.get(req.params.id)
+  if (!li) return res.status(404).json({error:'not found'})
+  li.enabled = false; saveLiveAudio()
+  stopLiveCapture(li.id)
+  broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
+  broadcast({ type:'waveforms:updated', waveforms:waveformsMeta() })
+  res.json({ok:true})
+})
+
+app.delete('/api/live-audio/inputs/:id', (req,res) => {
+  const li = liveAudioStore.get(req.params.id)
+  if (!li) return res.status(404).json({error:'not found'})
+  stopLiveCapture(li.id)
+  liveAudioStore.delete(li.id)
+  saveLiveAudio()
+  broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
+  broadcast({ type:'waveforms:updated', waveforms:waveformsMeta() })
+  res.json({ok:true})
+})
+
+// Browser monitoring stream: ffmpeg ALSA → webm/opus chunked response
+app.get('/api/live-audio/inputs/:id/stream', (req,res) => {
+  const li = liveAudioStore.get(req.params.id)
+  if (!li) return res.status(404).json({error:'not found'})
+  res.setHeader('Content-Type','audio/webm')
+  res.setHeader('Transfer-Encoding','chunked')
+  res.setHeader('Cache-Control','no-cache')
+  const args = ['-f','alsa','-i',`plughw:${li.card},${li.device}`,'-ac','1','-ar','22050','-c:a','libopus','-b:a','32k','-f','webm','pipe:1']
+  const proc = spawn('ffmpeg', args, { stdio:['ignore','pipe','ignore'] })
+  proc.stdout.pipe(res)
+  req.on('close', () => proc.kill())
+  proc.on('error', () => res.end())
+})
+
 // ── Community share proxy ─────────────────────────────────────────────────────
 import https from 'https'
 const COMMUNITY_HOST = 'community.kinkcontrol.org'
@@ -3636,14 +4062,15 @@ app.post('/api/wifi/scan', async (req, res) => {
   try {
     await nmcli('dev wifi rescan').catch(() => {})
     await new Promise(r => setTimeout(r, 2000))
-    const out = await nmcli('-t -f ssid,signal,security,in-use dev wifi list')
+    const out = await nmcli('-t -f ssid,signal,security,in-use,freq dev wifi list')
     const seen = new Set()
     const networks = out.split('\n')
       .map(l => {
         const parts = l.split(':')
-        if (parts.length < 3) return null
-        const ssid = parts[0], signal = parseInt(parts[1]), security = parts[2], inUse = parts[3] === '*'
+        if (parts.length < 4) return null
+        const ssid = parts[0], signal = parseInt(parts[1]), security = parts[2], inUse = parts[3] === '*', freq = parseInt(parts[4]) || 0
         if (!ssid) return null
+        if (freq < 5000) return null  // 5GHz only — 2.4GHz interferes with Bluetooth on BCM4345C0
         if (seen.has(ssid)) return null
         seen.add(ssid)
         return { ssid, signal, security: security || 'Open', inUse }

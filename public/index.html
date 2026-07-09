@@ -54,6 +54,8 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 .btn-ghost:hover{background:#252525}
 .btn-danger{background:#450a0a;color:#fca5a5;border:1px solid #7f1d1d}
 .btn-danger:hover{background:#7f1d1d}
+.btn-warning{background:#451a00;color:#fb923c;border:1px solid #7c2d12}
+.btn-warning:hover{background:#7c2d12}
 .btn-sm{padding:4px 10px;font-size:12px}
 .btn-xs{padding:3px 8px;font-size:11px}
 
@@ -147,7 +149,7 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 .ch-block{margin-bottom:12px}
 .ch-block:last-child{margin-bottom:0}
 .ch-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px}
-.ch-lbl{font-size:10px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.6px}
+.ch-lbl{font-size:15px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.6px}
 .ch-num{font-size:20px;font-weight:700;color:#4fc3f7;font-variant-numeric:tabular-nums;line-height:1}
 .ch-slider{width:100%;accent-color:#4fc3f7;cursor:pointer;margin-bottom:5px}
 .qwf-strip{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:9px}
@@ -325,6 +327,10 @@ select.mci{cursor:pointer}
       <span class="side-icon"><img src="/icons/EoM.png" alt="EoM"></span>
       <span class="side-lbl">EoM</span>
     </button>
+    <button class="side-btn" id="nav-tremblr" style="display:none" onclick="showTab('tremblr',this)">
+      <span class="side-icon"><img src="/icons/tremblr.svg" style="width:28px;height:28px;vertical-align:middle"></span>
+      <span class="side-lbl">Tremblr</span>
+    </button>
     <button class="side-btn" id="nav-nimble" style="display:none" onclick="showTab('nimble',this)">
       <span class="side-icon"><img src="/icons/nimble.png" alt="Nimble"></span>
       <span class="side-lbl">Nimble</span>
@@ -380,6 +386,7 @@ select.mci{cursor:pointer}
     <button class="sub-btn" id="sub-groups-btn" onclick="showSub('groups',this)">Groups</button>
     <button class="sub-btn" id="sub-waveforms-btn" onclick="showSub('waveforms',this)">Waveforms</button>
     <button class="sub-btn" id="sub-bodymap-btn" onclick="showSub('bodymap',this)">Body Map</button>
+    <button class="sub-btn" id="sub-audioinput-btn" onclick="showSub('audioinput',this)">Audio Input</button>
   </div>
 
   <!-- Macros tab -->
@@ -577,6 +584,15 @@ select.mci{cursor:pointer}
       <div id="bodymap-root" style="height:100%;display:flex;flex-direction:column"></div>
     </div>
 
+    <div id="sub-audioinput" class="sub-pane">
+      <div class="sec-row" style="margin-bottom:14px">
+        <div class="sec-label">Audio Input</div>
+        <button class="btn btn-ghost btn-sm" onclick="scanAudioDevices()" id="scan-audio-btn">Scan for USB Devices</button>
+      </div>
+      <div id="audio-scan-results" style="margin-bottom:16px"></div>
+      <div id="audio-input-list"><div class="empty">No audio inputs configured</div></div>
+    </div>
+
   </div>
 
   <!-- EoM tab -->
@@ -586,6 +602,16 @@ select.mci{cursor:pointer}
         <div class="sec-label">Edge-o-Matic</div>
       </div>
       <div id="eom-cards"><div class="empty">No EoM devices — add one from Devices</div></div>
+    </div>
+  </div>
+
+  <!-- Tremblr tab -->
+  <div id="tab-tremblr" class="tab-pane">
+    <div class="scroll" style="padding:16px">
+      <div class="sec-row" style="margin-bottom:14px">
+        <div class="sec-label">Tremblr</div>
+      </div>
+      <div id="tremblr-cards"><div class="empty">No Tremblr devices — add one from Devices</div></div>
     </div>
   </div>
 
@@ -852,6 +878,20 @@ select.mci{cursor:pointer}
         </details>
       </div>
     </div>
+    <!-- Step: Tremblr -->
+    <div id="step-tremblr" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <button class="btn btn-ghost btn-xs" onclick="showTypeStep()">← Back</button>
+        <span style="font-size:13px;font-weight:600">〜 Tremblr — 315 MHz RF</span>
+      </div>
+      <div style="font-size:11px;color:#555;margin-bottom:12px">The CC1101 radio is connected directly to the Pi via SPI — no scan needed.</div>
+      <div style="margin-bottom:12px">
+        <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Display Name</label>
+        <input id="tremblr-name" type="text" placeholder="e.g. Tremblr 1" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+      </div>
+      <button class="btn btn-primary btn-sm" style="width:100%" onclick="addTremblrDevice()">Add Tremblr</button>
+    </div>
+
     <!-- Step 2: BLE scan (Coyote) -->
     <div id="step-ble" style="display:none">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
@@ -1026,16 +1066,47 @@ select.mci{cursor:pointer}
 
 <script>
 // ── State ────────────────────────────────────────────────────────────────────
-let ws, S = { devices:{}, waveforms:{builtin:[],custom:[]}, groups:[], role:'admin', authEnabled:false, deck:{ status:'disconnected', name:null } }
+let ws, S = { devices:{}, waveforms:{builtin:[],custom:[],live:[]}, groups:[], role:'admin', authEnabled:false, deck:{ status:'disconnected', name:null } }
 let scanPick = null
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
+let _wsAlive = false, _wsPingTimer = null
+
+function _wsSetBanner(connected) {
+  let b = document.getElementById('ws-banner')
+  if (!b) {
+    b = document.createElement('div')
+    b.id = 'ws-banner'
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#7f1d1d;color:#fca5a5;text-align:center;padding:6px 12px;font-size:13px;font-weight:600;display:none'
+    document.body.prepend(b)
+  }
+  b.textContent = '⚠ Disconnected — reconnecting…'
+  b.style.display = connected ? 'none' : 'block'
+}
+
 function connect() {
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   ws = new WebSocket(`${wsProto}//${location.host}`)
-  ws.onopen  = () => { lg('Connected to EdgeController'); setTimeout(initBandSelector, 100) }
-  ws.onclose = () => { lg('Disconnected — retrying…'); setTimeout(connect,2000) }
-  ws.onmessage = e => handle(JSON.parse(e.data))
+  ws.onopen = () => {
+    _wsAlive = true
+    _wsSetBanner(true)
+    lg('Connected to EdgeController')
+    setTimeout(initBandSelector, 100)
+    clearInterval(_wsPingTimer)
+    _wsPingTimer = setInterval(() => {
+      if (ws.readyState === 1) {
+        _wsAlive = false
+        ws.send(JSON.stringify({type:'ping'}))
+        setTimeout(() => { if (!_wsAlive) { ws.close(); } }, 5000)
+      }
+    }, 25000)
+  }
+  ws.onclose = () => { clearInterval(_wsPingTimer); _wsSetBanner(false); lg('Disconnected — retrying…'); setTimeout(connect, 2000) }
+  ws.onerror = () => { ws.close() }
+  ws.onmessage = e => {
+    _wsAlive = true
+    handle(JSON.parse(e.data))
+  }
 }
 function send(m){ if(ws?.readyState===1) ws.send(JSON.stringify(m)) }
 
@@ -1062,13 +1133,20 @@ function handle(m) {
     case 'device:tick':
       if(S.devices[m.id]){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused; bmTickPulse(m.id, m.paused) } break
     case 'device:status':
-      if(S.devices[m.id]){ S.devices[m.id].status=m.status; if(S.devices[m.id].type==='shelly') renderShellyCards() }
+      if(S.devices[m.id]){ S.devices[m.id].status=m.status; if(S.devices[m.id].type==='shelly') renderShellyCards(); if(m.status!=='connected'&&(S.devices[m.id].type==='coyote'||S.devices[m.id].type==='pawprints')) S.devices[m.id].battery=null }
       renderDevList(); renderCoyoteCards(); renderEomCards();
       if(S.devices[m.id]?.type==='nimble') renderNimbleCards();
       renderEstimCards(); renderPawPrintsCards(); if(!_hueDragging) renderHueCards(); break
-    case 'device:state':
+    case 'device:state': {
+      let _coyoteWfChanged = false, _changedChs = []
       if(S.devices[m.id]){
+        // Check waveform and intensity changes BEFORE overwriting state
+        _coyoteWfChanged = !!(m.channels && S.devices[m.id].type==='coyote' &&
+          ['A','B'].some(ch => m.channels[ch]?.waveform && m.channels[ch].waveform !== S.devices[m.id].channels?.[ch]?.waveform))
+        if(m.channels && S.devices[m.id].channels)
+          _changedChs = ['A','B'].filter(ch => m.channels[ch]?.intensity !== undefined && m.channels[ch].intensity !== S.devices[m.id].channels[ch]?.intensity)
         if(m.channels) S.devices[m.id].channels=m.channels
+        if(m.buttonControl!==undefined) S.devices[m.id].buttonControl=m.buttonControl
         if(m.components!==undefined) { S.devices[m.id].components=m.components; renderShellyCards() }
         if(m.motorSpeed!==undefined) S.devices[m.id].motorSpeed=m.motorSpeed
         if(m.mode!==undefined) S.devices[m.id].mode=m.mode
@@ -1083,11 +1161,13 @@ function handle(m) {
         if(m.nsNature!==undefined)   S.devices[m.id].nsNature=m.nsNature
         if(m.airIn!==undefined)      S.devices[m.id].airIn=m.airIn
         if(m.airOut!==undefined)     S.devices[m.id].airOut=m.airOut
+        // Tremblr state sync
+        if(m.speed!==undefined&&S.devices[m.id]?.type==='tremblr')   { S.devices[m.id].speed=m.speed; S.devices[m.id].running=m.running; S.devices[m.id].paused=m.paused; tremblrUpdateCard(m.id) }
         // Estim state sync
         if(m.feel!==undefined)     S.devices[m.id].feel=m.feel
         if(m.rate!==undefined)     S.devices[m.id].rate=m.rate
         if(m.powerMode!==undefined)S.devices[m.id].powerMode=m.powerMode
-        if(m.battery!==undefined)  S.devices[m.id].battery=m.battery
+        if(m.battery!==undefined){ S.devices[m.id].battery=m.battery; const col=batCol(m.battery); const batEl=document.getElementById('coy-bat-'+m.id); if(batEl){ batEl.innerHTML=batIcon(m.battery)+m.battery+'%'; batEl.style.color=col } const devBatEl=document.getElementById('dev-bat-'+m.id); if(devBatEl){ devBatEl.innerHTML=batIcon(m.battery)+' '+m.battery+'%'; devBatEl.style.color=col } }
         if(m.firmware!==undefined) S.devices[m.id].firmware=m.firmware
         if(m.joined!==undefined)   S.devices[m.id].joined=m.joined
         if(m.ticks!==undefined){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now() }
@@ -1095,9 +1175,15 @@ function handle(m) {
         if(S.devices[m.id]?.type==='estim') estimSyncUI(m.id, S.devices[m.id])
         if(m.channels) {
           for(const grp of S.groups||[]) {
-            const firstCh=grp.channels?.find(c=>c.deviceId===m.id)
-            if(firstCh) {
-              const newInt=m.channels[firstCh.channel]?.intensity
+            // Prefer the channel whose intensity changed; fall back to first match
+            let chosenCh = null
+            for(const gc of grp.channels||[]) {
+              if(gc.deviceId !== m.id) continue
+              if(_changedChs.includes(gc.channel)) { chosenCh = gc; break }
+              if(chosenCh === null) chosenCh = gc
+            }
+            if(chosenCh) {
+              const newInt=m.channels[chosenCh.channel]?.intensity
               if(newInt!==undefined) {
                 if(groupState[grp.id]) groupState[grp.id].intensity=newInt
                 const sl=document.getElementById('gsl-'+grp.id)
@@ -1110,7 +1196,25 @@ function handle(m) {
         }
       }
       syncAudioToDeviceState(m)
-      renderCoyoteCards(); renderEomCards(); break
+      if(S.devices[m.id]?.type==='coyote' && m.channels) {
+        // Always update sliders in-place for instant feedback
+        for(const ch of ['A','B']) {
+          const v=m.channels[ch]?.intensity
+          if(v===undefined) continue
+          const sl=document.getElementById('sl-'+m.id+ch)
+          const cv=document.getElementById('cv-'+m.id+ch)
+          if(sl) sl.value=v
+          if(cv) cv.textContent=v
+        }
+        // Only do full rebuild if waveform changed or card doesn't exist yet
+        if(_coyoteWfChanged || !document.getElementById('cc-'+m.id)) {
+          try { renderCoyoteCards() } catch(e) {}
+        }
+      } else {
+        try { renderCoyoteCards() } catch(e) {}
+      }
+      renderEomCards(); break
+    }
     case 'eom:readings':
       if(S.devices[m.id]){ S.devices[m.id].readings=m.readings; eomUpdateReadings(m.id,m.readings) } break
     case 'eom:config':
@@ -1138,8 +1242,27 @@ function handle(m) {
       if (_prog) _prog.textContent = `Uploading… ${m.pct}%`
       break
     }
+    case 'live:audio:level': {
+      const _spec = _liveSpectra[m.id]
+      if (_spec) {
+        if (!_spec.levelBuf) _spec.levelBuf = []
+        _spec.levelBuf.push(m.level || 0)
+        if (_spec.levelBuf.length > 300) _spec.levelBuf.shift()
+        _drawLaiOutputCanvas(m.id)
+      }
+      break
+    }
+    case 'live:audio:spectrum': {
+      _liveSpectrumData[m.id] = m.bands
+      const _sid = (_liveSpectra[m.id]||{}).safeId
+      if (_sid) _drawLaiCanvas(m.id)
+      break
+    }
+    case 'live:audio:updated':
+      if(m.inputs) S.waveforms.live=m.inputs
+      renderAudioInputTab(); renderCoyoteCards(); break
     case 'waveforms:updated':
-      S.waveforms=m.waveforms; renderWfTab(); renderAudioList(); renderCoyoteCards()
+      S.waveforms=m.waveforms; renderWfTab(); renderAudioList(); renderAudioInputTab(); renderCoyoteCards()
       // Re-fetch full waveforms to get audio frame data (stripped from WS broadcast)
       fetch('/api/waveforms').then(r=>r.json()).then(wfs=>{ if(wfs?.builtin){ S.waveforms=wfs; renderWfTab(); renderAudioList(); renderCoyoteCards() } }).catch(()=>{})
       break
@@ -2302,17 +2425,20 @@ function renderAll() {
   const hasPawPrints = Object.values(S.devices).some(d=>d.type==='pawprints')
   const hasHue     = Object.values(S.devices).some(d=>d.type==='hue')
   const hasShelly  = Object.values(S.devices).some(d=>d.type==='shelly')
-  document.getElementById('nav-coyote').style.display = hasCoyote ? '' : 'none'
+  const hasTremblr = Object.values(S.devices).some(d=>d.type==='tremblr')
+  document.getElementById('nav-coyote').style.display  = hasCoyote  ? '' : 'none'
   document.getElementById('nav-eom').style.display    = hasEom    ? '' : 'none'
   document.getElementById('nav-nimble').style.display = hasNimble ? '' : 'none'
   document.getElementById('nav-estim').style.display  = hasEstim  ? '' : 'none'
   document.getElementById('nav-pawprints').style.display = hasPawPrints ? '' : 'none'
   document.getElementById('nav-camera').style.display = hasCamera ? '' : 'none'
   document.getElementById('nav-hue').style.display    = hasHue    ? '' : 'none'
-  document.getElementById('nav-shelly').style.display = hasShelly  ? '' : 'none'
-  document.getElementById('nav-config').style.display = S.role==='admin' ? '' : 'none'
+  document.getElementById('nav-shelly').style.display  = hasShelly  ? '' : 'none'
+  document.getElementById('nav-tremblr').style.display = hasTremblr ? '' : 'none'
+  document.getElementById('nav-config').style.display  = S.role==='admin' ? '' : 'none'
   renderDevList()
   renderCoyoteCards()
+  renderTremblrCards()
   renderEomCards()
   renderNimbleCards()
   renderEstimCards()
@@ -2320,6 +2446,7 @@ function renderAll() {
   renderGroups()
   renderWfTab()
   renderAudioList()
+  renderAudioInputTab()
   renderCameraCards()
   renderHueCards()
   renderShellyCards()
@@ -2372,7 +2499,14 @@ function eomUpdateDenials(id, count) {
 }
 
 // ── Devices tab ───────────────────────────────────────────────────────────────
-const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾', camera:'📷', hue:'<img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle">', shelly:'<img src="/shelly-logo.svg" style="width:44px;height:18px;vertical-align:middle">' }
+const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾', camera:'📷', tremblr:'〜', hue:'<img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle">', shelly:'<img src="/shelly-logo.svg" style="width:44px;height:18px;vertical-align:middle">' }
+
+function batCol(pct) { return pct==null?'#555':pct>50?'#4ade80':pct>20?'#fbbf24':'#f87171' }
+function batIcon(pct) {
+  const col=batCol(pct)
+  const fillW=pct!=null?Math.max(0,Math.round(pct/100*10)):0
+  return `<svg width="16" height="10" viewBox="0 0 16 10" style="vertical-align:middle"><rect x="0.5" y="1" width="12" height="8" rx="1.5" stroke="${col}" fill="none" stroke-width="1.2"/><rect x="12.5" y="3.5" width="2" height="3" rx="0.5" fill="${col}"/><rect x="1.5" y="2.5" width="${fillW}" height="5" rx="0.5" fill="${col}"/></svg>`
+}
 
 function renderDevList() {
   const el=document.getElementById('dev-list')
@@ -2387,7 +2521,7 @@ function renderDevList() {
       <div class="dev-row-icon">${typeIcon[d.type]||'?'}</div>
       <div class="dev-row-info">
         <div class="dev-row-name">${d.name}</div>
-        <div class="dev-row-sub">${d.type} · ${d.type==='eom'?(d.ip+':'+d.port):d.type==='camera'?d.ip:(d.bleName||d.mac||d.ttyPath||'')}</div>
+        <div class="dev-row-sub">${d.type} · ${d.type==='eom'?(d.ip+':'+d.port):d.type==='camera'?d.ip:(d.bleName||d.mac||d.ttyPath||'')}${(d.type==='coyote'||d.type==='pawprints')&&d.battery!=null?` · <span id="dev-bat-${d.id}" style="color:${batCol(d.battery)}">${batIcon(d.battery)} ${d.battery}%</span>`:`<span id="dev-bat-${d.id}"></span>`}</div>
       </div>
       <div class="status-dot ${dotClass}"></div>
       ${d.type==='camera'
@@ -2436,6 +2570,108 @@ function renderDeckCard() {
 }
 
 // ── Nimble cards ──────────────────────────────────────────────────────────────
+function renderTremblrCards() {
+  const el=document.getElementById('tremblr-cards'); if(!el) return
+  const devs=Object.values(S.devices).filter(d=>d.type==='tremblr')
+  if(!devs.length){ el.innerHTML='<div class="empty">No Tremblr devices — add one from Devices</div>'; return }
+  el.innerHTML=''; devs.forEach(d=>el.appendChild(buildTremblrCard(d)))
+}
+
+function buildTremblrCard(dev) {
+  const id=dev.id, conn=dev.status==='connected'
+  const sc={'connected':'sp-connected','connecting':'sp-connecting','error':'sp-error'}[dev.status]||'sp-disconnected'
+  const speed=dev.speed??0, running=dev.running??false, paused=dev.paused??false
+  const el=document.createElement('div'); el.className='coyote-card'; el.id='tc-'+id
+  el.innerHTML=`
+    <div class="ch-header">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="status-pill ${sc}"></span>
+        <span style="font-weight:600;font-size:13px">${dev.name}</span>
+        <span style="font-size:10px;color:#555">315 MHz RF</span>
+      </div>
+    </div>
+    ${conn ? `
+    <div style="padding:10px 0 4px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">
+        ${running
+          ? `<button id="tc-run-${id}" class="btn btn-warning btn-sm" style="min-width:90px"
+               onclick="send({type:'tremblr:pause',deviceId:'${id}'})">⏸ Pause</button>`
+          : paused
+            ? `<button id="tc-run-${id}" class="btn btn-primary btn-sm" style="min-width:90px"
+                 onclick="send({type:'tremblr:resume',deviceId:'${id}'})">▶ Resume</button>`
+            : `<button id="tc-run-${id}" class="btn btn-primary btn-sm" style="min-width:90px"
+                 onclick="send({type:'tremblr:start',deviceId:'${id}'})">▶ Start</button>`
+        }
+        <span style="font-size:10px;color:#555" id="tc-state-${id}">${running?'running':paused?'paused':'stopped'}</span>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Speed</span>
+          <span style="font-size:12px;color:#4fc3f7;font-weight:700" id="tc-speed-${id}">${speed}/15</span>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button class="btn" style="flex:1;padding:14px 8px;background:#1e2a1e;border:1px solid #2a442a;color:#6fcf6f;font-size:15px;font-weight:600"
+            onclick="send({type:'tremblr:slower',deviceId:'${id}'})">－ Slower</button>
+          <button class="btn" style="flex:1;padding:14px 8px;background:#1e2a1e;border:1px solid #2a442a;color:#6fcf6f;font-size:15px;font-weight:600"
+            onclick="send({type:'tremblr:faster',deviceId:'${id}'})">＋ Faster</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" style="flex:1;background:#1a1a2e;border:1px solid #2a2a4a;color:#818cf8;user-select:none"
+          onmousedown="tremblrAirStart('air_in','${id}')" onmouseup="tremblrAirStop('${id}')" onmouseleave="tremblrAirStop('${id}')"
+          ontouchstart="tremblrAirStart('air_in','${id}');event.preventDefault()" ontouchend="tremblrAirStop('${id}')">▲ Air In</button>
+        <button class="btn btn-sm" style="flex:1;background:#2e1a1a;border:1px solid #4a2a2a;color:#f87171;user-select:none"
+          onmousedown="tremblrAirStart('air_out','${id}')" onmouseup="tremblrAirStop('${id}')" onmouseleave="tremblrAirStop('${id}')"
+          ontouchstart="tremblrAirStart('air_out','${id}');event.preventDefault()" ontouchend="tremblrAirStop('${id}')">▼ Air Out</button>
+      </div>
+    </div>` : ''}
+  `
+  return el
+}
+
+function tremblrAirStart(dir, id) { send({type:'tremblr:'+dir+'_start', deviceId:id}) }
+function tremblrAirStop(id) {
+  send({type:'tremblr:air_in_stop',  deviceId:id})
+  send({type:'tremblr:air_out_stop', deviceId:id})
+}
+
+function tremblrUpdateCard(id) {
+  const dev=S.devices[id]; if(!dev) return
+  const running=dev.running, paused=dev.paused
+  const runBtn=document.getElementById('tc-run-'+id)
+  const stateEl=document.getElementById('tc-state-'+id)
+  const speedEl=document.getElementById('tc-speed-'+id)
+  if(runBtn) {
+    if(running) {
+      runBtn.className='btn btn-warning btn-sm'; runBtn.style.minWidth='90px'
+      runBtn.textContent='⏸ Pause'
+      runBtn.onclick=()=>send({type:'tremblr:pause',deviceId:id})
+    } else if(paused) {
+      runBtn.className='btn btn-primary btn-sm'; runBtn.style.minWidth='90px'
+      runBtn.textContent='▶ Resume'
+      runBtn.onclick=()=>send({type:'tremblr:resume',deviceId:id})
+    } else {
+      runBtn.className='btn btn-primary btn-sm'; runBtn.style.minWidth='90px'
+      runBtn.textContent='▶ Start'
+      runBtn.onclick=()=>send({type:'tremblr:start',deviceId:id})
+    }
+  }
+  if(stateEl) stateEl.textContent=running?'running':paused?'paused':'stopped'
+  if(speedEl) speedEl.textContent=(dev.speed??0)+'/15'
+}
+
+async function addTremblrDevice() {
+  const name=document.getElementById('tremblr-name').value.trim()||'Tremblr'
+  try {
+    const r=await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type:'tremblr',name})})
+    const data=await r.json()
+    if(!r.ok) throw new Error(data.error)
+    closeScan()
+    showTab('tremblr', document.getElementById('nav-tremblr'))
+  } catch(e){ alert('Add failed: '+e.message) }
+}
+
 function renderNimbleCards() {
   const el=document.getElementById('nimble-cards'); if(!el) return
   const devs=Object.values(S.devices).filter(d=>d.type==='nimble')
@@ -3441,6 +3677,8 @@ function buildCoyoteCard(dev) {
   const conn=dev.status==='connected'
   const chA=dev.channels?.A||{intensity:0,waveform:'pulse'}
   const chB=dev.channels?.B||{intensity:0,waveform:'pulse'}
+  const btnCtrl=dev.buttonControl||{A:false,B:false}
+  const batPct = dev.battery != null ? dev.battery : null
   el.innerHTML=`
     <div class="coy-header">
       <div>
@@ -3448,6 +3686,7 @@ function buildCoyoteCard(dev) {
         <div class="coy-ble">${dev.bleName||dev.mac}</div>
       </div>
       <div class="coy-right">
+        <span id="coy-bat-${dev.id}" style="font-size:12px;font-weight:600;color:${batCol(batPct)};display:flex;align-items:center;gap:3px">${batPct != null ? batIcon(batPct)+batPct+'%' : ''}</span>
         <span class="status-pill ${sc}">${dev.status}</span>
         ${conn
           ?`<button class="btn btn-ghost btn-xs" onclick="discDev('${dev.id}')">Disconnect</button>`
@@ -3455,21 +3694,22 @@ function buildCoyoteCard(dev) {
         <button class="btn btn-ghost btn-xs" onclick="stopDev('${dev.id}')">Stop</button>
       </div>
     </div>
-    ${buildCh(dev.id,'A',chA)}
-    ${buildCh(dev.id,'B',chB)}
+    ${buildCh(dev.id,'A',chA,btnCtrl.A)}
+    ${buildCh(dev.id,'B',chB,btnCtrl.B)}
   `
   return el
 }
 
-function buildCh(devId,ch,c) {
+function buildCh(devId,ch,c,btnEnabled=false) {
   const groupName = getUsedChannels().get(devId+':'+ch)
   if(groupName) return `
-    <div class="ch-block" style="opacity:.5;pointer-events:none">
+    <div class="ch-block" style="opacity:.6;pointer-events:none">
       <div class="ch-top">
         <span class="ch-lbl">Channel ${ch}</span>
+        <span class="ch-num" id="cv-${devId}${ch}">${c.intensity}</span>
         <span style="font-size:10px;color:#4fc3f7;background:#0d2a38;border:1px solid #1a4a60;border-radius:4px;padding:2px 7px">In group: ${groupName}</span>
       </div>
-      <input class="ch-slider" type="range" min="0" max="200" value="${c.intensity}" disabled style="opacity:.4"/>
+      <input class="ch-slider" id="sl-${devId}${ch}" type="range" min="0" max="200" value="${c.intensity}" disabled style="opacity:.5"/>
     </div>
   `
   const wfName=getWfName(c.waveform)
@@ -3484,6 +3724,11 @@ function buildCh(devId,ch,c) {
       <div class="ch-top">
         <span class="ch-lbl">Channel ${ch}</span>
         <span class="ch-num" id="cv-${devId}${ch}">${c.intensity}</span>
+        <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:${btnEnabled?'#4ade80':'#555'};cursor:pointer;margin-left:auto;white-space:nowrap">
+          <input type="checkbox" ${btnEnabled?'checked':''} onchange="setCoyoteButtonControl('${devId}','${ch}',this.checked)"
+            style="accent-color:#4ade80;width:13px;height:13px;cursor:pointer">
+          Device buttons
+        </label>
       </div>
       <div style="display:flex;gap:12px;margin-bottom:6px;align-items:center">
         <div style="flex:1;min-width:0;display:flex;align-items:center">
@@ -3607,8 +3852,7 @@ function startGrpViz(grpId) {
       if(isBuiltin){
         amp=builtinFrameAmp(wfId,rawTick,speed)
       } else {
-        const tick=((rawTick%fLen)+fLen)%fLen
-        const fi=Math.floor(tick*speed)%fLen
+        const fi=((Math.floor(rawTick*speed)%fLen)+fLen)%fLen
         const f=wf.frames[fi]
         amp=typeof f==='number'?f:(f?.segs?.[0]?.a??0)
       }
@@ -3675,8 +3919,7 @@ function startChViz(devId, ch) {
       if(isBuiltin){
         amp=builtinFrameAmp(wfId,rawTick,speed)
       } else {
-        const tick=((rawTick%fLen)+fLen)%fLen
-        const fi=Math.floor(tick*speed)%fLen
+        const fi=((Math.floor(rawTick*speed)%fLen)+fLen)%fLen
         const f=wf.frames[fi]
         amp=typeof f==='number'?f:(f?.segs?.[0]?.a??0)
       }
@@ -3692,6 +3935,7 @@ function startChViz(devId, ch) {
   state.rafId=requestAnimationFrame(draw)
 }
 function chSet(devId,ch,v){ send({type:'device:setChannel',deviceId:devId,channel:ch,params:{intensity:parseInt(v)}}) }
+function setCoyoteButtonControl(devId,ch,enabled){ send({type:'coyote:setButtonControl',deviceId:devId,channel:ch,enabled}) }
 function chPlayback(devId,ch,action){
   send({type:'device:playback',deviceId:devId,channel:ch,action})
   propagateSyncPlayback('ch:'+devId+':'+ch, action)
@@ -3901,7 +4145,7 @@ async function toggleGrpAudio(grpId) {
   _grpAudio[grpId]={audio,syncInterval}
   if(btn){ btn.textContent='🔊'; btn.style.color='#4fc3f7' }
 }
-function getWfName(id){ return [...(S.waveforms.builtin||[]),...(S.waveforms.custom||[])].find(w=>w.id===id)?.name||id }
+function getWfName(id){ return [...(S.waveforms.builtin||[]),...(S.waveforms.custom||[]),...(S.waveforms.live||[])].find(w=>w.id===id)?.name||(id?.startsWith('live-input:')?'🎤 '+id.slice('live-input:'.length):id) }
 
 function toggleDrop(id) {
   document.querySelectorAll('.wf-drop.open').forEach(d=>{ if(d.id!==id) d.classList.remove('open') })
@@ -4186,7 +4430,9 @@ function buildGroupCard(grp) {
     if(w.type!=='audio')
       customs+=`<div class="wf-opt${st.waveform===w.id?' sel':''}" onclick="pickGroupWf('${grp.id}','${w.id}')">${w.name}</div>`
   const audios=(S.waveforms.custom||[]).filter(w=>w.type==='audio')
-  const audioItems=audios.length?`<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${audios.map(w=>`<div class="wf-opt${st.waveform===w.id?' sel':''}" onclick="pickGroupWf('${grp.id}','${w.id}')">🎵 ${w.name}</div>`).join('')}</div>`:''
+  const lives=(S.waveforms.live||[])
+  const audioItems=(audios.length?`<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${audios.map(w=>`<div class="wf-opt${st.waveform===w.id?' sel':''}" onclick="pickGroupWf('${grp.id}','${w.id}')">🎵 ${w.name}</div>`).join('')}</div>`:'')
+    +(lives.length?`<div class="wf-drop-sect"><div class="wf-drop-lbl">Live Input</div>${lives.map(w=>`<div class="wf-opt${st.waveform===w.id?' sel':''}" onclick="pickGroupWf('${grp.id}','${w.id}')">🎤 ${w.name}${w.active?'':' (off)'}</div>`).join('')}</div>`:'')
   const qwfStrip=(S.waveforms.builtin||[]).map(w=>`
     <button class="qwf-btn${w.id===st.waveform?' qwf-active':''}" data-wfid="${w.id}" onclick="quickGroupWf('${grp.id}','${w.id}')" title="${w.name}">
       <span class="qwf-icon">${w.icon||'?'}</span><span class="qwf-lbl">${w.name}</span>
@@ -4248,9 +4494,12 @@ function buildGroupCard(grp) {
 
 function buildAudioDropItems(devId,ch,activeWfId){
   const audios=(S.waveforms.custom||[]).filter(w=>w.type==='audio')
-  if(!audios.length) return ''
-  const items=audios.map(w=>`<div class="wf-opt${w.id===activeWfId?' sel':''}" onclick="pickWf('${devId}','${ch}','${w.id}')"><span>🎵</span><span>${w.name}</span></div>`).join('')
-  return `<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${items}</div>`
+  const lives=(S.waveforms.live||[])
+  if(!audios.length && !lives.length) return ''
+  const audioItems=audios.map(w=>`<div class="wf-opt${w.id===activeWfId?' sel':''}" onclick="pickWf('${devId}','${ch}','${w.id}')"><span>🎵</span><span>${w.name}</span></div>`).join('')
+  const liveItems=lives.map(w=>`<div class="wf-opt${w.id===activeWfId?' sel':''}" onclick="pickWf('${devId}','${ch}','${w.id}')"><span>🎤</span><span>${w.name}${w.active?'':' (off)'}</span></div>`).join('')
+  return (audios.length?`<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${audioItems}</div>`:'')
+       + (lives.length?`<div class="wf-drop-sect"><div class="wf-drop-lbl">Live Input</div>${liveItems}</div>`:'')
 }
 
 function groupSetIntensity(grpId,v){
@@ -4975,6 +5224,259 @@ async function saveGroup(editGroupId){
   lg((isEdit?'Group "':'Group "')+name+(isEdit?'" updated':'" created'))
 }
 
+// ── Live Audio Inputs ─────────────────────────────────────────────────────────
+const _liveSpectra = {}      // rawId → { safeId, lowCut, highCut, bandDrag }
+const _liveSpectrumData = {} // rawId → Float32Array of normalised band magnitudes
+
+function renderAudioInputTab() {
+  const el = document.getElementById('audio-input-list'); if (!el) return
+  const inputs = S.waveforms.live || []
+  if (!inputs.length) { el.innerHTML = '<div class="empty">No audio inputs configured — scan for USB devices above</div>'; return }
+  el.innerHTML = ''
+  inputs.forEach(w => {
+    const rawId = w.id.replace('live-input:','')
+    const safeId = rawId.replace(/[^a-z0-9]/gi,'_')
+    const lowCut = w.lowCut || 20, highCut = w.highCut || 8000
+    const card = document.createElement('div')
+    card.style.cssText = 'background:#111;border:1px solid #1e1e1e;border-radius:9px;padding:14px;margin-bottom:12px'
+    card.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:16px">🎤</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:#e0e0e0">${w.name}</div>
+          <div style="font-size:10px;color:#555">${rawId}</div>
+        </div>
+        <span style="font-size:11px;font-weight:600;color:${w.active?'#4ade80':'#555'}">${w.active?'● Running':'○ Stopped'}</span>
+        ${w.active
+          ? `<button class="btn btn-ghost btn-xs" onclick="stopLiveInput('${rawId}')">Stop</button>
+             <button class="btn btn-ghost btn-xs" id="lai-mon-btn-${safeId}" onclick="toggleLiveMonitor('${rawId}','${safeId}')">🔇 Monitor</button>`
+          : `<button class="btn btn-primary btn-xs" onclick="startLiveInput('${rawId}')">Start</button>`}
+        <button class="btn btn-danger btn-xs" onclick="deleteLiveInput('${rawId}')">×</button>
+      </div>
+      <canvas id="lai-spec-${safeId}" height="120" style="width:100%;display:block;border-radius:5px;margin-bottom:8px;cursor:default"></canvas>
+      <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-xs" onclick="laiPreset('${rawId}',20,20000)">Full</button>
+        <button class="btn btn-ghost btn-xs" onclick="laiPreset('${rawId}',20,200)">Sub Bass</button>
+        <button class="btn btn-ghost btn-xs" onclick="laiPreset('${rawId}',60,500)">Bass</button>
+        <button class="btn btn-ghost btn-xs" onclick="laiPreset('${rawId}',200,4000)">Mids</button>
+        <button class="btn btn-ghost btn-xs" onclick="laiPreset('${rawId}',3000,12000)">Highs</button>
+        <button class="btn btn-ghost btn-xs" onclick="laiPreset('${rawId}',8000,20000)">Air</button>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:9px;color:#555;margin-bottom:4px">Coyote output</div>
+        <canvas id="lai-out-${safeId}" height="160" style="width:100%;display:block;border-radius:4px;background:#080808"></canvas>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#888;margin-bottom:6px">
+        Gain
+        <input type="range" min="0" max="4" step="0.05" value="${w.gain??1}" style="flex:1;accent-color:#4fc3f7"
+          oninput="this.nextElementSibling.textContent=Math.round(this.value*100)+'%'"
+          onchange="updateLiveInput('${rawId}',{gain:parseFloat(this.value)})"/>
+        <span style="font-size:11px;color:#4fc3f7;min-width:52px;text-align:right">${Math.round((w.gain??1)*100)}%</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#888">
+        Base freq
+        <input type="range" min="10" max="100" value="${w.baseFreq||25}" style="flex:1;accent-color:#a78bfa"
+          oninput="this.nextElementSibling.textContent=this.value+' Hz'"
+          onchange="updateLiveInput('${rawId}',{baseFreq:parseInt(this.value)})"/>
+        <span style="font-size:11px;color:#a78bfa;min-width:52px;text-align:right">${w.baseFreq||25} Hz</span>
+      </label>
+      <audio id="lai-audio-${safeId}" style="display:none"></audio>`
+    el.appendChild(card)
+    // Ensure spec state exists (preserves lowCut/highCut across re-renders)
+    if (!_liveSpectra[rawId]) _liveSpectra[rawId] = { safeId, lowCut, highCut, bandDrag: null }
+    else { _liveSpectra[rawId].safeId = safeId; _liveSpectra[rawId].lowCut = lowCut; _liveSpectra[rawId].highCut = highCut }
+    setTimeout(() => { _drawLaiCanvas(rawId); _laiInitBandDrag(rawId, safeId) }, 10)
+  })
+}
+
+// Unified canvas draw: source spectrum bars + band filter handles
+function _drawLaiCanvas(rawId) {
+  const spec = _liveSpectra[rawId]; if (!spec) return
+  const cv = document.getElementById('lai-spec-' + spec.safeId); if (!cv) return
+  const W = cv.offsetWidth || cv.clientWidth || 500; if (W < 10) return
+  const H = 120, LABEL_H = 16
+  if (cv.width !== W) cv.width = W
+  if (cv.height !== H) cv.height = H
+  const ctx = cv.getContext('2d')
+  ctx.fillStyle = '#0a0a0a'; ctx.fillRect(0, 0, W, H)
+  const bands = _liveSpectrumData[rawId]
+  if (bands && bands.length) {
+    const nb = bands.length, bw = Math.ceil(W/nb)+1
+    for (let b = 0; b < nb; b++) {
+      const x = (b/nb)*W, bh = bands[b]*(H-LABEL_H-4)
+      if (bh < 1) continue
+      const g = ctx.createLinearGradient(0, H-LABEL_H-bh, 0, H-LABEL_H)
+      g.addColorStop(0,'#1e4976'); g.addColorStop(1,'#0d2035')
+      ctx.fillStyle = g; ctx.fillRect(x, H-LABEL_H-bh, bw, bh)
+    }
+  } else {
+    ctx.fillStyle='#222'; ctx.font='11px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle'
+    ctx.fillText('Start input to see live spectrum', W/2, (H-LABEL_H)/2)
+  }
+  const { lowCut, highCut } = spec
+  const lx = freqToX(lowCut, W), hx = freqToX(highCut, W)
+  ctx.fillStyle='rgba(0,0,0,0.72)'; ctx.fillRect(0,0,lx,H-LABEL_H); ctx.fillRect(hx,0,W-hx,H-LABEL_H)
+  const grd=ctx.createLinearGradient(lx,0,hx,0)
+  grd.addColorStop(0,'rgba(52,152,219,0.08)'); grd.addColorStop(.5,'rgba(52,152,219,0.22)'); grd.addColorStop(1,'rgba(52,152,219,0.08)')
+  ctx.fillStyle=grd; ctx.fillRect(lx,0,hx-lx,H-LABEL_H)
+  ctx.strokeStyle='#3498db'; ctx.lineWidth=2
+  ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx,H-LABEL_H); ctx.moveTo(hx,0); ctx.lineTo(hx,H-LABEL_H); ctx.stroke()
+  ctx.fillStyle='#3498db'
+  const hH=14, mid=(H-LABEL_H)/2
+  ctx.beginPath(); ctx.moveTo(lx-9,mid-hH); ctx.lineTo(lx+9,mid); ctx.lineTo(lx-9,mid+hH); ctx.closePath(); ctx.fill()
+  ctx.beginPath(); ctx.moveTo(hx+9,mid-hH); ctx.lineTo(hx-9,mid); ctx.lineTo(hx+9,mid+hH); ctx.closePath(); ctx.fill()
+  ctx.font='bold 10px monospace'; ctx.textBaseline='middle'
+  ctx.fillStyle='#5dade2'; ctx.textAlign='left'; ctx.fillText(fmtHz(lowCut),Math.min(lx+14,W-50),mid*0.4)
+  ctx.textAlign='right'; ctx.fillText(fmtHz(highCut),Math.max(hx-14,50),mid*0.4)
+  const TICKS=[20,50,100,200,500,1000,2000,5000,10000,20000]
+  ctx.font='9px monospace'; ctx.textAlign='center'; ctx.textBaseline='top'
+  TICKS.forEach(f => {
+    const x=freqToX(f,W), inside=x>=lx&&x<=hx
+    ctx.strokeStyle=inside?'#2a4a6a':'#1a1a1a'; ctx.lineWidth=1
+    ctx.beginPath(); ctx.moveTo(x,H-LABEL_H); ctx.lineTo(x,H-LABEL_H+4); ctx.stroke()
+    ctx.fillStyle=inside?'#3498db':'#333'
+    ctx.fillText(f>=1000?(f/1000)+'k':''+f, x, H-LABEL_H+5)
+  })
+}
+
+function _laiInitBandDrag(rawId, safeId) {
+  const cv = document.getElementById('lai-spec-' + safeId); if (!cv) return
+  const getHit = cx => {
+    const spec = _liveSpectra[rawId]; if (!spec) return null
+    const r = cv.getBoundingClientRect(), W = cv.width || cv.offsetWidth
+    const x = (cx - r.left) * (W / (r.width||1))
+    const lx = freqToX(spec.lowCut, W), hx = freqToX(spec.highCut, W)
+    return Math.abs(x-lx)<18 ? 'low' : Math.abs(x-hx)<18 ? 'high' : null
+  }
+  const doMove = cx => {
+    const spec = _liveSpectra[rawId]; if (!spec || !spec.bandDrag) return
+    const r = cv.getBoundingClientRect(), W = cv.width || cv.offsetWidth
+    const x = (cx - r.left) * (W / (r.width||1))
+    const freq = xToFreq(x, W)
+    if (spec.bandDrag==='low') spec.lowCut = Math.min(Math.max(20,freq), spec.highCut-1)
+    else spec.highCut = Math.max(Math.min(20000,freq), spec.lowCut+1)
+    _drawLaiCanvas(rawId)
+  }
+  const doEnd = () => {
+    const spec = _liveSpectra[rawId]; if (!spec || !spec.bandDrag) return
+    const drag = spec.bandDrag; spec.bandDrag = null
+    updateLiveInput(rawId, drag==='low' ? {lowCut:spec.lowCut} : {highCut:spec.highCut})
+  }
+  cv.onmousedown = e => { const h=getHit(e.clientX), spec=_liveSpectra[rawId]; if(h&&spec){spec.bandDrag=h;e.preventDefault()} }
+  cv.onmousemove = e => { cv.style.cursor=getHit(e.clientX)?'ew-resize':'default'; doMove(e.clientX) }
+  cv.onmouseup = () => doEnd()
+  cv.onmouseleave = () => doEnd()
+  cv.ontouchstart = e => { e.preventDefault(); const h=getHit(e.touches[0].clientX), spec=_liveSpectra[rawId]; if(h&&spec)spec.bandDrag=h }
+  cv.ontouchmove = e => { e.preventDefault(); doMove(e.touches[0].clientX) }
+  cv.ontouchend = () => doEnd()
+}
+
+function laiPreset(rawId, lo, hi) {
+  const spec = _liveSpectra[rawId]
+  if (spec) { spec.lowCut = lo; spec.highCut = hi; _drawLaiCanvas(rawId) }
+  updateLiveInput(rawId, {lowCut: lo, highCut: hi})
+}
+
+function _drawLaiOutputCanvas(rawId) {
+  const spec = _liveSpectra[rawId]; if (!spec) return
+  const cv = document.getElementById('lai-out-' + spec.safeId); if (!cv) return
+  const buf = spec.levelBuf || []; if (!buf.length) return
+  const W = cv.offsetWidth || cv.clientWidth || 400, H = cv.height || 80
+  if (cv.width !== W) cv.width = W
+  const ctx = cv.getContext('2d')
+  ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
+  const n = Math.min(buf.length, W), step = W / Math.max(n, 1)
+  const mid = H / 2
+  // sqrt scaling so quiet signals are still visible
+  const scale = v => Math.pow(Math.max(0, v) / 100, 0.7) * (mid - 3)
+  // Filled mirrored waveform
+  const grd = ctx.createLinearGradient(0, 0, 0, H)
+  grd.addColorStop(0,   'rgba(167,139,250,0.15)')
+  grd.addColorStop(0.5, 'rgba(167,139,250,0.55)')
+  grd.addColorStop(1,   'rgba(167,139,250,0.15)')
+  ctx.beginPath()
+  ctx.moveTo(0, mid)
+  for (let i = 0; i < n; i++) {
+    const v = scale(buf[buf.length - n + i])
+    ctx.lineTo(i * step, mid - v)
+  }
+  for (let i = n - 1; i >= 0; i--) {
+    const v = scale(buf[buf.length - n + i])
+    ctx.lineTo(i * step, mid + v)
+  }
+  ctx.closePath(); ctx.fillStyle = grd; ctx.fill()
+  // Top edge line
+  const curLvl = buf[buf.length - 1]
+  const lineClr = curLvl > 70 ? '#f87171' : curLvl > 40 ? '#fbbf24' : '#a78bfa'
+  ctx.beginPath()
+  for (let i = 0; i < n; i++) {
+    const v = scale(buf[buf.length - n + i])
+    i === 0 ? ctx.moveTo(0, mid - v) : ctx.lineTo(i * step, mid - v)
+  }
+  ctx.strokeStyle = lineClr; ctx.lineWidth = 2; ctx.stroke()
+  // Bottom edge line (mirror)
+  ctx.beginPath()
+  for (let i = 0; i < n; i++) {
+    const v = scale(buf[buf.length - n + i])
+    i === 0 ? ctx.moveTo(0, mid + v) : ctx.lineTo(i * step, mid + v)
+  }
+  ctx.strokeStyle = lineClr; ctx.lineWidth = 2; ctx.stroke()
+  // Centre line
+  ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke()
+  // Current level readout
+  ctx.fillStyle = lineClr; ctx.font = '9px monospace'
+  ctx.textAlign = 'right'; ctx.textBaseline = 'top'
+  ctx.fillText(curLvl + '%', W - 3, 2)
+}
+
+function toggleLiveMonitor(rawId, safeId) {
+  const audio = document.getElementById('lai-audio-'+safeId)
+  const btn   = document.getElementById('lai-mon-btn-'+safeId)
+  if (!audio) return
+  if (audio.src && !audio.paused) {
+    audio.pause(); audio.src = ''
+    if(btn) btn.textContent='🔇 Monitor'
+  } else {
+    audio.src = '/api/live-audio/inputs/'+encodeURIComponent(rawId)+'/stream'
+    audio.play().catch(()=>{})
+    if(btn) btn.textContent='🔊 Monitor'
+  }
+}
+
+async function scanAudioDevices() {
+  const btn = document.getElementById('scan-audio-btn')
+  const el  = document.getElementById('audio-scan-results')
+  btn.textContent = 'Scanning…'; btn.disabled = true
+  try {
+    const devs = await fetch('/api/live-audio/scan').then(r=>r.json())
+    if (!devs.length) { el.innerHTML='<div style="font-size:12px;color:#555;padding:4px 0">No USB audio capture devices found</div>'; return }
+    const existingIds = new Set((S.waveforms.live||[]).map(w=>w.id.replace('live-input:','')))
+    el.innerHTML = devs.map(d => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#111;border:1px solid #1e1e1e;border-radius:7px;margin-bottom:6px">
+        <span style="font-size:13px">🎤</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;color:#ccc">${d.name}</div>
+          <div style="font-size:10px;color:#555">${d.id}</div>
+        </div>
+        ${existingIds.has(d.id)
+          ? `<span style="font-size:10px;color:#4ade80">Added</span>`
+          : `<button class="btn btn-primary btn-xs" onclick="addLiveInput(${JSON.stringify(d).replace(/"/g,'&quot;')},this)">+ Add</button>`}
+      </div>`).join('')
+  } catch(e) { el.innerHTML=`<div style="font-size:12px;color:#f87171">Scan failed: ${e.message}</div>` }
+  finally { btn.textContent='Scan for USB Devices'; btn.disabled=false }
+}
+
+async function addLiveInput(d, btn) {
+  btn.disabled=true; btn.textContent='Adding…'
+  await fetch('/api/live-audio/inputs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})
+  scanAudioDevices()
+}
+async function startLiveInput(id) { await fetch('/api/live-audio/inputs/'+encodeURIComponent(id)+'/start',{method:'POST'}) }
+async function stopLiveInput(id)  { await fetch('/api/live-audio/inputs/'+encodeURIComponent(id)+'/stop',{method:'POST'}) }
+async function deleteLiveInput(id) { if(!confirm('Remove this audio input?')) return; await fetch('/api/live-audio/inputs/'+encodeURIComponent(id),{method:'DELETE'}) }
+async function updateLiveInput(id, body) { await fetch('/api/live-audio/inputs/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}) }
+
 // ── Audio Files ───────────────────────────────────────────────────────────────
 function renderAudioList(){
   const el=document.getElementById('audio-list'); if(!el) return
@@ -5608,7 +6110,8 @@ async function wifiResetSetup() {
 
 // ── Scan ──────────────────────────────────────────────────────────────────────
 const DEVICE_TYPES = [
-  {type:'coyote', icon:'⚡', label:'Coyote',      sub:'BLE e-stim',  step:'ble'},
+  {type:'coyote',  icon:'⚡', label:'Coyote',      sub:'BLE e-stim',       step:'ble'},
+  {type:'tremblr', icon:'〜', label:'Tremblr',     sub:'315 MHz RF',       step:'tremblr'},
   {type:'eom',    icon:'〰', label:'EoM',          sub:'WiFi',        step:'wifi'},
   {type:'nimble', icon:'◎', label:'NimbleStroker', sub:'USB or WiFi', step:'nimble'},
   {type:'estim',  icon:'⚡', label:'E-Stim 2B',    sub:'USB serial',  step:'usb'},
@@ -5634,7 +6137,7 @@ function openScan(){
   })
 }
 function selectDeviceType(dt){
-  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr').forEach(el=>el.style.display='none')
   if(dt.step==='camera'){
     document.getElementById('step-camera').style.display='block'
     document.getElementById('cam-name').value=''
@@ -5662,6 +6165,9 @@ function selectDeviceType(dt){
     document.getElementById('hue-add-form').style.display='block'
     document.getElementById('hue-pairing-status').style.display='none'
     document.getElementById('hue-discover-results').style.display='none'
+  } else if(dt.step==='tremblr') {
+    document.getElementById('step-tremblr').style.display='block'
+    document.getElementById('tremblr-name').value=''
   } else if(dt.step==='nimble') {
     document.getElementById('step-nimble').style.display='block'
   } else {
@@ -5674,7 +6180,7 @@ function selectDeviceType(dt){
   }
 }
 function showTypeStep(){
-  document.querySelectorAll('#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr').forEach(el=>el.style.display='none')
   document.getElementById('step-type').style.display='block'
 }
 function showNimbleStep(){

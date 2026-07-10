@@ -12,14 +12,15 @@ const WAVEFORMS_PATH = join(__dir, 'waveforms.json')
 const AUDIO_DIR   = join(__dir, 'audio')
 
 // ─── Device type display config for home page bottom row ─────────────────────
-const DEVICE_TYPE_ORDER = ['eom', 'nimble', 'coyote', 'estim', 'hue', 'shelly']
+const DEVICE_TYPE_ORDER = ['eom', 'nimble', 'coyote', 'estim', 'hue', 'shelly', 'tremblr']
 const DEVICE_DECK_CONFIG = {
-  eom:    { label: 'EoM',    color: 'teal',   page: 'eom',    deviceKey: 'eom'    },
-  nimble: { label: 'Nimble', color: 'purple', page: 'nimble', deviceKey: 'nimble' },
-  coyote: { label: 'Coyote', color: 'orange', page: 'coyote', deviceKey: 'coyote' },
-  estim:  { label: 'Estim',  color: 'blue',   page: 'estim',  deviceKey: 'estim'  },
-  hue:    { label: 'Hue',    color: 'teal',   page: 'hue',    deviceKey: 'hue'    },
-  shelly: { label: 'I/O',    color: 'amber',  page: 'shelly', deviceKey: 'shelly' },
+  eom:     { label: 'EoM',     color: 'teal',   page: 'eom',     deviceKey: 'eom'     },
+  nimble:  { label: 'Nimble',  color: 'purple', page: 'nimble',  deviceKey: 'nimble'  },
+  coyote:  { label: 'Coyote',  color: 'orange', page: 'coyote',  deviceKey: 'coyote'  },
+  estim:   { label: 'Estim',   color: 'blue',   page: 'estim',   deviceKey: 'estim'   },
+  hue:     { label: 'Hue',     color: 'teal',   page: 'hue',     deviceKey: 'hue'     },
+  shelly:  { label: 'I/O',     color: 'amber',  page: 'shelly',  deviceKey: 'shelly'  },
+  tremblr: { label: 'Tremblr', color: 'teal',   page: 'tremblr', tremblrIcon: true },
 }
 
 // ─── Built-in waveform definitions (matches server BUILTIN_WAVEFORMS) ────────
@@ -112,6 +113,12 @@ async function loadDeviceIcons() {
   } catch(e) {
     console.warn('[deck] icon missing: shelly.svg')
   }
+  try {
+    deviceIcons.tremblr = await loadImage(join(__dir, 'public', 'icons', 'tremblr.svg'))
+    console.log('[deck] icon loaded: tremblr.svg')
+  } catch(e) {
+    console.warn('[deck] icon missing: tremblr.svg')
+  }
 }
 
 // ─── Colour palette ───────────────────────────────────────────────────────
@@ -189,6 +196,61 @@ function drawHouseIcon(ctx, cx, cy, size) {
   ctx.strokeRect(x + w*0.67, y + h*0.52, w*0.18, w*0.18)
 }
 
+// ─── Draw plus / minus icons for step buttons ────────────────────────────
+function drawPlusIcon(ctx, cx, cy, size, color) {
+  const h = size * 0.12, w = size * 0.55
+  ctx.fillStyle = color
+  ctx.fillRect(cx - w/2, cy - h/2, w, h)  // horizontal bar
+  ctx.fillRect(cx - h/2, cy - w/2, h, w)  // vertical bar
+}
+function drawMinusIcon(ctx, cx, cy, size, color) {
+  const h = size * 0.12, w = size * 0.55
+  ctx.fillStyle = color
+  ctx.fillRect(cx - w/2, cy - h/2, w, h)  // horizontal bar only
+}
+
+// ─── Draw Tremblr rabbit-skull icon ──────────────────────────────────────
+function drawTremblrIcon(ctx, cx, cy, size) {
+  const s = size / 100  // scale factor (SVG viewBox is 100×115)
+  const ox = cx - 50 * s, oy = cy - 57 * s  // origin offset
+
+  ctx.save()
+  ctx.translate(ox, oy)
+  ctx.scale(s, s)
+
+  const c = '#4fc3f7', dark = '#0d1117'
+
+  // Left ear
+  ctx.beginPath(); ctx.roundRect(14, 0, 24, 58, 12)
+  ctx.fillStyle = c; ctx.fill()
+
+  // Right ear
+  ctx.beginPath(); ctx.roundRect(62, 0, 24, 58, 12)
+  ctx.fillStyle = c; ctx.fill()
+
+  // Skull
+  ctx.beginPath(); ctx.arc(50, 76, 35, 0, Math.PI * 2)
+  ctx.fillStyle = c; ctx.fill()
+
+  // Left eye socket
+  ctx.beginPath(); ctx.arc(37, 71, 11, 0, Math.PI * 2)
+  ctx.fillStyle = dark; ctx.fill()
+
+  // Right eye socket
+  ctx.beginPath(); ctx.arc(63, 71, 11, 0, Math.PI * 2)
+  ctx.fillStyle = dark; ctx.fill()
+
+  // Left tooth
+  ctx.beginPath(); ctx.roundRect(40, 98, 8, 11, 1)
+  ctx.fillStyle = dark; ctx.fill()
+
+  // Right tooth
+  ctx.beginPath(); ctx.roundRect(52, 98, 8, 11, 1)
+  ctx.fillStyle = dark; ctx.fill()
+
+  ctx.restore()
+}
+
 // ─── Draw stop sign octagon ──────────────────────────────────────────────
 function drawStopSign(ctx, cx, cy, r) {
   const sides = 8
@@ -256,6 +318,15 @@ function drawGroupIcon(ctx, cx, cy) {
   })
 }
 
+// Speed steps: 0.25× → 100× (fine at low end, coarser at high end)
+const COYOTE_SPEED_STEPS = [
+  0.25, 0.33, 0.5, 0.67, 0.75,
+  1.0, 1.25, 1.5, 2.0, 2.5,
+  3.0, 4.0, 5.0, 6.0, 8.0,
+  10.0, 12.0, 15.0, 20.0, 25.0,
+  30.0, 40.0, 50.0, 75.0, 100.0,
+]
+
 // ─── Draw a 200×100 Coyote channel LCD segment ───────────────────────────
 function renderCoyoteChannelLcd({ label, color, intensity, waveform, connected, selected, grouped, speed, speedMode }) {
   const W = 200, H = 100
@@ -282,7 +353,7 @@ function renderCoyoteChannelLcd({ label, color, intensity, waveform, connected, 
   }
 
   // Channel label (top left)
-  ctx.font = 'bold 11px monospace'; ctx.fillStyle = color
+  ctx.font = 'bold 14px monospace'; ctx.fillStyle = color
   ctx.textAlign = 'left'; ctx.textBaseline = 'top'
   ctx.fillText(label, 8, 6)
 
@@ -305,9 +376,9 @@ function renderCoyoteChannelLcd({ label, color, intensity, waveform, connected, 
   const startA = Math.PI * 0.75, sweep = Math.PI * 1.5
 
   if (speedMode) {
-    // Speed arc: log2 scale 0.25→4 maps to 0→100%
+    // Speed arc: log scale 0.25→100 maps to 0→100%
     const spd = speed ?? 1
-    const pct = Math.min(1, Math.max(0, (Math.log2(spd) + 2) / 4))
+    const pct = Math.min(1, Math.max(0, (Math.log2(spd) + 2) / Math.log2(400)))
     const arcColor = '#16a085'
 
     ctx.beginPath(); ctx.arc(cx, cy, r, startA, startA + sweep)
@@ -395,6 +466,35 @@ function renderWaveformKey(item, active) {
     ctx.save(); ctx.shadowColor='#3498db'; ctx.shadowBlur=12
     ctx.strokeStyle='#3498dbaa'; ctx.lineWidth=3
     roundRect(ctx, 1, 1, S-2, S-2, 10); ctx.stroke(); ctx.restore()
+  }
+
+  if (item.type === 'live-audio') {
+    const ch = item.channel || 'mix'
+    const accent = ch === 'L' ? '#4fc3f7' : ch === 'R' ? '#a78bfa' : '#fb923c'
+    // Mic icon
+    ctx.font = '22px sans-serif'
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillStyle = active ? accent : '#888'
+    ctx.fillText('🎤', S/2, S*0.24)
+    // Channel badge
+    ctx.font = 'bold 11px sans-serif'
+    ctx.fillStyle = active ? accent : '#666'
+    ctx.fillText(ch.toUpperCase(), S/2, S*0.44)
+    // Name — split at space nearest midpoint
+    const name = item.name.replace(/\s*—\s*(L|R|Mix)\s*$/i, '').trim()
+    let line1 = name, line2 = ''
+    const mid2 = Math.floor(name.length / 2)
+    const sp2 = name.lastIndexOf(' ', mid2) > 0 ? name.lastIndexOf(' ', mid2) : name.indexOf(' ', mid2)
+    if (sp2 > 0) { line1 = name.slice(0, sp2); line2 = name.slice(sp2 + 1) }
+    else if (name.length > 10) { line1 = name.slice(0, 9) + '-'; line2 = name.slice(9) }
+    if (line1.length > 11) line1 = line1.slice(0, 10) + '…'
+    if (line2.length > 11) line2 = line2.slice(0, 10) + '…'
+    ctx.font = 'bold 11px sans-serif'
+    ctx.fillStyle = active ? '#fff' : '#bbb'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(line1, S/2, S*0.62)
+    if (line2) ctx.fillText(line2, S/2, S*0.78)
+    return rgba(canvas)
   }
 
   if (item.type === 'audio') {
@@ -485,7 +585,7 @@ function renderWaveformKey(item, active) {
 }
 
 // ─── Draw a single 120×120 button key ────────────────────────────────────
-function renderKey({ icon='', label='', color='dim', active=false, value=null, valueColor='#fff', valueLarge=false, sublabel=null, deviceKey=null, stopSign=false, houseIcon=false, singleIcon=false, groupIcon=false, bg=null }) {
+function renderKey({ icon='', label='', color='dim', active=false, value=null, valueColor='#fff', valueLarge=false, sublabel=null, deviceKey=null, stopSign=false, houseIcon=false, singleIcon=false, groupIcon=false, tremblrIcon=false, plusIcon=false, minusIcon=false, bg=null }) {
   const S = 120
   const canvas = createCanvas(S, S)
   const ctx = canvas.getContext('2d')
@@ -530,6 +630,13 @@ function renderKey({ icon='', label='', color='dim', active=false, value=null, v
   if (groupIcon) {
     drawGroupIcon(ctx, S/2, label ? S/2 - 10 : S/2)
   }
+  // Tremblr rabbit skull
+  if (tremblrIcon) {
+    drawTremblrIcon(ctx, S/2, label ? S/2 - 10 : S/2, label ? 56 : 66)
+  }
+  // Plus / minus step icons
+  if (plusIcon)  drawPlusIcon (ctx, S/2, label ? S*0.38 : S/2, S, accent)
+  if (minusIcon) drawMinusIcon(ctx, S/2, label ? S*0.38 : S/2, S, accent)
   // Device logo PNG — scale to fit, centred, leaving room for label
   if (img) {
     const pad = 12
@@ -990,7 +1097,7 @@ function renderCoyoteGroupModeLcd(groups, devices, viewOffset, selectedIdx = nul
     // Group name label (top left)
     const pageLbl = groups.length > 4 ? ` ${groupIdx+1}/${groups.length}` : ''
     const nameStr = group.name + pageLbl
-    ctx.font = `bold ${nameStr.length > 9 ? 9 : 11}px monospace`
+    ctx.font = `bold ${nameStr.length > 9 ? 11 : 14}px monospace`
     ctx.textAlign = 'left'; ctx.textBaseline = 'top'
     ctx.fillStyle = isSelected ? '#fff' : color
     ctx.fillText(nameStr.length > 11 ? nameStr.slice(0,10)+'…' : nameStr, ox + 8, 6)
@@ -1005,7 +1112,7 @@ function renderCoyoteGroupModeLcd(groups, devices, viewOffset, selectedIdx = nul
     const startA = Math.PI * 0.75, sweep = Math.PI * 1.5
 
     if (isSpeedMode) {
-      const pct = Math.min(1, Math.max(0, (Math.log2(speed) + 2) / 4))
+      const pct = Math.min(1, Math.max(0, (Math.log2(speed) + 2) / Math.log2(400)))
       const arcColor = '#16a085'
       ctx.beginPath(); ctx.arc(acx, acy, r, startA, startA + sweep)
       ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.stroke()
@@ -1432,7 +1539,7 @@ function getHomeKeys(devices, devicePageOffset) {
     const type = visibleTypes[i]
     if (!type) return { icon:'', label:'', color:'dim' }
     const cfg = DEVICE_DECK_CONFIG[type]
-    return { deviceKey: cfg.deviceKey || null, icon: cfg.icon || '', label: cfg.label, color: cfg.color }
+    return { deviceKey: cfg.deviceKey || null, tremblrIcon: cfg.tremblrIcon || false, icon: cfg.icon || '', label: cfg.label, color: cfg.color }
   })
 
   return [
@@ -1481,6 +1588,70 @@ function getNimbleKeys(dev, paused=false, tick=0) {
     runKey,
     { icon:'',        label:'',        color:'dim'  },
   ]
+}
+
+function getTremblrKeys(dev) {
+  const running = dev?.running || false
+  const paused  = dev?.paused  || false
+  const speed   = dev?.speed   ?? 0
+  const conn    = dev?.status === 'connected'
+
+  const ctrlKey = running
+    ? { icon:'⏸', label:'Pause',  color:'amber', active:true  }
+    : paused
+      ? { icon:'▶', label:'Resume', color:'green', active:false }
+      : { icon:'▶', label:'Start',  color:'green', active:false }
+
+  return [
+    { houseIcon:true, label:'Home',    color:'blue' },
+    { icon:'',        label:'',        color:'dim'  },
+    { icon:'',        label:'',        color:'dim'  },
+    conn ? ctrlKey : { icon:'', label:'', color:'dim' },
+    { minusIcon:true, label:'Slower',  color: conn ? 'teal'   : 'dim' },
+    { plusIcon:true,  label:'Faster',  color: conn ? 'teal'   : 'dim', value: conn ? speed : null, valueColor:'#4fc3f7' },
+    { icon:'▲',       label:'Air In',  color: conn ? 'purple' : 'dim' },
+    { icon:'▼',       label:'Air Out', color: conn ? 'red'    : 'dim' },
+  ]
+}
+
+function renderTremblrLcd(dev) {
+  const W = 800, H = 100
+  const canvas = createCanvas(W, H)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, W, H)
+
+  const conn    = dev?.status === 'connected'
+  const running = dev?.running || false
+  const paused  = dev?.paused  || false
+  const speed   = dev?.speed   ?? 0
+  const name    = dev?.name    || 'Tremblr'
+
+  const stateText  = running ? 'RUNNING' : paused ? 'PAUSED' : 'STOPPED'
+  const stateColor = running ? '#27ae60' : paused ? '#f0c040' : '#555'
+
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+  ctx.font = 'bold 13px monospace'; ctx.fillStyle = '#444'
+  ctx.fillText('TREMBLR', 20, 20)
+
+  ctx.font = 'bold 22px monospace'; ctx.fillStyle = '#e0e0e0'
+  ctx.fillText(name, 20, 58)
+
+  ctx.textAlign = 'right'
+  ctx.font = 'bold 13px monospace'; ctx.fillStyle = stateColor
+  ctx.fillText(stateText, W - 20, 28)
+
+  ctx.font = 'bold 32px monospace'; ctx.fillStyle = '#4fc3f7'
+  ctx.fillText(conn ? `${speed}/15` : '—', W - 20, 68)
+
+  ctx.font = '11px monospace'; ctx.fillStyle = '#333'
+  ctx.textAlign = 'right'
+  ctx.fillText('SPEED', W - 20, 90)
+
+  // Divider line
+  ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(W - 220, 10); ctx.lineTo(W - 220, 90); ctx.stroke()
+
+  return rgba(canvas)
 }
 
 // ─── E-Stim 2B mode definitions ──────────────────────────────────────────
@@ -1630,6 +1801,7 @@ export class StreamDeckController {
     this.page = 'home'
     this._waveOffset = 0      // index of first visible waveform item
     this._coyoteItems = []    // all waveform/audio items
+    this._liveItems = []      // live audio input items, merged into _coyoteItems
     this._selectedChannel = null  // null | 0-3 (single) or 0-1 (group) — LCD-touch for waveform assign
     this._lastSetWaveformId = null  // last explicitly selected waveform id
     this._groupMode = false        // true = encoders broadcast to all devices per group
@@ -1703,7 +1875,8 @@ export class StreamDeckController {
       case 'macro':   this._macroKey(idx);   break
       case 'hue':     this._hueKey(idx);     break
       case 'shelly':  this._shellyKey(idx);  break
-      case 'nimble':  this._nimbleKey(idx);  break
+      case 'nimble':   this._nimbleKey(idx);   break
+      case 'tremblr':  this._tremblrKey(idx);  break
       default: if (idx === 0) this.setPage('home'); break
     }
   }
@@ -1913,7 +2086,8 @@ export class StreamDeckController {
   }
 
   _onKeyUp(idx) {
-    if (this.page === 'nimble') this._nimbleKeyUp(idx)
+    if (this.page === 'nimble')  this._nimbleKeyUp(idx)
+    if (this.page === 'tremblr') this._tremblrKeyUp(idx)
   }
 
   _nimbleKey(idx) {
@@ -1955,6 +2129,29 @@ export class StreamDeckController {
       nimble.setAir({ airIn: false, airOut: false })
       this._renderKeys()
     }
+  }
+
+  _tremblrKey(idx) {
+    const dev = this._findDev('tremblr')
+    if (idx === 0) { this.setPage('home'); return }
+    if (!dev) return
+    if (idx === 3) {
+      if (dev.running) dev.pause()
+      else if (dev.paused) dev.resume()
+      else dev.start()
+      this._renderKeys(); return
+    }
+    if (idx === 4) { dev.slower();        this._renderKeys(); return }
+    if (idx === 5) { dev.faster();        this._renderKeys(); return }
+    if (idx === 6) { dev.air_in_start();  this._renderKeys(); return }
+    if (idx === 7) { dev.air_out_start(); this._renderKeys(); return }
+  }
+
+  _tremblrKeyUp(idx) {
+    const dev = this._findDev('tremblr')
+    if (!dev) return
+    if (idx === 6) { dev.air_in_stop();  this._renderKeys() }
+    if (idx === 7) { dev.air_out_stop(); this._renderKeys() }
   }
 
   // ── Encoder rotation ───────────────────────────────────────────
@@ -2009,7 +2206,7 @@ export class StreamDeckController {
 
       if (this._encoderSpeedMode[idx]) {
         // Speed mode: step through speed values for all channels in the group
-        const STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0]
+        const STEPS = COYOTE_SPEED_STEPS
         let curSpeed = 1
         for (const {deviceId, channel} of allChs) {
           const dev = this.devices[deviceId]
@@ -2043,7 +2240,7 @@ export class StreamDeckController {
     const { dev } = this._coyoteChannelFor(idx)
     if (!dev) return
     if (this._encoderSpeedMode[idx]) {
-      const STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0]
+      const STEPS = COYOTE_SPEED_STEPS
       const cur = dev.channels?.[ch]?.speed ?? 1
       const si = STEPS.reduce((best, v, i) => Math.abs(v - cur) < Math.abs(STEPS[best] - cur) ? i : best, 0)
       const ni = Math.max(0, Math.min(STEPS.length - 1, si + ticks))
@@ -2311,9 +2508,22 @@ export class StreamDeckController {
   // Reload waveform/audio items from disk — called when server broadcasts waveforms:updated
   reloadWaveforms() {
     const prev = this._coyoteItems.length
-    this._coyoteItems = loadCoyoteItems()
+    this._coyoteItems = [...(this._liveItems || []), ...loadCoyoteItems()]
     console.log(`[deck] waveforms reloaded: ${prev} → ${this._coyoteItems.length} items`)
-    // Clamp offset in case items were deleted
+    if (this._waveOffset >= this._coyoteItems.length) this._waveOffset = Math.max(0, this._coyoteItems.length - 1)
+    if (this.page === 'coyote') this._renderKeys().catch(()=>{})
+  }
+
+  // Update live audio inputs — called when server broadcasts live:audio:updated
+  updateLiveInputs(liveInputs) {
+    this._liveItems = (liveInputs || []).map(w => ({
+      id: w.id,
+      name: w.name,
+      type: 'live-audio',
+      channel: w.channel || 'mix'
+    }))
+    this._coyoteItems = [...this._liveItems, ...loadCoyoteItems()]
+    console.log(`[deck] live inputs: ${this._liveItems.length} → total items: ${this._coyoteItems.length}`)
     if (this._waveOffset >= this._coyoteItems.length) this._waveOffset = Math.max(0, this._coyoteItems.length - 1)
     if (this.page === 'coyote') this._renderKeys().catch(()=>{})
   }
@@ -2327,7 +2537,7 @@ export class StreamDeckController {
     if (page === 'hue') {
       this._hueSceneOffset = 0
     } else if (page === 'coyote') {
-      this._coyoteItems = loadCoyoteItems()
+      this._coyoteItems = [...(this._liveItems || []), ...loadCoyoteItems()]
     } else {
       this._encoderSpeedMode = [false, false, false, false]
     }
@@ -2487,9 +2697,10 @@ export class StreamDeckController {
     }
 
     let keys
-    if (this.page === 'home')        keys = getHomeKeys(this.devices, this._devicePageOffset)
-    else if (this.page === 'eom')   keys = getEomKeys(this._findDev('eom'))
-    else if (this.page === 'nimble') keys = getNimbleKeys(this._findDev('nimble'), this._nimblePaused, this._tick)
+    if (this.page === 'home')          keys = getHomeKeys(this.devices, this._devicePageOffset)
+    else if (this.page === 'eom')      keys = getEomKeys(this._findDev('eom'))
+    else if (this.page === 'nimble')   keys = getNimbleKeys(this._findDev('nimble'), this._nimblePaused, this._tick)
+    else if (this.page === 'tremblr')  keys = getTremblrKeys(this._findDev('tremblr'))
     else {
       keys = Array(8).fill({ icon:'', label:'', color:'dim' })
       keys[0] = { houseIcon:true, label:'Home', color:'blue' }
@@ -2601,7 +2812,8 @@ export class StreamDeckController {
       let buf
       if (this.page === 'home')      buf = renderHomeLcd(this.devices, this._devicePageOffset)
       else if (this.page === 'eom')    buf = renderEomLcd(this._findDev('eom'))
-      else if (this.page === 'nimble') buf = renderNimbleLcd(this._findDev('nimble'))
+      else if (this.page === 'nimble')  buf = renderNimbleLcd(this._findDev('nimble'))
+      else if (this.page === 'tremblr') buf = renderTremblrLcd(this._findDev('tremblr'))
       else {
         const W=800, H=100, c=createCanvas(W,H)
         c.getContext('2d').fillStyle='#060606'; c.getContext('2d').fillRect(0,0,W,H)

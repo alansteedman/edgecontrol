@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 115">
+  <!-- Left ear -->
+  <rect x="14" y="0" width="24" height="58" rx="12" fill="#4fc3f7"/>
+  <!-- Right ear -->
+  <rect x="62" y="0" width="24" height="58" rx="12" fill="#4fc3f7"/>
+  <!-- Skull -->
+  <circle cx="50" cy="76" r="35" fill="#4fc3f7"/>
+  <!-- Left eye socket -->
+  <circle cx="37" cy="71" r="11" fill="#0d1117"/>
+  <!-- Right eye socket -->
+  <circle cx="63" cy="71" r="11" fill="#0d1117"/>
+  <!-- Left tooth -->
+  <rect x="40" y="98" width="8" height="11" rx="1" fill="#0d1117"/>
+  <!-- Right tooth -->
+  <rect x="52" y="98" width="8" height="11" rx="1" fill="#0d1117"/>
+</svg>

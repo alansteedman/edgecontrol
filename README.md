@@ -23,6 +23,7 @@ A self-hosted BLE and USB device controller that runs on a Raspberry Pi 5. Provi
 | IP Camera | Video | Network |
 | Philips Hue | Smart lighting | Network (local bridge) |
 | Shelly Gen 3/4 | Relay / dimmer | Network (WiFi) + BLE provisioning |
+| Tremblr | Vibrator | RF 315MHz (CC1101) |
 
 ## Macro Blocks
 
@@ -165,6 +166,7 @@ mpremote connect /dev/cu.usbserial-XXX reset
 
 ## Versions
 
+- **v2.1.0** — Live audio input monitoring: ALSA capture via ffmpeg, each physical device splits into independent L, R, and Mix logical channels with separate band-pass filter, gain, base frequency and spectrum analyser; low-latency monitoring via WebSocket binary PCM streaming to browser (Web Audio API scheduling, ~100ms latency, replaces HTTP stream which had a 15-second buffering delay); live waveform visualisation in channel and group canvases when a live input is selected as the waveform source; Stream Deck: live audio channels appear as selectable waveforms in the coyote waveform picker, pinned to the top of the list and auto-synced when channels are added or removed; Stream Deck: animated level waveform rendered on the button LCD at 2fps so you can see audio is active at a glance; Tremblr RF device: CC1101 315MHz transmitter, RCSwitch protocol, two-queue Python daemon, start/pause/resume, Stream Deck page
 - **v2.0.9** — ILI9341 touchscreen UI for Pi: network status screen (WiFi SSID, IP address, Cloudflare tunnel status), WiFi setup flow (scan → SSID list → password entry → confirm → connect), touch calibration tool, 180° display rotation support, systemd service for boot-time autostart; XPT2046 touch controller with 12-sample noise rejection and debounce
 - **v2.0.8** — NimbleBridge ESP32 WiFi adapter: local sine-wave oscillation on ESP32 (eliminates WiFi jitter), 12-byte TCP control packet protocol, auto-force scaling (force = 100 + 0.08 × speed_hz × depth), standalone web UI served from ESP32 (no Pi needed), network scan to discover bridge, WPA2 requirement fix for MicroPython v1.28.0, WiFi power-saving disabled for consistent latency; Pi UI: Add Device WiFi Bridge flow with scan/manual IP entry
 - **v2.0.7** — NimbleStroker full control: stroke oscillation (speed/depth/nurture/nature), air in/out, Stream Deck+ page with knobs controlling all four parameters, arc dial LCD strip, momentary air buttons, Run/Stop toggle with flash-on-pause, E-Stop wired to system stop; macro palette reorganised into device sections (Nimble, Coyote, E-Stim); new macro blocks: Nimble Start/Stop/Ramp, E-Stim Ramp (with A/B/Both channel selector), E-Stim SET now includes mode/waveform selection

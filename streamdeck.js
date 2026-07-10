@@ -1878,9 +1878,8 @@ export class StreamDeckController {
     this._timer = setInterval(() => {
       this._tick++
       this._refreshLcd()
-      if (this._nimblePaused || (this.page === 'coyote' && this._hasVisibleLiveKeys())) {
-        this._renderKeys().catch(()=>{})
-      }
+      if (this._nimblePaused) this._renderKeys().catch(()=>{})
+      else if (this.page === 'coyote' && this._hasVisibleLiveKeys()) this._refreshLiveKeys().catch(()=>{})
     }, 500)
 
     return true
@@ -2563,6 +2562,17 @@ export class StreamDeckController {
       if (this._coyoteItems[this._waveOffset + i]?.type === 'live-audio') return true
     }
     return false
+  }
+
+  async _refreshLiveKeys() {
+    if (!this.deck || this.page !== 'coyote') return
+    for (let i = 0; i < 4; i++) {
+      const item = this._coyoteItems[this._waveOffset + i]
+      if (item?.type !== 'live-audio') continue
+      const levelBuf = this._liveLevels.get(item.id.slice('live-input:'.length))
+      const active = item.id === this._lastSetWaveformId
+      await this.deck.fillKeyBuffer(4 + i, renderWaveformKey(item, active, levelBuf), { format:'rgba' })
+    }
   }
 
   // ── Page navigation ────────────────────────────────────────────

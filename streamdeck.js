@@ -449,7 +449,7 @@ function renderCoyoteChannelLcd({ label, color, intensity, waveform, connected, 
 }
 
 // ─── Draw waveform bar-chart key (120×120) ───────────────────────────────
-function renderWaveformKey(item, active) {
+function renderWaveformKey(item, active, levelBuf) {
   const S = 120
   const canvas = createCanvas(S, S)
   const ctx = canvas.getContext('2d')
@@ -471,29 +471,48 @@ function renderWaveformKey(item, active) {
   if (item.type === 'live-audio') {
     const ch = item.channel || 'mix'
     const accent = ch === 'L' ? '#4fc3f7' : ch === 'R' ? '#a78bfa' : '#fb923c'
-    // Mic icon
-    ctx.font = '22px sans-serif'
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.fillStyle = active ? accent : '#888'
-    ctx.fillText('🎤', S/2, S*0.24)
-    // Channel badge
-    ctx.font = 'bold 11px sans-serif'
-    ctx.fillStyle = active ? accent : '#666'
-    ctx.fillText(ch.toUpperCase(), S/2, S*0.44)
-    // Name — split at space nearest midpoint
+    const rv=parseInt(accent.slice(1,3),16), gv=parseInt(accent.slice(3,5),16), bv=parseInt(accent.slice(5,7),16)
+    const buf = levelBuf && levelBuf.length > 1 ? levelBuf : null
+
+    // Full-height waveform as background
+    if (buf) {
+      const mid = S / 2, n = Math.min(buf.length, S), step = S / Math.max(n, 1)
+      const scale = v => Math.pow(Math.max(0, v) / 100, 0.7) * (mid - 6)
+      const grd = ctx.createLinearGradient(0, 0, 0, S)
+      grd.addColorStop(0,   `rgba(${rv},${gv},${bv},0.08)`)
+      grd.addColorStop(0.5, `rgba(${rv},${gv},${bv},0.45)`)
+      grd.addColorStop(1,   `rgba(${rv},${gv},${bv},0.08)`)
+      ctx.beginPath(); ctx.moveTo(0, mid)
+      for (let i = 0; i < n; i++) ctx.lineTo(i * step, mid - scale(buf[buf.length - n + i]))
+      for (let i = n-1; i >= 0; i--) ctx.lineTo(i * step, mid + scale(buf[buf.length - n + i]))
+      ctx.closePath(); ctx.fillStyle = grd; ctx.fill()
+      ctx.strokeStyle = `rgba(${rv},${gv},${bv},0.85)`; ctx.lineWidth = 1.5
+      ctx.beginPath()
+      for (let i = 0; i < n; i++) ctx.lineTo(i * step, mid - scale(buf[buf.length - n + i]))
+      ctx.stroke()
+    } else {
+      // No data yet — flat line
+      ctx.strokeStyle = `rgba(${rv},${gv},${bv},0.25)`; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(8, S/2); ctx.lineTo(S-8, S/2); ctx.stroke()
+    }
+
+    // "LIVE" badge top-left
+    ctx.font = 'bold 9px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'
+    ctx.fillStyle = `rgba(${rv},${gv},${bv},0.9)`
+    ctx.fillText('LIVE', 6, 6)
+
+    // Channel top-right
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top'
+    ctx.fillStyle = accent
+    ctx.fillText(ch === 'mix' ? 'MIX' : ch.toUpperCase(), S - 6, 4)
+
+    // Device name at bottom
     const name = item.name.replace(/\s*—\s*(L|R|Mix)\s*$/i, '').trim()
-    let line1 = name, line2 = ''
-    const mid2 = Math.floor(name.length / 2)
-    const sp2 = name.lastIndexOf(' ', mid2) > 0 ? name.lastIndexOf(' ', mid2) : name.indexOf(' ', mid2)
-    if (sp2 > 0) { line1 = name.slice(0, sp2); line2 = name.slice(sp2 + 1) }
-    else if (name.length > 10) { line1 = name.slice(0, 9) + '-'; line2 = name.slice(9) }
-    if (line1.length > 11) line1 = line1.slice(0, 10) + '…'
-    if (line2.length > 11) line2 = line2.slice(0, 10) + '…'
-    ctx.font = 'bold 11px sans-serif'
+    const shortName = name.length > 13 ? name.slice(0, 12) + '…' : name
+    ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'
     ctx.fillStyle = active ? '#fff' : '#bbb'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(line1, S/2, S*0.62)
-    if (line2) ctx.fillText(line2, S/2, S*0.78)
+    ctx.fillText(shortName, S/2, S - 5)
+
     return rgba(canvas)
   }
 
@@ -1802,6 +1821,7 @@ export class StreamDeckController {
     this._waveOffset = 0      // index of first visible waveform item
     this._coyoteItems = []    // all waveform/audio items
     this._liveItems = []      // live audio input items, merged into _coyoteItems
+    this._liveLevels = new Map() // rawId → rolling level buffer (max 60 samples)
     this._selectedChannel = null  // null | 0-3 (single) or 0-1 (group) — LCD-touch for waveform assign
     this._lastSetWaveformId = null  // last explicitly selected waveform id
     this._groupMode = false        // true = encoders broadcast to all devices per group
@@ -1858,7 +1878,9 @@ export class StreamDeckController {
     this._timer = setInterval(() => {
       this._tick++
       this._refreshLcd()
-      if (this._nimblePaused) this._renderKeys().catch(()=>{})
+      if (this._nimblePaused || (this.page === 'coyote' && this._hasVisibleLiveKeys())) {
+        this._renderKeys().catch(()=>{})
+      }
     }, 500)
 
     return true
@@ -2528,6 +2550,21 @@ export class StreamDeckController {
     if (this.page === 'coyote') this._renderKeys().catch(()=>{})
   }
 
+  // Accumulate level data for live-audio keys — called from server broadcast handler
+  updateLiveLevel(rawId, level) {
+    if (!this._liveLevels.has(rawId)) this._liveLevels.set(rawId, [])
+    const buf = this._liveLevels.get(rawId)
+    buf.push(level)
+    if (buf.length > 60) buf.shift()
+  }
+
+  _hasVisibleLiveKeys() {
+    for (let i = 0; i < 4; i++) {
+      if (this._coyoteItems[this._waveOffset + i]?.type === 'live-audio') return true
+    }
+    return false
+  }
+
   // ── Page navigation ────────────────────────────────────────────
   setPage(page) {
     this.page = page
@@ -2626,8 +2663,11 @@ export class StreamDeckController {
       }
       for (let i = 0; i < 4; i++) {
         const item = this._coyoteItems[this._waveOffset + i]
+        const levelBuf = item?.type === 'live-audio'
+          ? this._liveLevels.get(item.id.slice('live-input:'.length))
+          : undefined
         const buf = item
-          ? renderWaveformKey(item, activeWaveforms.has(item.id))
+          ? renderWaveformKey(item, activeWaveforms.has(item.id), levelBuf)
           : renderKey({ icon:'', label:'', color:'dim' })
         await this.deck.fillKeyBuffer(4 + i, buf, { format:'rgba' })
       }

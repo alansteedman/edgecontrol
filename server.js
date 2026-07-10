@@ -615,6 +615,9 @@ function broadcast(msg) {
   if (msg.type === 'live:audio:updated') {
     streamDeck?.updateLiveInputs(waveformsMeta().live)
   }
+  if (msg.type === 'live:audio:level') {
+    streamDeck?.updateLiveLevel(msg.id, msg.level)
+  }
 }
 
 function encodeFreq(hz) {

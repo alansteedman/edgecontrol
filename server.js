@@ -612,6 +612,9 @@ function broadcast(msg) {
   if (msg.type === 'waveforms:updated') {
     streamDeck?.reloadWaveforms()
   }
+  if (msg.type === 'live:audio:updated') {
+    streamDeck?.updateLiveInputs(waveformsMeta().live)
+  }
 }
 
 function encodeFreq(hz) {
@@ -4266,6 +4269,7 @@ async function initStreamDeck() {
     const ok = await streamDeck.init()
     if (!ok) { streamDeck = null; broadcastDeckStatus(); return }
     streamDeck.updateMacros(macroStore)
+    streamDeck.updateLiveInputs(waveformsMeta().live)
     broadcastDeckStatus()
   } catch (e) {
     console.error('[deck] init error:', e.message)

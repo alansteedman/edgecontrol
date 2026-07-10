@@ -472,10 +472,11 @@ function renderWaveformKey(item, active, levelBuf) {
     const ch = item.channel || 'mix'
     const accent = ch === 'L' ? '#4fc3f7' : ch === 'R' ? '#a78bfa' : '#fb923c'
     const rv=parseInt(accent.slice(1,3),16), gv=parseInt(accent.slice(3,5),16), bv=parseInt(accent.slice(5,7),16)
-    const buf = levelBuf && levelBuf.length > 1 ? levelBuf : null
+    const isRunning = item.active !== false
+    const buf = isRunning && levelBuf && levelBuf.length > 1 ? levelBuf : null
 
-    // Full-height waveform as background
     if (buf) {
+      // Full-height waveform
       const mid = S / 2, n = Math.min(buf.length, S), step = S / Math.max(n, 1)
       const scale = v => Math.pow(Math.max(0, v) / 100, 0.7) * (mid - 6)
       const grd = ctx.createLinearGradient(0, 0, 0, S)
@@ -490,27 +491,34 @@ function renderWaveformKey(item, active, levelBuf) {
       ctx.beginPath()
       for (let i = 0; i < n; i++) ctx.lineTo(i * step, mid - scale(buf[buf.length - n + i]))
       ctx.stroke()
-    } else {
-      // No data yet — flat line
+    } else if (isRunning) {
+      // Running but no data yet — dim flat line in accent colour
       ctx.strokeStyle = `rgba(${rv},${gv},${bv},0.25)`; ctx.lineWidth = 1
       ctx.beginPath(); ctx.moveTo(8, S/2); ctx.lineTo(S-8, S/2); ctx.stroke()
+    } else {
+      // Stopped — grey flat line + centred label
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(8, S/2); ctx.lineTo(S-8, S/2); ctx.stroke()
+      ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+      ctx.fillStyle = '#555'
+      ctx.fillText('STOPPED', S/2, S/2)
     }
 
-    // "LIVE" badge top-left
+    // Badge top-left: LIVE when running, STOP when not
     ctx.font = 'bold 9px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'
-    ctx.fillStyle = `rgba(${rv},${gv},${bv},0.9)`
-    ctx.fillText('LIVE', 6, 6)
+    ctx.fillStyle = isRunning ? `rgba(${rv},${gv},${bv},0.9)` : '#444'
+    ctx.fillText(isRunning ? 'LIVE' : 'STOP', 6, 6)
 
     // Channel top-right
     ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top'
-    ctx.fillStyle = accent
+    ctx.fillStyle = isRunning ? accent : '#444'
     ctx.fillText(ch === 'mix' ? 'MIX' : ch.toUpperCase(), S - 6, 4)
 
     // Device name at bottom
     const name = item.name.replace(/\s*—\s*(L|R|Mix)\s*$/i, '').trim()
     const shortName = name.length > 13 ? name.slice(0, 12) + '…' : name
     ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'
-    ctx.fillStyle = active ? '#fff' : '#bbb'
+    ctx.fillStyle = isRunning ? (active ? '#fff' : '#bbb') : '#444'
     ctx.fillText(shortName, S/2, S - 5)
 
     return rgba(canvas)
@@ -2541,8 +2549,13 @@ export class StreamDeckController {
       id: w.id,
       name: w.name,
       type: 'live-audio',
-      channel: w.channel || 'mix'
+      channel: w.channel || 'mix',
+      active: !!w.active
     }))
+    // Clear buffered levels for inputs that are no longer running
+    for (const item of this._liveItems) {
+      if (!item.active) this._liveLevels.delete(item.id.slice('live-input:'.length))
+    }
     this._coyoteItems = [...this._liveItems, ...loadCoyoteItems()]
     console.log(`[deck] live inputs: ${this._liveItems.length} → total items: ${this._coyoteItems.length}`)
     if (this._waveOffset >= this._coyoteItems.length) this._waveOffset = Math.max(0, this._coyoteItems.length - 1)

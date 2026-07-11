@@ -307,6 +307,37 @@ select.mci{cursor:pointer}
 .mcrw input[type=range]{flex:1;accent-color:#4fc3f7}
 .mcrv{font-size:12px;color:#4fc3f7;width:34px;text-align:right;flex-shrink:0}
 .mchn{font-size:10px;color:#333;margin-top:10px;line-height:1.7;border-left:2px solid #1e1e1e;padding-left:8px}
+
+/* Custom Layout Builder */
+#cl-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;align-items:center;justify-content:center}
+.cl-dialog{background:#111;border:1px solid #2a2a2a;border-radius:10px;width:min(96vw,1100px);max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.cl-dialog-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #1e1e1e;flex-shrink:0}
+.cl-dialog-header h3{margin:0;font-size:15px;color:#e0e0e0;font-weight:600}
+.cl-dialog-body{flex:1;overflow:auto;padding:16px}
+.cl-dialog-footer{padding:12px 18px;border-top:1px solid #1e1e1e;display:flex;gap:8px;justify-content:flex-end;flex-shrink:0}
+.cl-layout{display:flex;gap:18px;min-height:0}
+.cl-palette{width:200px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto;max-height:calc(90vh - 130px)}
+.cl-palette-section{}
+.cl-palette-header{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;font-weight:700}
+.cl-palette-items{display:flex;flex-direction:column;gap:4px}
+.cl-palette-item{border:1px solid #333;border-radius:6px;padding:6px 8px;cursor:grab;user-select:none;background:#0a0a0a;transition:border-color .15s}
+.cl-palette-item:hover{background:#141414}
+.cl-palette-item:active{cursor:grabbing}
+.cl-palette-label{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cl-palette-type{font-size:9px;color:#444;margin-top:1px}
+.cl-empty{font-size:10px;color:#444;padding:4px 0}
+.cl-deck{flex:1;min-width:0}
+.cl-section-label{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;font-weight:700;display:flex;align-items:center;gap:6px}
+.cl-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.cl-slot{border:1px dashed #2a2a2a;border-radius:8px;padding:10px 8px;min-height:64px;display:flex;flex-direction:column;justify-content:center;align-items:center;transition:border-color .15s,background .15s;cursor:default;text-align:center}
+.cl-slot:not(.cl-slot-frozen){cursor:pointer}
+.cl-slot:not(.cl-slot-frozen):hover{background:#0d0d0d}
+.cl-slot-filled{border-style:solid;background:#080808}
+.cl-slot-frozen{border-color:#1a1a1a!important;opacity:.5}
+.cl-slot-label{font-size:12px;font-weight:600}
+.cl-slot-type{font-size:9px;color:#444;margin-top:3px}
+.cl-tab{background:#1a1a1a;border:1px solid #2a2a2a;color:#888;font-size:10px;border-radius:4px;padding:2px 7px;cursor:pointer;margin-right:3px}
+.cl-tab-active{background:#222;border-color:#444;color:#ccc}
 </style>
 </head>
 <body>
@@ -2568,8 +2599,252 @@ function renderDeckCard() {
     </div>
     <div class="status-dot ${dotClass}"></div>
     ${status==='connected'
-      ? `<button class="btn btn-ghost btn-xs" onclick="ws.send(JSON.stringify({type:'deck:disconnect'}))">Disconnect</button>`
+      ? `<button class="btn btn-ghost btn-xs" style="margin-right:4px" onclick="openCustomBuilder()">Custom Layout</button>
+         <button class="btn btn-ghost btn-xs" onclick="ws.send(JSON.stringify({type:'deck:disconnect'}))">Disconnect</button>`
       : `<button class="btn btn-primary btn-xs" onclick="ws.send(JSON.stringify({type:'deck:connect'}))">Connect</button>`}
+  `
+}
+
+// ── Custom Layout Builder ──────────────────────────────────────────────────────
+
+let _clLayout = null  // working copy for the builder
+let _clBtnPage = 0    // active button page in builder
+let _clKnobPage = 0   // active knob page in builder
+
+function openCustomBuilder() {
+  fetch('/api/custom-layout').then(r=>r.json()).then(layout => {
+    _clLayout = layout || { topButton:null, buttonPages:[[null,null,null,null]], knobPages:[[null,null,null,null]] }
+    _clBtnPage = 0; _clKnobPage = 0
+    _renderCL()
+    document.getElementById('cl-modal').style.display='flex'
+  }).catch(()=>{
+    _clLayout = { topButton:null, buttonPages:[[null,null,null,null]], knobPages:[[null,null,null,null]] }
+    _clBtnPage = 0; _clKnobPage = 0
+    _renderCL()
+    document.getElementById('cl-modal').style.display='flex'
+  })
+}
+
+function closeCustomBuilder() {
+  document.getElementById('cl-modal').style.display='none'
+}
+
+async function saveCustomLayout() {
+  await fetch('/api/custom-layout', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(_clLayout) })
+  closeCustomBuilder()
+}
+
+async function clearCustomLayout() {
+  if (!confirm('Remove custom layout?')) return
+  await fetch('/api/custom-layout', { method:'POST', headers:{'Content-Type':'application/json'}, body:'null' })
+  _clLayout = { topButton:null, buttonPages:[[null,null,null,null]], knobPages:[[null,null,null,null]] }
+  _renderCL()
+}
+
+// Drag state
+let _clDrag = null
+
+function _clDragStart(e, assignment) {
+  _clDrag = assignment
+  e.dataTransfer.effectAllowed = 'copy'
+}
+
+function _clDrop(e, target) {
+  e.preventDefault()
+  if (!_clDrag) return
+  if (target.kind === 'topButton') {
+    _clLayout.topButton = {..._clDrag}
+  } else if (target.kind === 'btn') {
+    const page = _clLayout.buttonPages[_clBtnPage] || []
+    page[target.idx] = {..._clDrag}
+    _clLayout.buttonPages[_clBtnPage] = page
+  } else if (target.kind === 'knob') {
+    const page = _clLayout.knobPages[_clKnobPage] || []
+    page[target.idx] = {..._clDrag}
+    _clLayout.knobPages[_clKnobPage] = page
+  }
+  _renderCL()
+}
+
+function _clClear(target) {
+  if (target.kind === 'topButton') {
+    _clLayout.topButton = null
+  } else if (target.kind === 'btn') {
+    const page = _clLayout.buttonPages[_clBtnPage] || []
+    page[target.idx] = null
+    _clLayout.buttonPages[_clBtnPage] = page
+  } else if (target.kind === 'knob') {
+    const page = _clLayout.knobPages[_clKnobPage] || []
+    page[target.idx] = null
+    _clLayout.knobPages[_clKnobPage] = page
+  }
+  _renderCL()
+}
+
+function _clAddBtnPage() {
+  _clLayout.buttonPages.push([null,null,null,null])
+  _clBtnPage = _clLayout.buttonPages.length - 1
+  _renderCL()
+}
+
+function _clRemoveBtnPage() {
+  if (_clLayout.buttonPages.length <= 1) return
+  _clLayout.buttonPages.splice(_clBtnPage, 1)
+  _clBtnPage = Math.min(_clBtnPage, _clLayout.buttonPages.length - 1)
+  _renderCL()
+}
+
+function _clAddKnobPage() {
+  _clLayout.knobPages.push([null,null,null,null])
+  _clKnobPage = _clLayout.knobPages.length - 1
+  _renderCL()
+}
+
+function _clRemoveKnobPage() {
+  if (_clLayout.knobPages.length <= 1) return
+  _clLayout.knobPages.splice(_clKnobPage, 1)
+  _clKnobPage = Math.min(_clKnobPage, _clLayout.knobPages.length - 1)
+  _renderCL()
+}
+
+const CL_KNOB_TYPES = [
+  { type:'coyote-intensity', label:'Coyote Intensity', color:'#4fc3f7', group:'Coyote' },
+  { type:'coyote-speed',     label:'Coyote Speed',     color:'#4fc3f7', group:'Coyote' },
+  { type:'nimble-speed',     label:'Nimble Speed',     color:'#f472b6', group:'Nimble' },
+  { type:'nimble-depth',     label:'Nimble Depth',     color:'#f472b6', group:'Nimble' },
+  { type:'nimble-nurture',   label:'Nimble Nurture',   color:'#f472b6', group:'Nimble' },
+  { type:'nimble-nature',    label:'Nimble Nature',    color:'#f472b6', group:'Nimble' },
+  { type:'estim-power',      label:'E-Stim Power',     color:'#a3e635', group:'E-Stim' },
+  { type:'hue-brightness',   label:'Hue Brightness',  color:'#fbbf24', group:'Hue' },
+  { type:'shelly-dimmer',    label:'Shelly Dimmer',    color:'#fb923c', group:'Shelly' },
+]
+
+function _assignmentLabel(a) {
+  if (!a) return ''
+  if (a.label) return a.label
+  return a.type || ''
+}
+
+function _assignmentColor(a) {
+  const map = { blue:'#4fc3f7', green:'#27ae60', red:'#e74c3c', purple:'#a855f7', amber:'#f0c040', teal:'#2dd4bf', orange:'#f97316' }
+  return map[a?.color] || '#888'
+}
+
+function _slotHtml(a, target, allowKnob) {
+  const filled = !!a
+  const label = _assignmentLabel(a)
+  const col = filled ? _assignmentColor(a) : '#2a2a2a'
+  const targetJson = JSON.stringify(target).replace(/"/g, '&quot;')
+  return `<div class="cl-slot${filled?' cl-slot-filled':''}"
+    style="border-color:${col}"
+    ondragover="event.preventDefault()"
+    ondrop="_clDrop(event,${targetJson})"
+    ondblclick="_clClear(${targetJson})">
+    <div class="cl-slot-label" style="color:${filled?col:'#444'}">${filled ? label : '+'}</div>
+    ${filled ? `<div class="cl-slot-type">${a.type}</div>` : ''}
+  </div>`
+}
+
+function _paletteItemHtml(assignment, extra) {
+  const col = _assignmentColor(assignment)
+  const data = JSON.stringify(assignment).replace(/"/g, '&quot;')
+  return `<div class="cl-palette-item" draggable="true"
+    style="border-color:${col}"
+    ondragstart="_clDragStart(event,${data})"
+    title="${extra||''}">
+    <div class="cl-palette-label" style="color:${col}">${_assignmentLabel(assignment)}</div>
+    <div class="cl-palette-type">${assignment.type}</div>
+  </div>`
+}
+
+function _renderCL() {
+  const modal = document.getElementById('cl-modal')
+  if (!modal) return
+  const layout = _clLayout
+  const btnPage = layout.buttonPages[_clBtnPage] || []
+  const knobPage = layout.knobPages[_clKnobPage] || []
+
+  // Palette: waveforms
+  const wfs = [...(S.waveforms?.builtin||[]), ...(S.waveforms?.custom||[]), ...(S.waveforms?.live||[])]
+  let wfHtml = wfs.map(w => _paletteItemHtml({ type:'waveform', label:w.name||w.id, color:'blue', params:{ waveformId:w.id } })).join('')
+
+  // Palette: macros
+  let macroHtml = (ME?.macros||[]).map(m => _paletteItemHtml({ type:'macro', label:m.name||'Macro', color:'teal', params:{ macroId:m.id } })).join('')
+
+  // Palette: knob types (for encoders only)
+  const knobHtml = CL_KNOB_TYPES.map(k => _paletteItemHtml({ type:k.type, label:k.label, color:'purple' }, k.group)).join('')
+
+  // Palette: stop
+  const stopHtml = _paletteItemHtml({ type:'stop', label:'Stop All', color:'red', icon:'⏹' })
+
+  // Deck graphic
+  const topBtnSlot = _slotHtml(layout.topButton, {kind:'topButton'}, false)
+
+  const btnSlots = btnPage.map((a,i) => _slotHtml(a, {kind:'btn',idx:i}, false)).join('')
+
+  const knobSlots = knobPage.map((a,i) => _slotHtml(a, {kind:'knob',idx:i}, true)).join('')
+
+  // Button page tabs
+  const btnTabs = layout.buttonPages.map((_, i) => `<button class="cl-tab${i===_clBtnPage?' cl-tab-active':''}" onclick="_clBtnPage=${i};_renderCL()">Page ${i+1}</button>`).join('')
+
+  // Knob page tabs
+  const knobTabs = layout.knobPages.map((_, i) => `<button class="cl-tab${i===_clKnobPage?' cl-tab-active':''}" onclick="_clKnobPage=${i};_renderCL()">Page ${i+1}</button>`).join('')
+
+  document.getElementById('cl-body').innerHTML = `
+    <div class="cl-layout">
+      <!-- Palette -->
+      <div class="cl-palette">
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">Waveforms</div>
+          <div class="cl-palette-items">${wfHtml||'<div class="cl-empty">No waveforms</div>'}</div>
+        </div>
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">Macros</div>
+          <div class="cl-palette-items">${macroHtml||'<div class="cl-empty">No macros</div>'}</div>
+        </div>
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">Knob Controls</div>
+          <div class="cl-palette-items">${knobHtml}</div>
+        </div>
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">Actions</div>
+          <div class="cl-palette-items">${stopHtml}</div>
+        </div>
+      </div>
+
+      <!-- Deck graphic -->
+      <div class="cl-deck">
+        <!-- Top row (frozen + 1 user slot) -->
+        <div class="cl-section-label">Top Row <span style="color:#555;font-size:10px">buttons 1–4 · home &amp; stop frozen</span></div>
+        <div class="cl-row">
+          <div class="cl-slot cl-slot-frozen"><div class="cl-slot-label" style="color:#4fc3f7">Home</div><div class="cl-slot-type">frozen</div></div>
+          ${topBtnSlot}
+          <div class="cl-slot cl-slot-frozen"><div class="cl-slot-label" style="color:#888">Scroll</div><div class="cl-slot-type">auto</div></div>
+          <div class="cl-slot cl-slot-frozen"><div class="cl-slot-label" style="color:#e74c3c">Stop All</div><div class="cl-slot-type">frozen</div></div>
+        </div>
+
+        <!-- Button pages -->
+        <div class="cl-section-label" style="margin-top:16px">
+          Button Pages
+          <span style="margin-left:8px">${btnTabs}
+            <button class="cl-tab" onclick="_clAddBtnPage()" title="Add page">+</button>
+            ${layout.buttonPages.length>1?`<button class="cl-tab" onclick="_clRemoveBtnPage()" title="Remove page">-</button>`:''}
+          </span>
+        </div>
+        <div class="cl-row">${btnSlots}</div>
+
+        <!-- Knob pages -->
+        <div class="cl-section-label" style="margin-top:16px">
+          Encoder Knobs
+          <span style="margin-left:8px">${knobTabs}
+            <button class="cl-tab" onclick="_clAddKnobPage()" title="Add page">+</button>
+            ${layout.knobPages.length>1?`<button class="cl-tab" onclick="_clRemoveKnobPage()" title="Remove page">-</button>`:''}
+          </span>
+        </div>
+        <div class="cl-row">${knobSlots}</div>
+        <div style="margin-top:8px;font-size:10px;color:#444">Drag items from the palette onto slots. Double-click a slot to clear it. Swipe the LCD strip on the deck to scroll knob pages.</div>
+      </div>
+    </div>
   `
 }
 
@@ -8094,6 +8369,21 @@ async function ppDisconnect(id) {
         <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Raw packets</div>
         <div class="pp-raw" id="pp-raw-log"></div>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="cl-modal" onclick="if(event.target===this)closeCustomBuilder()">
+  <div class="cl-dialog">
+    <div class="cl-dialog-header">
+      <h3>Custom Stream Deck Layout</h3>
+      <button class="btn btn-ghost btn-xs" onclick="closeCustomBuilder()">✕</button>
+    </div>
+    <div class="cl-dialog-body" id="cl-body"></div>
+    <div class="cl-dialog-footer">
+      <button class="btn btn-ghost btn-xs" style="color:#e74c3c;margin-right:auto" onclick="clearCustomLayout()">Clear Layout</button>
+      <button class="btn btn-ghost btn-xs" onclick="closeCustomBuilder()">Cancel</button>
+      <button class="btn btn-primary btn-xs" onclick="saveCustomLayout()">Save to Deck</button>
     </div>
   </div>
 </div>

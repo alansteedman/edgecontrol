@@ -785,66 +785,76 @@ function renderEncoderLcd({ label='', value=0, max=100, unit='%', color='#888', 
 }
 
 // ─── HOME page LCD strip (800×100) — device status ────────────────────────
-function renderHomeLcd(devices, devicePageOffset) {
+function renderHomeLcd(devices, devicePageOffset, hasCustom = false) {
   const W = 800, H = 100
   const canvas = createCanvas(W, H)
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, W, H)
 
   const activeTypes = getActiveDeviceTypes(devices)
-  const visibleTypes = activeTypes.slice(devicePageOffset, devicePageOffset + 4)
+  const allItems = [
+    ...activeTypes.map(t => ({ kind: 'device', type: t })),
+    ...(hasCustom ? [{ kind: 'custom' }] : []),
+  ]
+  const visibleItems = allItems.slice(devicePageOffset, devicePageOffset + 4)
   const devList = Object.values(devices)
 
-  if (!visibleTypes.length) {
+  if (!visibleItems.length) {
     ctx.font = '11px monospace'; ctx.fillStyle = '#333'
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
     ctx.fillText('No devices configured', W/2, H/2)
     return rgba(canvas)
   }
 
-  visibleTypes.forEach((type, i) => {
-    const cfg = DEVICE_DECK_CONFIG[type]
-    const d = devList.find(d => d.type === type)
-    const status = d ? d.status : 'offline'
-    const dotColor = status === 'connected' ? '#27ae60'
-                   : status === 'connecting' ? '#f39c12'
-                   : status === 'error' ? '#c0392b'
-                   : '#444'
-    const colW = W / Math.min(4, visibleTypes.length)
+  visibleItems.forEach((item, i) => {
+    const colW = W / Math.min(4, visibleItems.length)
     const x = colW * i + 12
 
-    // Divider
     if (i > 0) {
       ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
       ctx.beginPath(); ctx.moveTo(colW * i, 8); ctx.lineTo(colW * i, H - 8); ctx.stroke()
     }
 
-    // Dot indicator
+    if (item.kind === 'custom') {
+      ctx.beginPath(); ctx.arc(x + 5, 24, 5, 0, Math.PI*2)
+      ctx.fillStyle = '#a855f7'; ctx.fill()
+      ctx.font = 'bold 11px monospace'; ctx.fillStyle = '#a855f7'
+      ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
+      ctx.fillText('Custom', x + 16, 24)
+      ctx.font = '10px monospace'; ctx.fillStyle = '#555'
+      ctx.fillText('USER LAYOUT', x, 44)
+      return
+    }
+
+    const cfg = DEVICE_DECK_CONFIG[item.type]
+    const d = devList.find(d => d.type === item.type)
+    const status = d ? d.status : 'offline'
+    const dotColor = status === 'connected' ? '#27ae60'
+                   : status === 'connecting' ? '#f39c12'
+                   : status === 'error' ? '#c0392b'
+                   : '#444'
+
     ctx.beginPath(); ctx.arc(x + 5, 24, 5, 0, Math.PI*2)
     ctx.fillStyle = dotColor; ctx.fill()
 
-    // Name
     ctx.font = 'bold 11px monospace'; ctx.fillStyle = '#888'
     ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
     ctx.fillText(cfg.label, x + 16, 24)
 
-    // Status
     ctx.font = '10px monospace'; ctx.fillStyle = dotColor
     ctx.fillText(status.toUpperCase(), x, 44)
 
-    // Extra info if connected
     if (d && d.status === 'connected') {
       ctx.font = '9px monospace'; ctx.fillStyle = '#555'
-      if (type === 'eom' && d._mode) ctx.fillText(d._mode.toUpperCase(), x, 60)
-      if (type === 'coyote') ctx.fillText(`A:${d.channels?.A?.intensity||0}%  B:${d.channels?.B?.intensity||0}%`, x, 60)
-      if (type === 'hue') ctx.fillText(d.bridgeName || d.ip || '', x, 60)
+      if (item.type === 'eom' && d._mode) ctx.fillText(d._mode.toUpperCase(), x, 60)
+      if (item.type === 'coyote') ctx.fillText(`A:${d.channels?.A?.intensity||0}%  B:${d.channels?.B?.intensity||0}%`, x, 60)
+      if (item.type === 'hue') ctx.fillText(d.bridgeName || d.ip || '', x, 60)
     }
   })
 
-  // Page indicator if scrollable
-  if (activeTypes.length > 4) {
+  if (allItems.length > 4) {
     const curPage = Math.floor(devicePageOffset / 4) + 1
-    const totalPages = Math.ceil(activeTypes.length / 4)
+    const totalPages = Math.ceil(allItems.length / 4)
     ctx.font = '8px monospace'; ctx.fillStyle = '#333'
     ctx.textAlign = 'right'; ctx.textBaseline = 'top'
     ctx.fillText(`${curPage}/${totalPages}`, W - 6, 4)
@@ -1555,17 +1565,22 @@ function getActiveDeviceTypes(devices) {
   return DEVICE_TYPE_ORDER.filter(t => Object.values(devices).some(d => d.type === t))
 }
 
-function getHomeKeys(devices, devicePageOffset) {
+function getHomeKeys(devices, devicePageOffset, hasCustom = false) {
   const activeTypes = getActiveDeviceTypes(devices)
-  const visibleTypes = activeTypes.slice(devicePageOffset, devicePageOffset + 4)
-  const hasScroll = activeTypes.length > 4
+  const allItems = [
+    ...activeTypes.map(t => ({ kind: 'device', type: t })),
+    ...(hasCustom ? [{ kind: 'custom' }] : []),
+  ]
+  const visible = allItems.slice(devicePageOffset, devicePageOffset + 4)
+  const hasScroll = allItems.length > 4
   const curPage = Math.floor(devicePageOffset / 4) + 1
-  const totalPages = Math.ceil(activeTypes.length / 4)
+  const totalPages = Math.ceil(Math.max(1, allItems.length) / 4)
 
   const bottomKeys = Array.from({ length: 4 }, (_, i) => {
-    const type = visibleTypes[i]
-    if (!type) return { icon:'', label:'', color:'dim' }
-    const cfg = DEVICE_DECK_CONFIG[type]
+    const item = visible[i]
+    if (!item) return { icon:'', label:'', color:'dim' }
+    if (item.kind === 'custom') return { icon:'✦', label:'Custom', color:'purple' }
+    const cfg = DEVICE_DECK_CONFIG[item.type]
     return { deviceKey: cfg.deviceKey || null, tremblrIcon: cfg.tremblrIcon || false, icon: cfg.icon || '', label: cfg.label, color: cfg.color }
   })
 
@@ -1677,6 +1692,45 @@ function renderTremblrLcd(dev) {
   // Divider line
   ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
   ctx.beginPath(); ctx.moveTo(W - 220, 10); ctx.lineTo(W - 220, 90); ctx.stroke()
+
+  return rgba(canvas)
+}
+
+function renderCustomLcd(layout, knobPage) {
+  const W = 800, H = 100
+  const canvas = createCanvas(W, H)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, W, H)
+
+  const pages = layout?.knobPages || []
+  const page = pages[knobPage] || []
+  const count = Math.max(1, page.filter(Boolean).length) || 4
+
+  // Draw one segment per knob slot
+  for (let i = 0; i < 4; i++) {
+    const a = page[i]
+    const x = i * 200
+    if (i > 0) {
+      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x, H - 8); ctx.stroke()
+    }
+    if (!a) continue
+    const color = a.color || 'purple'
+    const hex = color === 'blue' ? '#4fc3f7' : color === 'green' ? '#27ae60' : color === 'red' ? '#e74c3c' : color === 'amber' ? '#f0c040' : '#a855f7'
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.font = 'bold 10px monospace'; ctx.fillStyle = '#555'
+    ctx.fillText(a.type?.toUpperCase() || 'KNOB', x + 10, 18)
+    ctx.font = 'bold 13px monospace'; ctx.fillStyle = hex
+    const label = a.label || ''
+    ctx.fillText(label.length > 12 ? label.slice(0, 11) + '…' : label, x + 10, 52)
+  }
+
+  // Knob page indicator
+  if (pages.length > 1) {
+    ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
+    ctx.font = '9px monospace'; ctx.fillStyle = '#444'
+    ctx.fillText(`${knobPage + 1}/${pages.length}`, W - 4, H - 2)
+  }
 
   return rgba(canvas)
 }
@@ -1830,6 +1884,9 @@ export class StreamDeckController {
     this._coyoteItems = []    // all waveform/audio items
     this._liveItems = []      // live audio input items, merged into _coyoteItems
     this._liveLevels = new Map() // rawId → rolling level buffer (max 60 samples)
+    this._customLayout = null    // user-configurable layout { topButton, buttonPages, knobPages }
+    this._customBtnPage = 0
+    this._customKnobPage = 0
     this._selectedChannel = null  // null | 0-3 (single) or 0-1 (group) — LCD-touch for waveform assign
     this._lastSetWaveformId = null  // last explicitly selected waveform id
     this._groupMode = false        // true = encoders broadcast to all devices per group
@@ -1906,6 +1963,7 @@ export class StreamDeckController {
       case 'shelly':  this._shellyKey(idx);  break
       case 'nimble':   this._nimbleKey(idx);   break
       case 'tremblr':  this._tremblrKey(idx);  break
+      case 'custom':   this._customKey(idx);   break
       default: if (idx === 0) this.setPage('home'); break
     }
   }
@@ -1914,9 +1972,10 @@ export class StreamDeckController {
     if (idx === 1) { this.setPage('macro'); return }
     if (idx === 2) {
       const activeTypes = getActiveDeviceTypes(this.devices)
-      if (activeTypes.length > 4) {
+      const allItems = [...activeTypes, ...(this._customLayout ? ['__custom__'] : [])]
+      if (allItems.length > 4) {
         const next = this._devicePageOffset + 4
-        this._devicePageOffset = next >= activeTypes.length ? 0 : next
+        this._devicePageOffset = next >= allItems.length ? 0 : next
         this._renderKeys()
         this._refreshLcd()
       }
@@ -1925,8 +1984,14 @@ export class StreamDeckController {
     if (idx === 3) { this._stopAll(); return }
     if (idx >= 4 && idx <= 7) {
       const activeTypes = getActiveDeviceTypes(this.devices)
-      const type = activeTypes[this._devicePageOffset + (idx - 4)]
-      if (type) this.setPage(DEVICE_DECK_CONFIG[type].page)
+      const allItems = [
+        ...activeTypes.map(t => ({ kind: 'device', type: t })),
+        ...(this._customLayout ? [{ kind: 'custom' }] : []),
+      ]
+      const item = allItems[this._devicePageOffset + (idx - 4)]
+      if (!item) return
+      if (item.kind === 'custom') { this.setPage('custom'); return }
+      if (item.kind === 'device') this.setPage(DEVICE_DECK_CONFIG[item.type].page)
       return
     }
   }
@@ -2183,6 +2248,61 @@ export class StreamDeckController {
     if (idx === 7) { dev.air_out_stop(); this._renderKeys() }
   }
 
+  _customKey(idx) {
+    if (idx === 0) { this.setPage('home'); return }
+    if (idx === 3) { this._stopAll(); return }
+    if (idx === 2 && this._customLayout) {
+      const pages = this._customLayout.buttonPages || []
+      if (pages.length > 1) {
+        this._customBtnPage = (this._customBtnPage + 1) % pages.length
+        this._renderKeys(); this._refreshLcd()
+      }
+      return
+    }
+    if (idx === 1 && this._customLayout?.topButton) {
+      this._executeCustomAction(this._customLayout.topButton); return
+    }
+    if (idx >= 4 && idx <= 7 && this._customLayout) {
+      const pages = this._customLayout.buttonPages || []
+      const page = pages[this._customBtnPage] || []
+      const assignment = page[idx - 4]
+      if (assignment) this._executeCustomAction(assignment)
+    }
+  }
+
+  _executeCustomAction(assignment) {
+    if (!assignment?.type) return
+    switch (assignment.type) {
+      case 'waveform': {
+        const { waveformId, channel } = assignment.params || {}
+        if (!waveformId) return
+        const coyotes = Object.values(this.devices).filter(d => d.type === 'coyote')
+        for (const dev of coyotes) {
+          const ch = channel || 'A'
+          dev.setWaveform?.(ch, waveformId)
+        }
+        break
+      }
+      case 'macro': {
+        const { macroId } = assignment.params || {}
+        const m = this._macros.find(m => m.id === macroId)
+        if (m) this._macroCallbacks?.run?.(m)
+        break
+      }
+      case 'shelly': {
+        const { deviceId, component } = assignment.params || {}
+        const dev = this.devices[deviceId]
+        dev?.toggleComponent?.(component)
+        break
+      }
+      case 'stop': {
+        this._stopAll()
+        break
+      }
+    }
+    this._renderKeys().catch(()=>{})
+  }
+
   // ── Encoder rotation ───────────────────────────────────────────
   _onRotate(idx, ticks) {
     console.log(`[deck] encoder ${idx} ticks ${ticks} on page ${this.page}`)
@@ -2192,7 +2312,76 @@ export class StreamDeckController {
       case 'estim':  this._estimRotate(idx, ticks);  break
       case 'hue':    this._hueRotate(idx, ticks);    break
       case 'nimble': this._nimbleRotate(idx, ticks); break
+      case 'custom': this._customRotate(idx, ticks); break
     }
+  }
+
+  _customRotate(idx, ticks) {
+    if (!this._customLayout) return
+    const pages = this._customLayout.knobPages || []
+    const page = pages[this._customKnobPage] || []
+    const assignment = page[idx]
+    if (!assignment?.type) return
+    const { params } = assignment
+    switch (assignment.type) {
+      case 'coyote-intensity': {
+        const dev = params?.deviceId ? this.devices[params.deviceId] : this._findDev('coyote')
+        if (!dev) return
+        const ch = params?.channel || 'A'
+        const cur = dev.channels?.[ch]?.intensity ?? 0
+        dev.setIntensity?.(ch, Math.min(100, Math.max(0, cur + ticks * 2)))
+        break
+      }
+      case 'coyote-speed': {
+        const dev = params?.deviceId ? this.devices[params.deviceId] : this._findDev('coyote')
+        if (!dev) return
+        const ch = params?.channel || 'A'
+        const cur = dev.channels?.[ch]?.speed ?? 0
+        dev.setSpeed?.(ch, Math.min(100, Math.max(0, cur + ticks * 2)))
+        break
+      }
+      case 'nimble-speed': {
+        const dev = this._findDev('nimble')
+        if (dev) { dev.speed = Math.min(100, Math.max(0, (dev.speed||0) + ticks * 2)); dev.applyMotion?.() }
+        break
+      }
+      case 'nimble-depth': {
+        const dev = this._findDev('nimble')
+        if (dev) { dev.depth = Math.min(100, Math.max(0, (dev.depth||0) + ticks * 2)); dev.applyMotion?.() }
+        break
+      }
+      case 'nimble-nurture': {
+        const dev = this._findDev('nimble')
+        if (dev) { dev.nurture = Math.min(100, Math.max(0, (dev.nurture||0) + ticks * 2)); dev.applyMotion?.() }
+        break
+      }
+      case 'nimble-nature': {
+        const dev = this._findDev('nimble')
+        if (dev) { dev.nature = Math.min(100, Math.max(0, (dev.nature||0) + ticks * 2)); dev.applyMotion?.() }
+        break
+      }
+      case 'estim-power': {
+        const dev = this._findDev('estim')
+        if (!dev) return
+        const ch = params?.channel || 'A'
+        dev.adjustPower?.(ch, ticks)
+        break
+      }
+      case 'hue-brightness': {
+        const dev = this._findDev('hue')
+        if (!dev) return
+        const groupId = params?.groupId
+        if (groupId) dev.adjustBrightness?.(groupId, ticks * 5)
+        break
+      }
+      case 'shelly-dimmer': {
+        const dev = params?.deviceId ? this.devices[params.deviceId] : null
+        if (!dev) return
+        dev.adjustDimmer?.(params?.component, ticks * 5)
+        break
+      }
+    }
+    this._refreshLcd().catch(()=>{})
   }
 
   _eomRotate(idx, ticks) {
@@ -2381,6 +2570,21 @@ export class StreamDeckController {
       if (this._macroWaitingId) this._macroCallbacks.resume?.(this._macroWaitingId)
       return
     }
+    if (this.page === 'custom' && this._customLayout) {
+      const x = pos?.x ?? 0
+      const pages = this._customLayout.knobPages || []
+      if (pages.length > 1) {
+        if (x < 30) {
+          this._customKnobPage = (this._customKnobPage - 1 + pages.length) % pages.length
+          this._refreshLcd(); return
+        }
+        if (x > 770) {
+          this._customKnobPage = (this._customKnobPage + 1) % pages.length
+          this._refreshLcd(); return
+        }
+      }
+      return
+    }
     if (this.page === 'estim') {
       const x = pos?.x ?? 0
       if (x < 400) {
@@ -2562,6 +2766,13 @@ export class StreamDeckController {
     if (this.page === 'coyote') this._renderKeys().catch(()=>{})
   }
 
+  // Store / replace the user-configured custom layout and refresh display
+  updateCustomLayout(layout) {
+    this._customLayout = layout || null
+    if (this.page === 'custom' && !this._customLayout) this.setPage('home')
+    else { this._renderKeys().catch(()=>{}); this._refreshLcd().catch(()=>{}) }
+  }
+
   // Accumulate level data for live-audio keys — called from server broadcast handler
   updateLiveLevel(rawId, level) {
     if (!this._liveLevels.has(rawId)) this._liveLevels.set(rawId, [])
@@ -2591,6 +2802,10 @@ export class StreamDeckController {
   // ── Page navigation ────────────────────────────────────────────
   setPage(page) {
     this.page = page
+    if (page === 'custom') {
+      this._customBtnPage = 0
+      this._customKnobPage = 0
+    }
     if (page === 'shelly') {
       this._shellyPageOffset = 0
     }
@@ -2759,8 +2974,37 @@ export class StreamDeckController {
       return
     }
 
+    if (this.page === 'custom') {
+      const layout = this._customLayout
+      const btnPages = layout?.buttonPages || []
+      const btnPage = btnPages[this._customBtnPage] || []
+      const hasMultiPages = btnPages.length > 1
+      const curP = this._customBtnPage + 1
+      const totP = btnPages.length || 1
+      const topKeys = [
+        { houseIcon:true, label:'Home', color:'blue' },
+        layout?.topButton
+          ? { icon: layout.topButton.icon || '★', label: layout.topButton.label || '', color: layout.topButton.color || 'purple' }
+          : { icon:'', label:'', color:'dim' },
+        hasMultiPages
+          ? { icon:'▶', label:`${curP}/${totP}`, color:'purple' }
+          : { icon:'', label:'', color:'dim' },
+        { stopSign:true, label:'Stop All', color:'red' },
+      ]
+      for (let i = 0; i < 4; i++)
+        await this.deck.fillKeyBuffer(i, renderKey(topKeys[i]), { format:'rgba' })
+      for (let i = 0; i < 4; i++) {
+        const a = btnPage[i]
+        const buf = a
+          ? renderKey({ icon: a.icon || '●', label: a.label || '', color: a.color || 'blue' })
+          : renderKey({ icon:'', label:'', color:'dim' })
+        await this.deck.fillKeyBuffer(4 + i, buf, { format:'rgba' })
+      }
+      return
+    }
+
     let keys
-    if (this.page === 'home')          keys = getHomeKeys(this.devices, this._devicePageOffset)
+    if (this.page === 'home')          keys = getHomeKeys(this.devices, this._devicePageOffset, !!this._customLayout)
     else if (this.page === 'eom')      keys = getEomKeys(this._findDev('eom'))
     else if (this.page === 'nimble')   keys = getNimbleKeys(this._findDev('nimble'), this._nimblePaused, this._tick)
     else if (this.page === 'tremblr')  keys = getTremblrKeys(this._findDev('tremblr'))
@@ -2873,10 +3117,11 @@ export class StreamDeckController {
         return
       }
       let buf
-      if (this.page === 'home')      buf = renderHomeLcd(this.devices, this._devicePageOffset)
+      if (this.page === 'home')      buf = renderHomeLcd(this.devices, this._devicePageOffset, !!this._customLayout)
       else if (this.page === 'eom')    buf = renderEomLcd(this._findDev('eom'))
       else if (this.page === 'nimble')  buf = renderNimbleLcd(this._findDev('nimble'))
       else if (this.page === 'tremblr') buf = renderTremblrLcd(this._findDev('tremblr'))
+      else if (this.page === 'custom')  buf = renderCustomLcd(this._customLayout, this._customKnobPage)
       else {
         const W=800, H=100, c=createCanvas(W,H)
         c.getContext('2d').fillStyle='#060606'; c.getContext('2d').fillRect(0,0,W,H)

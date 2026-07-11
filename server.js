@@ -618,6 +618,9 @@ function broadcast(msg) {
   if (msg.type === 'live:audio:level') {
     streamDeck?.updateLiveLevel(msg.id, msg.level)
   }
+  if (msg.type === 'customLayout:updated') {
+    streamDeck?.updateCustomLayout(msg.layout)
+  }
 }
 
 function encodeFreq(hz) {
@@ -4273,6 +4276,7 @@ async function initStreamDeck() {
     if (!ok) { streamDeck = null; broadcastDeckStatus(); return }
     streamDeck.updateMacros(macroStore)
     streamDeck.updateLiveInputs(waveformsMeta().live)
+    streamDeck.updateCustomLayout(config.customLayout || null)
     broadcastDeckStatus()
   } catch (e) {
     console.error('[deck] init error:', e.message)
@@ -4289,6 +4293,17 @@ async function disconnectStreamDeck() {
 
 // Init after a short delay so all devices have a chance to register
 setTimeout(initStreamDeck, 3000)
+
+// ── Custom Stream Deck layout ────────────────────────────────────────────────
+app.get('/api/custom-layout', requireAuth, (req, res) => {
+  res.json(config.customLayout || null)
+})
+app.post('/api/custom-layout', requireAuth, (req, res) => {
+  config.customLayout = req.body
+  saveConfig(config)
+  broadcast({ type: 'customLayout:updated', layout: config.customLayout })
+  res.json({ ok: true })
+})
 
 process.on('SIGINT',  () => { tunnelStop(); destroy(); streamDeck?.close(); process.exit() })
 process.on('SIGTERM', () => { tunnelStop(); destroy(); streamDeck?.close(); process.exit() })

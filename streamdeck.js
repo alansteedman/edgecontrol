@@ -1696,7 +1696,7 @@ function renderTremblrLcd(dev) {
   return rgba(canvas)
 }
 
-function renderCustomLcd(layout, knobPage) {
+function renderCustomLcd(layout, knobPage, encSpeedMode) {
   const W = 800, H = 100
   const canvas = createCanvas(W, H)
   const ctx = canvas.getContext('2d')
@@ -1704,9 +1704,7 @@ function renderCustomLcd(layout, knobPage) {
 
   const pages = layout?.knobPages || []
   const page = pages[knobPage] || []
-  const count = Math.max(1, page.filter(Boolean).length) || 4
 
-  // Draw one segment per knob slot
   for (let i = 0; i < 4; i++) {
     const a = page[i]
     const x = i * 200
@@ -1717,15 +1715,27 @@ function renderCustomLcd(layout, knobPage) {
     if (!a) continue
     const color = a.color || 'purple'
     const hex = color === 'blue' ? '#4fc3f7' : color === 'green' ? '#27ae60' : color === 'red' ? '#e74c3c' : color === 'amber' ? '#f0c040' : '#a855f7'
+    const isCoyote = a.type === 'coyote-intensity'
+    const speedMode = isCoyote && encSpeedMode?.[i]
+    const modeLabel = isCoyote ? (speedMode ? 'SPEED' : 'INTENSITY') : (a.type?.toUpperCase() || 'KNOB')
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
-    ctx.font = 'bold 10px monospace'; ctx.fillStyle = '#555'
-    ctx.fillText(a.type?.toUpperCase() || 'KNOB', x + 10, 18)
+    ctx.font = 'bold 10px monospace'; ctx.fillStyle = speedMode ? '#f0c040' : '#555'
+    ctx.fillText(modeLabel, x + 10, 18)
     ctx.font = 'bold 13px monospace'; ctx.fillStyle = hex
     const label = a.label || ''
-    ctx.fillText(label.length > 12 ? label.slice(0, 11) + '…' : label, x + 10, 52)
+    ctx.fillText(label.length > 14 ? label.slice(0, 13) + '…' : label, x + 10, 44)
+    if (a.params?.channel) {
+      ctx.font = 'bold 11px monospace'; ctx.fillStyle = '#444'
+      ctx.textAlign = 'right'
+      ctx.fillText(`CH ${a.params.channel}`, x + 190, 80)
+      ctx.textAlign = 'left'
+    }
+    if (isCoyote) {
+      ctx.font = '9px monospace'; ctx.fillStyle = '#333'
+      ctx.fillText('press to toggle', x + 10, 80)
+    }
   }
 
-  // Knob page indicator
   if (pages.length > 1) {
     ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
     ctx.font = '9px monospace'; ctx.fillStyle = '#444'
@@ -1887,6 +1897,7 @@ export class StreamDeckController {
     this._customLayout = null    // user-configurable layout { topButton, buttonPages, knobPages }
     this._customBtnPage = 0
     this._customKnobPage = 0
+    this._customEncSpeedMode = [false, false, false, false]  // per-encoder: intensity(false) vs speed(true)
     this._selectedChannel = null  // null | 0-3 (single) or 0-1 (group) — LCD-touch for waveform assign
     this._lastSetWaveformId = null  // last explicitly selected waveform id
     this._groupMode = false        // true = encoders broadcast to all devices per group
@@ -2328,16 +2339,15 @@ export class StreamDeckController {
         const dev = params?.deviceId ? this.devices[params.deviceId] : this._findDev('coyote')
         if (!dev) return
         const ch = params?.channel || 'A'
-        const cur = dev.channels?.[ch]?.intensity ?? 0
-        dev.setIntensity?.(ch, Math.min(100, Math.max(0, cur + ticks * 2)))
-        break
-      }
-      case 'coyote-speed': {
-        const dev = params?.deviceId ? this.devices[params.deviceId] : this._findDev('coyote')
-        if (!dev) return
-        const ch = params?.channel || 'A'
-        const cur = dev.channels?.[ch]?.speed ?? 0
-        dev.setSpeed?.(ch, Math.min(100, Math.max(0, cur + ticks * 2)))
+        if (this._customEncSpeedMode[idx]) {
+          const STEPS = COYOTE_SPEED_STEPS
+          const cur = dev.channels?.[ch]?.speed ?? 1
+          const si = STEPS.reduce((best, v, i) => Math.abs(v - cur) < Math.abs(STEPS[best] - cur) ? i : best, 0)
+          dev.setChannel(ch, { speed: STEPS[Math.max(0, Math.min(STEPS.length - 1, si + ticks))] })
+        } else {
+          const cur = dev.channels?.[ch]?.intensity ?? 0
+          dev.setChannel(ch, { intensity: Math.min(200, Math.max(0, cur + ticks * 2)) })
+        }
         break
       }
       case 'nimble-speed': {
@@ -2555,6 +2565,13 @@ export class StreamDeckController {
       // Toggle intensity ↔ speed mode for this encoder
       this._encoderSpeedMode[idx] = !this._encoderSpeedMode[idx]
       this._refreshLcd()
+    }
+    if (this.page === 'custom' && this._customLayout) {
+      const page = this._customLayout.knobPages[this._customKnobPage] || []
+      if (page[idx]?.type === 'coyote-intensity') {
+        this._customEncSpeedMode[idx] = !this._customEncSpeedMode[idx]
+        this._refreshLcd()
+      }
     }
     if (this.page === 'estim') {
       // Each encoder toggles between power and its secondary function
@@ -2805,6 +2822,7 @@ export class StreamDeckController {
     if (page === 'custom') {
       this._customBtnPage = 0
       this._customKnobPage = 0
+      this._customEncSpeedMode = [false, false, false, false]
     }
     if (page === 'shelly') {
       this._shellyPageOffset = 0
@@ -3121,7 +3139,7 @@ export class StreamDeckController {
       else if (this.page === 'eom')    buf = renderEomLcd(this._findDev('eom'))
       else if (this.page === 'nimble')  buf = renderNimbleLcd(this._findDev('nimble'))
       else if (this.page === 'tremblr') buf = renderTremblrLcd(this._findDev('tremblr'))
-      else if (this.page === 'custom')  buf = renderCustomLcd(this._customLayout, this._customKnobPage)
+      else if (this.page === 'custom')  buf = renderCustomLcd(this._customLayout, this._customKnobPage, this._customEncSpeedMode)
       else {
         const W=800, H=100, c=createCanvas(W,H)
         c.getContext('2d').fillStyle='#060606'; c.getContext('2d').fillRect(0,0,W,H)

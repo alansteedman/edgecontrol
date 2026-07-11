@@ -2708,15 +2708,15 @@ function _clRemoveKnobPage() {
 }
 
 const CL_KNOB_TYPES = [
-  { type:'coyote-intensity', label:'Coyote Intensity', color:'#4fc3f7', group:'Coyote' },
-  { type:'coyote-speed',     label:'Coyote Speed',     color:'#4fc3f7', group:'Coyote' },
-  { type:'nimble-speed',     label:'Nimble Speed',     color:'#f472b6', group:'Nimble' },
-  { type:'nimble-depth',     label:'Nimble Depth',     color:'#f472b6', group:'Nimble' },
-  { type:'nimble-nurture',   label:'Nimble Nurture',   color:'#f472b6', group:'Nimble' },
-  { type:'nimble-nature',    label:'Nimble Nature',    color:'#f472b6', group:'Nimble' },
-  { type:'estim-power',      label:'E-Stim Power',     color:'#a3e635', group:'E-Stim' },
-  { type:'hue-brightness',   label:'Hue Brightness',  color:'#fbbf24', group:'Hue' },
-  { type:'shelly-dimmer',    label:'Shelly Dimmer',    color:'#fb923c', group:'Shelly' },
+  { type:'coyote-intensity', label:'Coyote A',      color:'blue',   params:{ channel:'A' }, hint:'Intensity · press knob to toggle speed' },
+  { type:'coyote-intensity', label:'Coyote B',      color:'blue',   params:{ channel:'B' }, hint:'Intensity · press knob to toggle speed' },
+  { type:'nimble-speed',     label:'Nimble Speed',  color:'purple', params:{} },
+  { type:'nimble-depth',     label:'Nimble Depth',  color:'purple', params:{} },
+  { type:'nimble-nurture',   label:'Nimble Nurture',color:'purple', params:{} },
+  { type:'nimble-nature',    label:'Nimble Nature', color:'purple', params:{} },
+  { type:'estim-power',      label:'E-Stim Power',  color:'green',  params:{} },
+  { type:'hue-brightness',   label:'Hue Brightness',color:'amber',  params:{} },
+  { type:'shelly-dimmer',    label:'Shelly Dimmer', color:'orange', params:{} },
 ]
 
 function _assignmentLabel(a) {
@@ -2772,7 +2772,7 @@ function _renderCL() {
   let macroHtml = (ME?.macros||[]).map(m => _paletteItemHtml({ type:'macro', label:m.name||'Macro', color:'teal', params:{ macroId:m.id } })).join('')
 
   // Palette: knob types (for encoders only)
-  const knobHtml = CL_KNOB_TYPES.map(k => _paletteItemHtml({ type:k.type, label:k.label, color:'purple' }, k.group)).join('')
+  const knobHtml = CL_KNOB_TYPES.map(k => _paletteItemHtml({ type:k.type, label:k.label, color:k.color, params:k.params||{} }, k.hint||'')).join('')
 
   // Palette: stop
   const stopHtml = _paletteItemHtml({ type:'stop', label:'Stop All', color:'red', icon:'⏹' })

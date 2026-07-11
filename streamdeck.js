@@ -1696,55 +1696,6 @@ function renderTremblrLcd(dev) {
   return rgba(canvas)
 }
 
-function renderCustomLcd(layout, knobPage, encSpeedMode) {
-  const W = 800, H = 100
-  const canvas = createCanvas(W, H)
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, W, H)
-
-  const pages = layout?.knobPages || []
-  const page = pages[knobPage] || []
-
-  for (let i = 0; i < 4; i++) {
-    const a = page[i]
-    const x = i * 200
-    if (i > 0) {
-      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
-      ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x, H - 8); ctx.stroke()
-    }
-    if (!a) continue
-    const color = a.color || 'purple'
-    const hex = color === 'blue' ? '#4fc3f7' : color === 'green' ? '#27ae60' : color === 'red' ? '#e74c3c' : color === 'amber' ? '#f0c040' : '#a855f7'
-    const isCoyote = a.type === 'coyote-intensity'
-    const speedMode = isCoyote && encSpeedMode?.[i]
-    const modeLabel = isCoyote ? (speedMode ? 'SPEED' : 'INTENSITY') : (a.type?.toUpperCase() || 'KNOB')
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
-    ctx.font = 'bold 10px monospace'; ctx.fillStyle = speedMode ? '#f0c040' : '#555'
-    ctx.fillText(modeLabel, x + 10, 18)
-    ctx.font = 'bold 13px monospace'; ctx.fillStyle = hex
-    const label = a.label || ''
-    ctx.fillText(label.length > 14 ? label.slice(0, 13) + '…' : label, x + 10, 44)
-    if (a.params?.channel) {
-      ctx.font = 'bold 11px monospace'; ctx.fillStyle = '#444'
-      ctx.textAlign = 'right'
-      ctx.fillText(`CH ${a.params.channel}`, x + 190, 80)
-      ctx.textAlign = 'left'
-    }
-    if (isCoyote) {
-      ctx.font = '9px monospace'; ctx.fillStyle = '#333'
-      ctx.fillText('press to toggle', x + 10, 80)
-    }
-  }
-
-  if (pages.length > 1) {
-    ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
-    ctx.font = '9px monospace'; ctx.fillStyle = '#444'
-    ctx.fillText(`${knobPage + 1}/${pages.length}`, W - 4, H - 2)
-  }
-
-  return rgba(canvas)
-}
-
 // ─── E-Stim 2B mode definitions ──────────────────────────────────────────
 const ESTIM_MODES = [
   'Pulse','Bounce','Continuous','A Split','B Split','Wave','Waterfall',
@@ -2259,6 +2210,47 @@ export class StreamDeckController {
     if (idx === 7) { dev.air_out_stop(); this._renderKeys() }
   }
 
+  // Return renderKey-compatible spec for a custom button assignment
+  _customBtnSpec(a) {
+    if (!a) return { icon:'', label:'', color:'dim' }
+    switch (a.type) {
+      case 'waveform': return { icon:'▷', label: a.label || '', color: a.color || 'blue' }
+      case 'macro': {
+        const m = this._macros?.find(m => m.id === a.params?.macroId)
+        const running = m && m.id === this._runningMacroId
+        const waiting = m && m.id === this._macroWaitingId
+        return { icon: running ? '▶' : waiting ? '⏸' : '▷', label: a.label || '', color: running ? 'green' : waiting ? 'orange' : 'dim', active: running || waiting, bg: running ? '#0d2010' : waiting ? '#1a0d00' : '#000' }
+      }
+      case 'shelly': {
+        const dev = a.params?.deviceId ? this.devices[a.params.deviceId] : null
+        const comp = dev?.components?.[a.params?.component]
+        const on = comp?.output === true || comp?.ison === true
+        return { icon: on ? '●' : '○', label: a.label || '', color: on ? 'green' : 'dim', active: on, bg: on ? '#0a2010' : '#000' }
+      }
+      case 'stop': return { stopSign:true, label: a.label || 'Stop All', color:'red' }
+      default: return { icon: a.icon || '●', label: a.label || '', color: a.color || 'blue' }
+    }
+  }
+
+  // Render a custom button slot — waveform assignments use renderWaveformKey
+  _renderCustomBtn(a) {
+    if (!a) return renderKey({ icon:'', label:'', color:'dim' })
+    if (a.type === 'waveform') {
+      const wfId = a.params?.waveformId
+      const item = this._coyoteItems?.find(w => w.id === wfId)
+        || { id: wfId || '', name: a.label || wfId || '', type: 'builtin' }
+      const active = wfId && (
+        Object.values(this.devices).filter(d => d.type === 'coyote')
+          .some(d => d.channels?.A?.waveform === wfId || d.channels?.B?.waveform === wfId)
+      )
+      const levelBuf = item.type === 'live-audio'
+        ? this._liveLevels.get(item.id.slice('live-input:'.length))
+        : undefined
+      return renderWaveformKey(item, !!active, levelBuf)
+    }
+    return renderKey(this._customBtnSpec(a))
+  }
+
   _customKey(idx) {
     if (idx === 0) { this.setPage('home'); return }
     if (idx === 3) { this._stopAll(); return }
@@ -2347,6 +2339,24 @@ export class StreamDeckController {
         } else {
           const cur = dev.channels?.[ch]?.intensity ?? 0
           dev.setChannel(ch, { intensity: Math.min(200, Math.max(0, cur + ticks * 2)) })
+        }
+        break
+      }
+      case 'coyote-group': {
+        const group = this.groups?.find(g => g.id === params?.groupId)
+        if (!group) return
+        for (const { deviceId, channel } of group.channels || []) {
+          const dev = this.devices[deviceId]
+          if (!dev || dev.status !== 'connected') continue
+          if (this._customEncSpeedMode[idx]) {
+            const STEPS = COYOTE_SPEED_STEPS
+            const cur = dev.channels?.[channel]?.speed ?? 1
+            const si = STEPS.reduce((best, v, i) => Math.abs(v - cur) < Math.abs(STEPS[best] - cur) ? i : best, 0)
+            dev.setChannel(channel, { speed: STEPS[Math.max(0, Math.min(STEPS.length - 1, si + ticks))] })
+          } else {
+            const cur = dev.channels?.[channel]?.intensity ?? 0
+            dev.setChannel(channel, { intensity: Math.min(200, Math.max(0, cur + ticks * 2)) })
+          }
         }
         break
       }
@@ -2568,7 +2578,8 @@ export class StreamDeckController {
     }
     if (this.page === 'custom' && this._customLayout) {
       const page = this._customLayout.knobPages[this._customKnobPage] || []
-      if (page[idx]?.type === 'coyote-intensity') {
+      const t = page[idx]?.type
+      if (t === 'coyote-intensity' || t === 'coyote-group') {
         this._customEncSpeedMode[idx] = !this._customEncSpeedMode[idx]
         this._refreshLcd()
       }
@@ -2999,24 +3010,18 @@ export class StreamDeckController {
       const hasMultiPages = btnPages.length > 1
       const curP = this._customBtnPage + 1
       const totP = btnPages.length || 1
+      const topSlot = layout?.topButton
       const topKeys = [
         { houseIcon:true, label:'Home', color:'blue' },
-        layout?.topButton
-          ? { icon: layout.topButton.icon || '★', label: layout.topButton.label || '', color: layout.topButton.color || 'purple' }
-          : { icon:'', label:'', color:'dim' },
-        hasMultiPages
-          ? { icon:'▶', label:`${curP}/${totP}`, color:'purple' }
-          : { icon:'', label:'', color:'dim' },
+        topSlot ? this._customBtnSpec(topSlot) : { icon:'', label:'', color:'dim' },
+        hasMultiPages ? { icon:'▶', label:`${curP}/${totP}`, color:'purple' } : { icon:'', label:'', color:'dim' },
         { stopSign:true, label:'Stop All', color:'red' },
       ]
       for (let i = 0; i < 4; i++)
         await this.deck.fillKeyBuffer(i, renderKey(topKeys[i]), { format:'rgba' })
       for (let i = 0; i < 4; i++) {
         const a = btnPage[i]
-        const buf = a
-          ? renderKey({ icon: a.icon || '●', label: a.label || '', color: a.color || 'blue' })
-          : renderKey({ icon:'', label:'', color:'dim' })
-        await this.deck.fillKeyBuffer(4 + i, buf, { format:'rgba' })
+        await this.deck.fillKeyBuffer(4 + i, this._renderCustomBtn(a), { format:'rgba' })
       }
       return
     }
@@ -3042,6 +3047,15 @@ export class StreamDeckController {
     let encs
     if (this.page === 'eom' || this.page === 'hue' || this.page === 'nimble') {
       // Full-strip LCD render — handled by _refreshLcd
+      return
+    } else if (this.page === 'custom') {
+      if (!this._customLayout) return
+      const knobPage = (this._customLayout.knobPages || [])[this._customKnobPage] || []
+      for (let i = 0; i < 4; i++) {
+        const a = knobPage[i]
+        const buf = this._renderCustomEncoderLcd(a, i)
+        await this.deck.fillLcdRegion(0, i * 200, 0, buf, { format:'rgba', width:200, height:100 })
+      }
       return
     } else if (this.page === 'coyote') {
       if (this._groupMode) return  // group mode uses full-strip render via _refreshLcd
@@ -3124,7 +3138,7 @@ export class StreamDeckController {
         await this.deck.fillLcd(0, buf, { format:'rgba' })
         return
       }
-      if (this.page === 'coyote' || this.page === 'estim') {
+      if (this.page === 'coyote' || this.page === 'estim' || this.page === 'custom') {
         // Individual mode: 4 individual LCD encoder segments
         await this._renderEncoders()
         return
@@ -3139,7 +3153,6 @@ export class StreamDeckController {
       else if (this.page === 'eom')    buf = renderEomLcd(this._findDev('eom'))
       else if (this.page === 'nimble')  buf = renderNimbleLcd(this._findDev('nimble'))
       else if (this.page === 'tremblr') buf = renderTremblrLcd(this._findDev('tremblr'))
-      else if (this.page === 'custom')  buf = renderCustomLcd(this._customLayout, this._customKnobPage, this._customEncSpeedMode)
       else {
         const W=800, H=100, c=createCanvas(W,H)
         c.getContext('2d').fillStyle='#060606'; c.getContext('2d').fillRect(0,0,W,H)
@@ -3148,6 +3161,72 @@ export class StreamDeckController {
       await this.deck.fillLcd(0, buf, { format:'rgba' })
     } catch (e) {
       // Non-fatal
+    }
+  }
+
+  // Render a single 200×100 encoder LCD segment for a custom knob assignment
+  _renderCustomEncoderLcd(a, encIdx) {
+    if (!a) return renderEncoderLcd({ label:'', value:0, max:100, unit:'%', color:'#333', dim:true })
+
+    const speedMode = this._customEncSpeedMode[encIdx]
+
+    switch (a.type) {
+      case 'coyote-intensity': {
+        const dev = a.params?.deviceId ? this.devices[a.params.deviceId] : this._findDev('coyote')
+        const ch = a.params?.channel || 'A'
+        const conn = !!dev && dev.status === 'connected'
+        return renderCoyoteChannelLcd({
+          label:     a.label || `Coyote ${ch}`,
+          color:     ch === 'A' ? '#e74c3c' : '#e67e22',
+          intensity: dev?.channels?.[ch]?.intensity ?? 0,
+          waveform:  this._resolveWfName(dev?.channels?.[ch]?.waveform ?? '—'),
+          connected: conn,
+          selected:  false,
+          grouped:   false,
+          speed:     dev?.channels?.[ch]?.speed ?? 1,
+          speedMode,
+        })
+      }
+      case 'coyote-group': {
+        const groupId = a.params?.groupId
+        const group = this.groups?.find(g => g.id === groupId)
+        const firstCh = (group?.channels || [])[0]
+        const dev = firstCh ? this.devices[firstCh.deviceId] : null
+        const ch = firstCh?.channel || 'A'
+        const conn = !!dev && dev.status === 'connected'
+        return renderCoyoteChannelLcd({
+          label:     a.label || group?.name || 'Group',
+          color:     '#16a085',
+          intensity: dev?.channels?.[ch]?.intensity ?? 0,
+          waveform:  this._resolveWfName(dev?.channels?.[ch]?.waveform ?? '—'),
+          connected: conn,
+          selected:  false,
+          grouped:   true,
+          speed:     dev?.channels?.[ch]?.speed ?? 1,
+          speedMode,
+        })
+      }
+      case 'nimble-speed':   { const d = this._findDev('nimble'); return renderEncoderLcd({ label: a.label || 'Speed',   value: d?.oscSpeed ?? 0, max:100, unit:'%', color:'#f472b6', dim:!d }) }
+      case 'nimble-depth':   { const d = this._findDev('nimble'); return renderEncoderLcd({ label: a.label || 'Depth',   value: d?.oscDepth ?? 0, max:100, unit:'%', color:'#f472b6', dim:!d }) }
+      case 'nimble-nurture': { const d = this._findDev('nimble'); return renderEncoderLcd({ label: a.label || 'Nurture', value: d?.nsTexture ?? 0, max:100, unit:'%', color:'#f472b6', dim:!d }) }
+      case 'nimble-nature':  { const d = this._findDev('nimble'); return renderEncoderLcd({ label: a.label || 'Nature',  value: d?.nsNature  ?? 0, max:100, unit:'%', color:'#f472b6', dim:!d }) }
+      case 'estim-power': {
+        const d = this._findDev('estim')
+        const ch = a.params?.channel || 'A'
+        return renderEncoderLcd({ label: a.label || `E-Stim ${ch}`, value: d?.channels?.[ch]?.power ?? 0, max:99, unit:'', color:'#a3e635', dim:!d })
+      }
+      case 'hue-brightness': {
+        const d = this._findDev('hue')
+        return renderEncoderLcd({ label: a.label || 'Brightness', value: 0, max:100, unit:'%', color:'#fbbf24', dim:!d })
+      }
+      case 'shelly-dimmer': {
+        const dev = a.params?.deviceId ? this.devices[a.params.deviceId] : null
+        const comp = dev?.components?.[a.params?.component]
+        const val = comp?.brightness ?? comp?.apower ?? 0
+        return renderEncoderLcd({ label: a.label || 'Dimmer', value: val, max:100, unit:'%', color:'#fb923c', dim:!dev })
+      }
+      default:
+        return renderEncoderLcd({ label: a.label || a.type || '', value:0, max:100, unit:'%', color:'#888', dim:true })
     }
   }
 

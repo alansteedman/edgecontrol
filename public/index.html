@@ -2771,6 +2771,11 @@ function _renderCL() {
   // Palette: macros
   let macroHtml = (ME?.macros||[]).map(m => _paletteItemHtml({ type:'macro', label:m.name||'Macro', color:'teal', params:{ macroId:m.id } })).join('')
 
+  // Palette: coyote groups (dynamic)
+  const groupKnobHtml = (S.groups||[]).map(g =>
+    _paletteItemHtml({ type:'coyote-group', label: g.name || 'Group', color:'teal', params:{ groupId: g.id } }, `Group: ${(g.channels||[]).length} channels · press knob to toggle speed`)
+  ).join('')
+
   // Palette: knob types (for encoders only)
   const knobHtml = CL_KNOB_TYPES.map(k => _paletteItemHtml({ type:k.type, label:k.label, color:k.color, params:k.params||{} }, k.hint||'')).join('')
 
@@ -2802,6 +2807,10 @@ function _renderCL() {
           <div class="cl-palette-header">Macros</div>
           <div class="cl-palette-items">${macroHtml||'<div class="cl-empty">No macros</div>'}</div>
         </div>
+        ${groupKnobHtml ? `<div class="cl-palette-section">
+          <div class="cl-palette-header">Coyote Groups</div>
+          <div class="cl-palette-items">${groupKnobHtml}</div>
+        </div>` : ''}
         <div class="cl-palette-section">
           <div class="cl-palette-header">Knob Controls</div>
           <div class="cl-palette-items">${knobHtml}</div>

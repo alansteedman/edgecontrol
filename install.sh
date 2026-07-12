@@ -70,7 +70,7 @@ if ! id "$APP_USER" &>/dev/null; then
 else
   ok "User $APP_USER already exists"
 fi
-usermod -aG sudo,bluetooth,dialout,plugdev "$APP_USER" 2>/dev/null || true
+usermod -aG sudo,bluetooth,dialout,plugdev,audio "$APP_USER" 2>/dev/null || true
 
 log "Configuring sudoers"
 echo "$APP_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/edgecontroller

@@ -2714,10 +2714,36 @@ const CL_KNOB_TYPES = [
   { type:'nimble-depth',     label:'Nimble Depth',  color:'purple', params:{} },
   { type:'nimble-nurture',   label:'Nimble Nurture',color:'purple', params:{} },
   { type:'nimble-nature',    label:'Nimble Nature', color:'purple', params:{} },
-  { type:'estim-power',      label:'E-Stim Power',  color:'green',  params:{} },
-  { type:'hue-brightness',   label:'Hue Brightness',color:'amber',  params:{} },
   { type:'shelly-dimmer',    label:'Shelly Dimmer', color:'orange', params:{} },
 ]
+
+function _clHuePaletteItems() {
+  const items = []
+  for (const dev of Object.values(S.devices).filter(d => d.type === 'hue')) {
+    for (const [groupId, grp] of Object.entries(dev.groups || {})) {
+      if (grp.type === 'Entertainment') continue
+      items.push(_paletteItemHtml({
+        type: 'hue-brightness', label: grp.name || groupId, color: 'amber',
+        params: { deviceId: dev.id, groupId }
+      }, `Hue room brightness`))
+    }
+  }
+  return items.join('') || '<div class="cl-empty">No Hue rooms</div>'
+}
+
+function _clEstimPaletteItems() {
+  const items = []
+  const estims = Object.values(S.devices).filter(d => d.type === 'estim')
+  estims.forEach((dev, unitIdx) => {
+    const lbl = estims.length > 1 ? `U${unitIdx+1}` : 'E-Stim'
+    for (const ch of ['A','B']) {
+      items.push(_paletteItemHtml({ type:'estim-power', label:`${lbl} Ch ${ch} Power`, color:'green', params:{ deviceId:dev.id, channel:ch } }, 'Power 0–99'))
+    }
+    items.push(_paletteItemHtml({ type:'estim-feel', label:`${lbl} Feel`, color:'green', params:{ deviceId:dev.id } }, 'Feel 0–99'))
+    items.push(_paletteItemHtml({ type:'estim-rate', label:`${lbl} Rate`, color:'green', params:{ deviceId:dev.id } }, 'Rate 0–99'))
+  })
+  return items.join('') || '<div class="cl-empty">No E-Stim devices</div>'
+}
 
 function _assignmentLabel(a) {
   if (!a) return ''
@@ -2811,6 +2837,14 @@ function _renderCL() {
           <div class="cl-palette-header">Coyote Groups</div>
           <div class="cl-palette-items">${groupKnobHtml}</div>
         </div>` : ''}
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">Hue Rooms</div>
+          <div class="cl-palette-items">${_clHuePaletteItems()}</div>
+        </div>
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">E-Stim</div>
+          <div class="cl-palette-items">${_clEstimPaletteItems()}</div>
+        </div>
         <div class="cl-palette-section">
           <div class="cl-palette-header">Knob Controls</div>
           <div class="cl-palette-items">${knobHtml}</div>

@@ -2381,17 +2381,39 @@ export class StreamDeckController {
         break
       }
       case 'estim-power': {
-        const dev = this._findDev('estim')
+        const dev = params?.deviceId ? this.devices[params.deviceId] : this._findDev('estim')
         if (!dev) return
         const ch = params?.channel || 'A'
         dev.adjustPower?.(ch, ticks)
         break
       }
+      case 'estim-feel': {
+        const dev = params?.deviceId ? this.devices[params.deviceId] : this._findDev('estim')
+        if (!dev) return
+        if (dev.setFeel) dev.setFeel(Math.min(99, Math.max(0, (dev.feel ?? 50) + ticks)))
+        break
+      }
+      case 'estim-rate': {
+        const dev = params?.deviceId ? this.devices[params.deviceId] : this._findDev('estim')
+        if (!dev) return
+        if (dev.setRate) dev.setRate(Math.min(99, Math.max(0, (dev.rate ?? 50) + ticks)))
+        break
+      }
       case 'hue-brightness': {
-        const dev = this._findDev('hue')
+        const dev = params?.deviceId ? this.devices[params.deviceId] : this._findDev('hue')
         if (!dev) return
         const groupId = params?.groupId
-        if (groupId) dev.adjustBrightness?.(groupId, ticks * 5)
+        if (!groupId) break
+        const grp = dev._groups?.[groupId]
+        const curBri = grp ? Math.round((grp.action?.bri || 254) * 100 / 254) : 100
+        const newBri = Math.min(100, Math.max(1, curBri + ticks * 2))
+        if (dev._groups?.[groupId]) {
+          Object.assign(dev._groups[groupId].action || (dev._groups[groupId].action = {}),
+            { bri: Math.round(newBri * 254 / 100), on: true })
+        }
+        if (!this._hueKnobTimers) this._hueKnobTimers = {}
+        clearTimeout(this._hueKnobTimers[groupId])
+        this._hueKnobTimers[groupId] = setTimeout(() => dev.setGroup?.(groupId, { bri: newBri, on: true }), 200)
         break
       }
       case 'shelly-dimmer': {
@@ -3211,13 +3233,23 @@ export class StreamDeckController {
       case 'nimble-nurture': { const d = this._findDev('nimble'); return renderEncoderLcd({ label: a.label || 'Nurture', value: d?.nsTexture ?? 0, max:100, unit:'%', color:'#f472b6', dim:!d }) }
       case 'nimble-nature':  { const d = this._findDev('nimble'); return renderEncoderLcd({ label: a.label || 'Nature',  value: d?.nsNature  ?? 0, max:100, unit:'%', color:'#f472b6', dim:!d }) }
       case 'estim-power': {
-        const d = this._findDev('estim')
-        const ch = a.params?.channel || 'A'
+        const d = params?.deviceId ? this.devices[params.deviceId] : this._findDev('estim')
+        const ch = params?.channel || 'A'
         return renderEncoderLcd({ label: a.label || `E-Stim ${ch}`, value: d?.channels?.[ch]?.power ?? 0, max:99, unit:'', color:'#a3e635', dim:!d })
       }
+      case 'estim-feel': {
+        const d = params?.deviceId ? this.devices[params.deviceId] : this._findDev('estim')
+        return renderEncoderLcd({ label: a.label || 'Feel', value: d?.feel ?? 50, max:99, unit:'', color:'#a3e635', dim:!d })
+      }
+      case 'estim-rate': {
+        const d = params?.deviceId ? this.devices[params.deviceId] : this._findDev('estim')
+        return renderEncoderLcd({ label: a.label || 'Rate', value: d?.rate ?? 50, max:99, unit:'', color:'#a3e635', dim:!d })
+      }
       case 'hue-brightness': {
-        const d = this._findDev('hue')
-        return renderEncoderLcd({ label: a.label || 'Brightness', value: 0, max:100, unit:'%', color:'#fbbf24', dim:!d })
+        const d = params?.deviceId ? this.devices[params.deviceId] : this._findDev('hue')
+        const grp = d?._groups?.[params?.groupId]
+        const bri = grp ? Math.round((grp.action?.bri || 0) * 100 / 254) : 0
+        return renderEncoderLcd({ label: a.label || 'Brightness', value: bri, max:100, unit:'%', color:'#fbbf24', dim:!d })
       }
       case 'shelly-dimmer': {
         const dev = a.params?.deviceId ? this.devices[a.params.deviceId] : null

@@ -317,7 +317,7 @@ select.mci{cursor:pointer}
 .cl-dialog-footer{padding:12px 18px;border-top:1px solid #1e1e1e;display:flex;gap:8px;justify-content:flex-end;flex-shrink:0}
 .cl-layout{display:flex;gap:18px;min-height:0}
 .cl-palette{width:200px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto;max-height:calc(90vh - 130px)}
-.cl-palette-section{}
+.cl-palette-section{}.cl-palette-divider{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#333;border-top:1px solid #222;padding-top:8px;margin-top:4px}
 .cl-palette-header{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;font-weight:700}
 .cl-palette-items{display:flex;flex-direction:column;gap:4px}
 .cl-palette-item{border:1px solid #333;border-radius:6px;padding:6px 8px;cursor:grab;user-select:none;background:#0a0a0a;transition:border-color .15s}
@@ -2649,9 +2649,19 @@ function _clDragStart(e, assignment) {
   e.dataTransfer.effectAllowed = 'copy'
 }
 
+function _clDragOver(e, isKnob) {
+  if (_isKnobAssignment(_clDrag) === isKnob) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  // no preventDefault = browser shows forbidden cursor automatically
+}
+
 function _clDrop(e, target) {
   e.preventDefault()
   if (!_clDrag) return
+  const targetIsKnob = target.kind === 'knob'
+  if (_isKnobAssignment(_clDrag) !== targetIsKnob) return
   if (target.kind === 'topButton') {
     _clLayout.topButton = {..._clDrag}
   } else if (target.kind === 'btn') {
@@ -2707,43 +2717,12 @@ function _clRemoveKnobPage() {
   _renderCL()
 }
 
-const CL_KNOB_TYPES = [
-  { type:'coyote-intensity', label:'Coyote A',      color:'blue',   params:{ channel:'A' }, hint:'Intensity · press knob to toggle speed' },
-  { type:'coyote-intensity', label:'Coyote B',      color:'blue',   params:{ channel:'B' }, hint:'Intensity · press knob to toggle speed' },
-  { type:'nimble-speed',     label:'Nimble Speed',  color:'purple', params:{} },
-  { type:'nimble-depth',     label:'Nimble Depth',  color:'purple', params:{} },
-  { type:'nimble-nurture',   label:'Nimble Nurture',color:'purple', params:{} },
-  { type:'nimble-nature',    label:'Nimble Nature', color:'purple', params:{} },
-  { type:'shelly-dimmer',    label:'Shelly Dimmer', color:'orange', params:{} },
-]
-
-function _clHuePaletteItems() {
-  const items = []
-  for (const dev of Object.values(S.devices).filter(d => d.type === 'hue')) {
-    for (const [groupId, grp] of Object.entries(dev.groups || {})) {
-      if (grp.type === 'Entertainment') continue
-      items.push(_paletteItemHtml({
-        type: 'hue-brightness', label: grp.name || groupId, color: 'amber',
-        params: { deviceId: dev.id, groupId }
-      }, `Hue room brightness`))
-    }
-  }
-  return items.join('') || '<div class="cl-empty">No Hue rooms</div>'
-}
-
-function _clEstimPaletteItems() {
-  const items = []
-  const estims = Object.values(S.devices).filter(d => d.type === 'estim')
-  estims.forEach((dev, unitIdx) => {
-    const lbl = estims.length > 1 ? `U${unitIdx+1}` : 'E-Stim'
-    for (const ch of ['A','B']) {
-      items.push(_paletteItemHtml({ type:'estim-power', label:`${lbl} Ch ${ch} Power`, color:'green', params:{ deviceId:dev.id, channel:ch } }, 'Power 0–99'))
-    }
-    items.push(_paletteItemHtml({ type:'estim-feel', label:`${lbl} Feel`, color:'green', params:{ deviceId:dev.id } }, 'Feel 0–99'))
-    items.push(_paletteItemHtml({ type:'estim-rate', label:`${lbl} Rate`, color:'green', params:{ deviceId:dev.id } }, 'Rate 0–99'))
-  })
-  return items.join('') || '<div class="cl-empty">No E-Stim devices</div>'
-}
+const CL_KNOB_TYPES = new Set([
+  'coyote-intensity','coyote-group','nimble-speed','nimble-depth',
+  'nimble-nurture','nimble-nature','estim-power','estim-feel',
+  'estim-rate','hue-brightness','shelly-dimmer'
+])
+function _isKnobAssignment(a) { return CL_KNOB_TYPES.has(a?.type) }
 
 function _assignmentLabel(a) {
   if (!a) return ''
@@ -2756,14 +2735,14 @@ function _assignmentColor(a) {
   return map[a?.color] || '#888'
 }
 
-function _slotHtml(a, target, allowKnob) {
+function _slotHtml(a, target, isKnob) {
   const filled = !!a
   const label = _assignmentLabel(a)
   const col = filled ? _assignmentColor(a) : '#2a2a2a'
   const targetJson = JSON.stringify(target).replace(/"/g, '&quot;')
   return `<div class="cl-slot${filled?' cl-slot-filled':''}"
     style="border-color:${col}"
-    ondragover="event.preventDefault()"
+    ondragover="_clDragOver(event,${isKnob})"
     ondrop="_clDrop(event,${targetJson})"
     ondblclick="_clClear(${targetJson})">
     <div class="cl-slot-label" style="color:${filled?col:'#444'}">${filled ? label : '+'}</div>
@@ -2783,6 +2762,31 @@ function _paletteItemHtml(assignment, extra) {
   </div>`
 }
 
+function _clHuePaletteItems() {
+  const items = []
+  for (const dev of Object.values(S.devices||{}).filter(d => d.type === 'hue')) {
+    for (const [groupId, grp] of Object.entries(dev.groups || {})) {
+      if (grp.type === 'Entertainment') continue
+      items.push(_paletteItemHtml({ type:'hue-brightness', label:grp.name||groupId, color:'amber', params:{ deviceId:dev.id, groupId } }, 'Room brightness'))
+    }
+  }
+  return items.join('') || '<div class="cl-empty">No Hue rooms</div>'
+}
+
+function _clEstimPaletteItems() {
+  const items = []
+  const estims = Object.values(S.devices||{}).filter(d => d.type === 'estim')
+  estims.forEach((dev, i) => {
+    const u = estims.length > 1 ? `U${i+1} ` : ''
+    for (const ch of ['A','B']) {
+      items.push(_paletteItemHtml({ type:'estim-power', label:`${u}Ch ${ch} Power`, color:'green', params:{ deviceId:dev.id, channel:ch } }, 'Power 0–99'))
+    }
+    items.push(_paletteItemHtml({ type:'estim-feel', label:`${u}Feel`, color:'green', params:{ deviceId:dev.id } }, 'Feel 0–99'))
+    items.push(_paletteItemHtml({ type:'estim-rate', label:`${u}Rate`, color:'green', params:{ deviceId:dev.id } }, 'Rate 0–99'))
+  })
+  return items.join('') || '<div class="cl-empty">No E-Stim devices</div>'
+}
+
 function _renderCL() {
   const modal = document.getElementById('cl-modal')
   if (!modal) return
@@ -2790,41 +2794,40 @@ function _renderCL() {
   const btnPage = layout.buttonPages[_clBtnPage] || []
   const knobPage = layout.knobPages[_clKnobPage] || []
 
-  // Palette: waveforms
+  // ── Button palette items ─────────────────────────────────────────────────────
   const wfs = [...(S.waveforms?.builtin||[]), ...(S.waveforms?.custom||[]), ...(S.waveforms?.live||[])]
-  let wfHtml = wfs.map(w => _paletteItemHtml({ type:'waveform', label:w.name||w.id, color:'blue', params:{ waveformId:w.id } })).join('')
+  const wfHtml = wfs.map(w => _paletteItemHtml({ type:'waveform', label:w.name||w.id, color:'blue', params:{ waveformId:w.id } })).join('')
+  const macroHtml = (ME?.macros||[]).map(m => _paletteItemHtml({ type:'macro', label:m.name||'Macro', color:'teal', params:{ macroId:m.id } })).join('')
+  const stopHtml = _paletteItemHtml({ type:'stop', label:'Stop All', color:'red' })
 
-  // Palette: macros
-  let macroHtml = (ME?.macros||[]).map(m => _paletteItemHtml({ type:'macro', label:m.name||'Macro', color:'teal', params:{ macroId:m.id } })).join('')
-
-  // Palette: coyote groups (dynamic)
-  const groupKnobHtml = (S.groups||[]).map(g =>
-    _paletteItemHtml({ type:'coyote-group', label: g.name || 'Group', color:'teal', params:{ groupId: g.id } }, `Group: ${(g.channels||[]).length} channels · press knob to toggle speed`)
+  // ── Knob palette items ───────────────────────────────────────────────────────
+  const coyoteIndivHtml = [
+    _paletteItemHtml({ type:'coyote-intensity', label:'Coyote A', color:'blue', params:{ channel:'A' } }, 'Intensity · press knob to toggle speed'),
+    _paletteItemHtml({ type:'coyote-intensity', label:'Coyote B', color:'blue', params:{ channel:'B' } }, 'Intensity · press knob to toggle speed'),
+  ].join('')
+  const coyoteGroupHtml = (S.groups||[]).map(g =>
+    _paletteItemHtml({ type:'coyote-group', label:g.name||'Group', color:'teal', params:{ groupId:g.id } }, `${(g.channels||[]).length} channels · press knob to toggle speed`)
   ).join('')
+  const nimbleHtml = [
+    { type:'nimble-speed',   label:'Nimble Speed'   },
+    { type:'nimble-depth',   label:'Nimble Depth'   },
+    { type:'nimble-nurture', label:'Nimble Nurture' },
+    { type:'nimble-nature',  label:'Nimble Nature'  },
+  ].map(k => _paletteItemHtml({ ...k, color:'purple', params:{} })).join('')
+  const shellyHtml = _paletteItemHtml({ type:'shelly-dimmer', label:'Shelly Dimmer', color:'orange', params:{} })
 
-  // Palette: knob types (for encoders only)
-  const knobHtml = CL_KNOB_TYPES.map(k => _paletteItemHtml({ type:k.type, label:k.label, color:k.color, params:k.params||{} }, k.hint||'')).join('')
-
-  // Palette: stop
-  const stopHtml = _paletteItemHtml({ type:'stop', label:'Stop All', color:'red', icon:'⏹' })
-
-  // Deck graphic
+  // ── Slots ────────────────────────────────────────────────────────────────────
   const topBtnSlot = _slotHtml(layout.topButton, {kind:'topButton'}, false)
-
   const btnSlots = btnPage.map((a,i) => _slotHtml(a, {kind:'btn',idx:i}, false)).join('')
-
   const knobSlots = knobPage.map((a,i) => _slotHtml(a, {kind:'knob',idx:i}, true)).join('')
-
-  // Button page tabs
-  const btnTabs = layout.buttonPages.map((_, i) => `<button class="cl-tab${i===_clBtnPage?' cl-tab-active':''}" onclick="_clBtnPage=${i};_renderCL()">Page ${i+1}</button>`).join('')
-
-  // Knob page tabs
-  const knobTabs = layout.knobPages.map((_, i) => `<button class="cl-tab${i===_clKnobPage?' cl-tab-active':''}" onclick="_clKnobPage=${i};_renderCL()">Page ${i+1}</button>`).join('')
+  const btnTabs = layout.buttonPages.map((_,i) => `<button class="cl-tab${i===_clBtnPage?' cl-tab-active':''}" onclick="_clBtnPage=${i};_renderCL()">Page ${i+1}</button>`).join('')
+  const knobTabs = layout.knobPages.map((_,i) => `<button class="cl-tab${i===_clKnobPage?' cl-tab-active':''}" onclick="_clKnobPage=${i};_renderCL()">Page ${i+1}</button>`).join('')
 
   document.getElementById('cl-body').innerHTML = `
     <div class="cl-layout">
       <!-- Palette -->
       <div class="cl-palette">
+        <div class="cl-palette-divider">Buttons</div>
         <div class="cl-palette-section">
           <div class="cl-palette-header">Waveforms</div>
           <div class="cl-palette-items">${wfHtml||'<div class="cl-empty">No waveforms</div>'}</div>
@@ -2833,10 +2836,19 @@ function _renderCL() {
           <div class="cl-palette-header">Macros</div>
           <div class="cl-palette-items">${macroHtml||'<div class="cl-empty">No macros</div>'}</div>
         </div>
-        ${groupKnobHtml ? `<div class="cl-palette-section">
-          <div class="cl-palette-header">Coyote Groups</div>
-          <div class="cl-palette-items">${groupKnobHtml}</div>
-        </div>` : ''}
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">Actions</div>
+          <div class="cl-palette-items">${stopHtml}</div>
+        </div>
+        <div class="cl-palette-divider">Knobs</div>
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">Coyote</div>
+          <div class="cl-palette-items">${coyoteIndivHtml}${coyoteGroupHtml||'<div class="cl-empty">No groups</div>'}</div>
+        </div>
+        <div class="cl-palette-section">
+          <div class="cl-palette-header">Nimble</div>
+          <div class="cl-palette-items">${nimbleHtml}</div>
+        </div>
         <div class="cl-palette-section">
           <div class="cl-palette-header">Hue Rooms</div>
           <div class="cl-palette-items">${_clHuePaletteItems()}</div>
@@ -2846,12 +2858,8 @@ function _renderCL() {
           <div class="cl-palette-items">${_clEstimPaletteItems()}</div>
         </div>
         <div class="cl-palette-section">
-          <div class="cl-palette-header">Knob Controls</div>
-          <div class="cl-palette-items">${knobHtml}</div>
-        </div>
-        <div class="cl-palette-section">
-          <div class="cl-palette-header">Actions</div>
-          <div class="cl-palette-items">${stopHtml}</div>
+          <div class="cl-palette-header">Shelly</div>
+          <div class="cl-palette-items">${shellyHtml}</div>
         </div>
       </div>
 

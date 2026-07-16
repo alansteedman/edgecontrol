@@ -624,7 +624,7 @@ function broadcast(msg) {
 }
 
 function encodeFreq(hz) {
-  hz = Math.max(10, Math.min(100, hz))
+  hz = Math.max(10, Math.min(200, hz))
   const ms = Math.round(1000 / hz) // protocol expects period in ms, not Hz
   if (ms <= 100) return ms
   if (ms <= 600) return Math.round((ms - 100) / 5) + 100
@@ -3224,6 +3224,42 @@ app.delete('/api/waveforms/:id', (req,res) => {
   waveformStore.custom.splice(idx,1); saveWaveforms()
   broadcast({type:'waveforms:updated',waveforms:waveformsMeta()})
   res.json({ok:true})
+})
+
+const hwlUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } })
+
+app.post('/api/waveforms/hwl', requireAuth, (req, res, next) => hwlUpload.single('file')(req, res, err => {
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({error:'File too large (max 20 MB)'})
+  if (err) return res.status(400).json({error: err.message})
+  next()
+}), (req, res) => {
+  if (!req.file) return res.status(400).json({error:'No file uploaded'})
+  const buf = req.file.buffer
+  const MAGIC = 'YEAHBOI!'
+  if (buf.length < 8 || buf.slice(0,8).toString('ascii') !== MAGIC)
+    return res.status(400).json({error:'Not a valid HWL file'})
+  if ((buf.length - 8) % 16 !== 0)
+    return res.status(400).json({error:'HWL file appears truncated'})
+
+  const baseName = (req.body.name || req.file.originalname.replace(/\.hwl$/i,'')).trim()
+  const framesA = [], framesB = []
+  for (let i = 8; i < buf.length; i += 16) {
+    const ampA  = buf.readFloatLE(i)
+    const ampB  = buf.readFloatLE(i + 4)
+    const freqA = buf.readFloatLE(i + 8)
+    const freqB = buf.readFloatLE(i + 12)
+    // freq 0.0–1.0 → 10–200 Hz; amp 0.0–1.0 → 0–100
+    framesA.push({ segs: [{ f: Math.round(freqA * 190 + 10), a: Math.round(ampA * 100) }] })
+    framesB.push({ segs: [{ f: Math.round(freqB * 190 + 10), a: Math.round(ampB * 100) }] })
+  }
+
+  const ts = Date.now()
+  const wfA = { id:`hwl-${ts}-A`, name:`${baseName} A`, type:'audio', frames:framesA, importedFrom:'hwl' }
+  const wfB = { id:`hwl-${ts}-B`, name:`${baseName} B`, type:'audio', frames:framesB, importedFrom:'hwl' }
+  waveformStore.custom.push(wfA, wfB)
+  saveWaveforms()
+  broadcast({type:'waveforms:updated', waveforms:waveformsMeta()})
+  res.json({ ok:true, waveforms:[{id:wfA.id,name:wfA.name},{id:wfB.id,name:wfB.name}], frames:framesA.length })
 })
 
 // ── Shutdown / Start ──────────────────────────────────────────────────────────

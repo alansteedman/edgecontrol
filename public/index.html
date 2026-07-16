@@ -548,6 +548,21 @@ select.mci{cursor:pointer}
         </div>
       </div>
 
+      <!-- HWL Import -->
+      <div style="margin-top:20px">
+        <div class="sec-row" style="margin-bottom:10px">
+          <div class="sec-label">Import HWL Waveform</div>
+        </div>
+        <div onclick="document.getElementById('hwl-file-input').click()"
+          style="border:2px dashed #222;border-radius:9px;padding:18px;text-align:center;cursor:pointer;transition:border-color .15s;margin-bottom:10px"
+          onmouseover="this.style.borderColor='#4fc3f7'" onmouseout="this.style.borderColor='#222'">
+          <div style="font-size:18px;margin-bottom:4px">⚡</div>
+          <div style="font-size:12px;color:#444">Click to import a .hwl file from Howl</div>
+          <div style="font-size:10px;color:#2e2e2e;margin-top:3px">Imports as two waveforms (Channel A + Channel B)</div>
+        </div>
+        <input type="file" id="hwl-file-input" accept=".hwl" style="display:none" onchange="hwlFilePicked(this)"/>
+      </div>
+
       <!-- Audio Files -->
       <div style="margin-top:20px">
         <div class="sec-row" style="margin-bottom:10px">
@@ -6219,6 +6234,21 @@ async function analyzeFileForSpectrum(file) {
   } catch(e) {
     console.warn('[band] spectrum analysis failed:', e.message)
   }
+}
+
+async function hwlFilePicked(input) {
+  const file = input.files[0]; input.value = ''
+  if (!file) return
+  const name = file.name.replace(/\.hwl$/i, '')
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('name', name)
+  try {
+    const r = await fetch('/api/waveforms/hwl', { method:'POST', body:fd })
+    const d = await r.json()
+    if (!r.ok) return alert('HWL import failed: ' + (d.error || r.status))
+    alert(`Imported "${name}" as:\n• ${d.waveforms[0].name}\n• ${d.waveforms[1].name}\n(${d.frames} frames · ${(d.frames/40).toFixed(1)}s)`)
+  } catch(e) { alert('HWL import error: ' + e.message) }
 }
 
 function audioDrop(e){

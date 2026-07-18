@@ -281,7 +281,7 @@ def draw_status(info):
 
     img = Image.new('RGB', (W, H), BG)
     d = ImageDraw.Draw(img)
-    header(d, "EdgeController", f"box: {st.get('boxId','—')}")
+    header(d, "Kink Controller", f"box: {st.get('boxId','—')}")
 
     if in_ap:
         dot_color, wifi_label = ORANGE, "Hotspot"
@@ -492,7 +492,7 @@ def main():
 
     splash = Image.new('RGB', (W, H), BG)
     sd = ImageDraw.Draw(splash)
-    text_centered(sd, "EdgeController", 95, CYAN, F_XL)
+    text_centered(sd, "Kink Controller", 95, CYAN, F_XL)
     text_centered(sd, "Starting...", 128, GRAY, F_MD)
     show(splash)
 

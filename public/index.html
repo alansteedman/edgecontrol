@@ -4326,17 +4326,24 @@ function startGrpViz(grpId) {
     const grp = S.groups?.find(g=>g.id===grpId)
     const firstCh = grp?.channels?.find(({deviceId})=>S.devices?.[deviceId]?.status==='connected')
     let intensity, wfId, speed
+    let actMode = false, actDef = null
     if(firstCh) {
       const chData = S.devices[firstCh.deviceId]?.channels?.[firstCh.channel]||{}
       intensity = Math.min(chData.intensity||0, 100)
-      wfId = chData.waveform||'pulse'
       speed = chData.speed||1
+      actMode = chData.mode==='activity'
+      actDef = actMode ? (S.activities||[]).find(a=>a.id===chData.activityId) : null
+      wfId = actDef ? actDef.ampWave : (chData.waveform||'pulse')
     } else {
       const st = groupState?.[grpId]||{intensity:0,waveform:'pulse'}
       intensity = Math.min(st.intensity||0, 100)
-      wfId = st.waveform||'pulse'
+      actMode = st.mode==='activity'
+      actDef = actMode ? (S.activities||[]).find(a=>a.id===st.activityId) : null
+      wfId = actDef ? actDef.ampWave : (st.waveform||'pulse')
       speed = 1
     }
+    const grpColorTop = actMode ? '#fde68a' : colorTop
+    const grpColorBot = actMode ? 'rgba(251,191,36,.7)' : colorBot
     if (wfId && wfId.startsWith('live-input:')) {
       ctx.fillStyle='#080808'; ctx.fillRect(0,0,W,H)
       _drawLiveViz(ctx, W, H, wfId.slice('live-input:'.length), intensity)
@@ -4355,7 +4362,7 @@ function startGrpViz(grpId) {
     const PLAY_X = Math.floor(W*0.3)
     const curFrame = Math.floor(state.phase)
     const g = ctx.createLinearGradient(0,0,0,H)
-    g.addColorStop(0,colorTop); g.addColorStop(1,colorBot)
+    g.addColorStop(0,grpColorTop); g.addColorStop(1,grpColorBot)
     for(let px=0;px<W;px++){
       const rawTick = curFrame + (px - PLAY_X)
       let amp
@@ -4367,7 +4374,7 @@ function startGrpViz(grpId) {
         amp=typeof f==='number'?f:(f?.segs?.[0]?.a??0)
       }
       const bh=Math.max(1,Math.round(amp*intensity/100/100*(H-2)))
-      ctx.fillStyle=px<PLAY_X?colorBot:g
+      ctx.fillStyle=px<PLAY_X?grpColorBot:g
       ctx.fillRect(px,H-bh,1,bh)
     }
     ctx.strokeStyle='rgba(255,255,255,0.85)'; ctx.lineWidth=1.5
@@ -5019,7 +5026,7 @@ function renderGroups() {
   if(!S.groups.length){ el.innerHTML='<div class="empty">No groups — create one to control individual Coyote channels together</div>'; return }
   el.innerHTML=''
   S.groups.forEach(g=>{
-    if(!groupState[g.id]) groupState[g.id]={intensity:0,waveform:'pulse',baseFreq:25}
+    if(!groupState[g.id]) groupState[g.id]={intensity:0,waveform:'pulse',baseFreq:25,mode:'waveform',activityId:null}
     el.appendChild(buildGroupCard(g))
     requestAnimationFrame(()=>startGrpViz(g.id))
   })

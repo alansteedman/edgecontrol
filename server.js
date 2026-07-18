@@ -4328,6 +4328,7 @@ app.post('/api/wifi/hotspot/start', requireAuth, async (req, res) => {
 app.post('/api/wifi/hotspot/stop', requireAuth, async (req, res) => {
   try {
     await nmcli('connection down Hotspot').catch(() => {})
+    await nmcli('connection delete Hotspot').catch(() => {})
     await nmcli('device connect wlan0').catch(() => {})
     res.json({ ok: true })
   } catch(e) { res.status(500).json({ error: e.message }) }

@@ -1152,7 +1152,7 @@ let ws, S = { devices:{}, waveforms:{builtin:[],custom:[],live:[]}, groups:[], a
 let scanPick = null
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
-let _wsAlive = false, _wsPingTimer = null
+let _wsAlive = false, _wsPingTimer = null, _wsReloadOnReconnect = false
 
 function _wsSetBanner(connected) {
   let b = document.getElementById('ws-banner')
@@ -1172,6 +1172,7 @@ function connect() {
   ws.onopen = () => {
     _wsAlive = true
     _wsSetBanner(true)
+    if (_wsReloadOnReconnect) { window.location.reload(); return }
     lg('Connected to EdgeController')
     setTimeout(initBandSelector, 100)
     clearInterval(_wsPingTimer)
@@ -1453,6 +1454,7 @@ function handle(m) {
         document.getElementById('upd-btn').disabled=true
         b.style.display='flex' }; break
     case 'update:restarting':
+      _wsReloadOnReconnect = true
       document.getElementById('upd-msg').textContent='Restarting…'; break
     case 'update:failed':
       { document.getElementById('upd-spinner').style.display='none'

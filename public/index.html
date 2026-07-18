@@ -1148,7 +1148,7 @@ select.mci{cursor:pointer}
 
 <script>
 // ── State ────────────────────────────────────────────────────────────────────
-let ws, S = { devices:{}, waveforms:{builtin:[],custom:[],live:[]}, groups:[], role:'admin', authEnabled:false, deck:{ status:'disconnected', name:null } }
+let ws, S = { devices:{}, waveforms:{builtin:[],custom:[],live:[]}, groups:[], activities:[], role:'admin', authEnabled:false, deck:{ status:'disconnected', name:null } }
 let scanPick = null
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -1279,6 +1279,7 @@ function handle(m) {
     case 'state':
       m.devices.forEach(d => { d.tickAt=performance.now(); S.devices[d.id]=d })
       if(m.waveforms) S.waveforms=m.waveforms
+      if(m.activities) S.activities=m.activities
       if(m.groups)   S.groups=m.groups
       if(m.role) S.role=m.role
       if(m.deck) { S.deck=m.deck; renderDeckCard() }
@@ -4195,7 +4196,7 @@ function buildCh(devId,ch,c,btnEnabled=false) {
   for(const w of S.waveforms.custom||[])
     customs+=`<div class="wf-opt${c.waveform===w.id?' sel':''}" onclick="pickWf('${devId}','${ch}','${w.id}')"><canvas width="56" height="20" id="mc-${devId}${ch}${w.id.replace(/[^a-z0-9]/g,'')}" style="background:#0f0f0f;border-radius:2px"></canvas><span>${w.name}</span></div>`
   return `
-    <div class="ch-block">
+    <div class="ch-block" id="ch-${devId}-${ch}">
       <div class="ch-top">
         <span class="ch-lbl">Channel ${ch}</span>
         <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:${btnEnabled?'#4ade80':'#555'};cursor:pointer;white-space:nowrap">
@@ -4235,7 +4236,12 @@ function buildCh(devId,ch,c,btnEnabled=false) {
           </div>
         </div>
       </div>
-      <div class="qwf-strip">${buildQwfStrip(devId,ch,c.waveform)}</div>
+      ${S.activities?.length ? `<div style="margin-bottom:4px">
+        <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Activities</div>
+        <div class="qwf-strip">${buildActStrip(devId,ch,c.mode==='activity'?c.activityId:null).replace(/class="qwf-btn/g,'class="qwf-btn act-btn')}</div>
+      </div>` : ''}
+      <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Waveforms</div>
+      <div class="qwf-strip">${buildQwfStrip(devId,ch,c.mode==='waveform'?c.waveform:null)}</div>
       <div class="wf-sel">
         <button class="wf-sel-btn" onclick="toggleDrop('${dropId}')">
           <span id="wfn-${devId}${ch}">${wfName}</span>
@@ -4400,16 +4406,20 @@ function startChViz(devId, ch) {
     const intensity = Math.min(chData.intensity||0, 100)
     const wfId = chData.waveform||'pulse'
     const speed = chData.speed||1
-    if (wfId && wfId.startsWith('live-input:')) {
+    // Activity mode: visualise the amp wave with golden colour
+    const actMode = chData.mode==='activity'
+    const actDef = actMode ? (S.activities||[]).find(a=>a.id===chData.activityId) : null
+    const vizWfId = actDef ? actDef.ampWave : wfId
+    if (!actMode && wfId && wfId.startsWith('live-input:')) {
       ctx.fillStyle='#080808'; ctx.fillRect(0,0,W,H)
       _drawLiveViz(ctx, W, H, wfId.slice('live-input:'.length), intensity)
       state.rafId = requestAnimationFrame(draw); return
     }
-    const wf = [...(S.waveforms?.builtin||[]),...(S.waveforms?.custom||[])].find(w=>w.id===wfId)
+    const wf = [...(S.waveforms?.builtin||[]),...(S.waveforms?.custom||[])].find(w=>w.id===vizWfId)
     if(!wf){ state.rafId=requestAnimationFrame(draw); return }
     const isBuiltin = !Array.isArray(wf.frames)
     const fLen = isBuiltin ? 480 : wf.frames.length
-    if(wfId!==lastWfId){ lastWfId=wfId }
+    if(vizWfId!==lastWfId){ lastWfId=vizWfId }
     lastFLen=fLen
     // Sync phase to per-channel server tick; freeze when paused
     const chTick = dev.ticks?.[ch]||0
@@ -4418,15 +4428,16 @@ function startChViz(devId, ch) {
     // Fixed playhead position — waveform scrolls past it
     const PLAY_X = Math.floor(W*0.3)
     const curFrame = Math.floor(state.phase)
+    const actColorTop = '#fde68a', actColorBot = 'rgba(251,191,36,.7)'
     const g = ctx.createLinearGradient(0,0,0,H)
-    g.addColorStop(0,colorTop); g.addColorStop(1,colorBot)
+    g.addColorStop(0, actMode?actColorTop:colorTop); g.addColorStop(1, actMode?actColorBot:colorBot)
     for(let px=0;px<W;px++){
       // For builtins pass raw tick (no modulo — sin handles arbitrary values, avoids wrap seam)
       // For custom use safe modulo to index into frames array
       const rawTick = curFrame + (px - PLAY_X)
       let amp
       if(isBuiltin){
-        amp=builtinFrameAmp(wfId,rawTick,speed)
+        amp=builtinFrameAmp(vizWfId,rawTick,speed)
       } else {
         const fi=((Math.floor(rawTick*speed)%fLen)+fLen)%fLen
         const f=wf.frames[fi]
@@ -4682,6 +4693,62 @@ function findWfByCanvasId(cid) {
   for(const w of all){ if(cid.endsWith(w.id.replace(/[^a-z0-9]/g,''))) return w.id }
   return ''
 }
+function buildActStrip(devId, ch, activeActId) {
+  return (S.activities||[]).map(a=>`
+    <button class="qwf-btn${a.id===activeActId?' qwf-active':''}" data-actid="${a.id}"
+      onclick="chSetActivity('${devId}','${ch}','${a.id}')" title="${a.name}: ${a.desc}">
+      <span class="qwf-icon">${a.icon}</span>
+      <span class="qwf-lbl">${a.name}</span>
+    </button>`).join('')
+}
+
+function buildActStripGroup(grpId, activeActId) {
+  return (S.activities||[]).map(a=>`
+    <button class="qwf-btn${a.id===activeActId?' qwf-active':''}" data-actid="${a.id}"
+      onclick="groupSetActivity('${grpId}','${a.id}')" title="${a.name}: ${a.desc}">
+      <span class="qwf-icon">${a.icon}</span>
+      <span class="qwf-lbl">${a.name}</span>
+    </button>`).join('')
+}
+
+function chSetActivity(devId, ch, actId) {
+  const act = (S.activities||[]).find(a=>a.id===actId)
+  if (!act) return
+  // Update waveform name display to show activity name
+  const wfnEl = document.getElementById(`wfn-${devId}${ch}`)
+  if (wfnEl) wfnEl.textContent = act.name
+  // Disable freq slider (activity controls freq internally)
+  const freqRow = document.getElementById(`freq-${devId}${ch}row`)
+  if (freqRow) { freqRow.style.opacity='0.4'; freqRow.style.pointerEvents='none' }
+  // Highlight active activity button, clear waveform strip highlights
+  const chBlock = document.getElementById(`ch-${devId}-${ch}`)
+  if (chBlock) {
+    chBlock.querySelectorAll('.act-btn').forEach(b=>b.classList.toggle('qwf-active', b.dataset.actid===actId))
+    chBlock.querySelectorAll('.qwf-btn:not(.act-btn)').forEach(b=>b.classList.remove('qwf-active'))
+  }
+  // Update local state and send
+  if (S.devices[devId]?.channels?.[ch]) {
+    S.devices[devId].channels[ch].mode = 'activity'
+    S.devices[devId].channels[ch].activityId = actId
+  }
+  send({type:'device:setChannel', deviceId:devId, channel:ch, params:{activityId:actId}})
+}
+
+function groupSetActivity(grpId, actId) {
+  const act = (S.activities||[]).find(a=>a.id===actId)
+  if (!act) return
+  const nm = document.getElementById(`gwfn-${grpId}`); if (nm) nm.textContent = act.name
+  const freqRow = document.getElementById(`freq-${grpId}row`)
+  if (freqRow) { freqRow.style.opacity='0.4'; freqRow.style.pointerEvents='none' }
+  const gc = document.getElementById(`gc-${grpId}`)
+  if (gc) {
+    gc.querySelectorAll('.act-btn').forEach(b=>b.classList.toggle('qwf-active', b.dataset.actid===actId))
+    gc.querySelectorAll('.qwf-btn:not(.act-btn)').forEach(b=>b.classList.remove('qwf-active'))
+  }
+  if (groupState[grpId]) { groupState[grpId].mode='activity'; groupState[grpId].activityId=actId }
+  send({type:'group:set', groupId:grpId, params:{activityId:actId}})
+}
+
 function buildQwfStrip(devId,ch,activeWfId) {
   return (S.waveforms.builtin||[]).filter(w=>w.group==='classic'||!w.group).map(w=>`
     <button class="qwf-btn${w.id===activeWfId?' qwf-active':''}" data-wfid="${w.id}" onclick="quickWf('${devId}','${ch}','${w.id}')" title="${w.name}">
@@ -4697,7 +4764,14 @@ function _pickWfFreq(devId, ch, wfId) {
   return preset
 }
 
+function _exitActivityMode(devId, ch) {
+  if (S.devices[devId]?.channels?.[ch]) S.devices[devId].channels[ch].mode = 'waveform'
+  const chBlock = document.getElementById(`ch-${devId}-${ch}`)
+  if (chBlock) chBlock.querySelectorAll('.act-btn').forEach(b=>b.classList.remove('qwf-active'))
+}
+
 function quickWf(devId,ch,wfId) {
+  _exitActivityMode(devId, ch)
   const sl=document.getElementById('sl-'+devId+ch)
   if(sl) sl.value=0
   const cv=document.getElementById('cv-'+devId+ch); if(cv) cv.textContent='0'
@@ -4708,10 +4782,11 @@ function quickWf(devId,ch,wfId) {
   send({type:'device:setChannel',deviceId:devId,channel:ch,params})
   if(S.devices[devId]?.channels?.[ch]) { S.devices[devId].channels[ch].waveform=wfId; S.devices[devId].channels[ch].intensity=0 }
   const strip=sl?.closest('.ch-block')?.querySelector('.qwf-strip')
-  if(strip) strip.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
+  if(strip) strip.querySelectorAll('.qwf-btn:not(.act-btn)').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
 }
 
 function pickWf(devId,ch,wfId) {
+  _exitActivityMode(devId, ch)
   document.getElementById(`wfn-${devId}${ch}`).textContent=getWfName(wfId)
   document.querySelectorAll('.wf-drop.open').forEach(d=>d.classList.remove('open'))
   const preset = _pickWfFreq(devId, ch, wfId)
@@ -4721,7 +4796,7 @@ function pickWf(devId,ch,wfId) {
   if(S.devices[devId]?.channels?.[ch]) S.devices[devId].channels[ch].waveform=wfId
   const sl=document.getElementById('sl-'+devId+ch)
   const strip=sl?.closest('.ch-block')?.querySelector('.qwf-strip')
-  if(strip) strip.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
+  if(strip) strip.querySelectorAll('.qwf-btn:not(.act-btn)').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
   propagateSyncWf('ch:'+devId+':'+ch, wfId)
 }
 
@@ -5037,6 +5112,11 @@ function buildGroupCard(grp) {
           </div>
         </div>
       </div>
+      ${S.activities?.length ? `<div style="margin-bottom:4px">
+        <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Activities</div>
+        <div class="qwf-strip">${buildActStripGroup(grp.id, st.mode==='activity'?st.activityId:null).replace(/class="qwf-btn/g,'class="qwf-btn act-btn')}</div>
+      </div>` : ''}
+      <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Waveforms</div>
       <div class="qwf-strip">${qwfStrip}</div>
       <div class="wf-sel">
         <button class="wf-sel-btn" onclick="toggleDrop('${dropId}')">
@@ -5086,23 +5166,27 @@ function quickGroupWf(grpId,wfId){
   const sl=document.getElementById('gsl-'+grpId); if(sl) sl.value=0
   const cv=document.getElementById('gcv-'+grpId); if(cv) cv.textContent='0'
   const nm=document.getElementById('gwfn-'+grpId); if(nm) nm.textContent=getWfName(wfId)
-  if(groupState[grpId]){ groupState[grpId].waveform=wfId; groupState[grpId].intensity=0 }
+  if(groupState[grpId]){ groupState[grpId].waveform=wfId; groupState[grpId].intensity=0; groupState[grpId].mode='waveform' }
   const preset = _pickGroupWfFreq(grpId, wfId)
   const params = {waveform:wfId, intensity:0}
   if(isBuiltinWf(wfId)) params.baseFreq = preset
   send({type:'group:set',groupId:grpId,params})
-  document.getElementById('gc-'+grpId)?.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
+  const gc=document.getElementById('gc-'+grpId)
+  gc?.querySelectorAll('.act-btn').forEach(b=>b.classList.remove('qwf-active'))
+  gc?.querySelectorAll('.qwf-btn:not(.act-btn)').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
   propagateSyncWf('grp:'+grpId, wfId)
 }
 function pickGroupWf(grpId,wfId){
   const nm=document.getElementById('gwfn-'+grpId); if(nm) nm.textContent=getWfName(wfId)
   document.querySelectorAll('.wf-drop.open').forEach(d=>d.classList.remove('open'))
-  if(groupState[grpId]) groupState[grpId].waveform=wfId
+  if(groupState[grpId]){ groupState[grpId].waveform=wfId; groupState[grpId].mode='waveform' }
   const preset = _pickGroupWfFreq(grpId, wfId)
   const params = {waveform:wfId}
   if(isBuiltinWf(wfId)) params.baseFreq = preset
   send({type:'group:set',groupId:grpId,params})
-  document.getElementById('gc-'+grpId)?.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
+  const gc=document.getElementById('gc-'+grpId)
+  gc?.querySelectorAll('.act-btn').forEach(b=>b.classList.remove('qwf-active'))
+  gc?.querySelectorAll('.qwf-btn:not(.act-btn)').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
   propagateSyncWf('grp:'+grpId, wfId)
 }
 

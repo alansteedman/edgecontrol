@@ -200,6 +200,25 @@ const BUILTIN_WAVEFORMS = [
   { id:'ws-rising',      name:'Rising tide',  group:'wave',    desc:'Crescendo with oscillation — 2s cycle',                  icon:'⤴' },
 ]
 
+const BUILTIN_ACTIVITIES = [
+  { id:'act-lick',        name:'Lick',        icon:'〜', desc:'Gentle undulating lick sensation',
+    ampWave:'ws-gentle',  freqWave:'breathe',       freqRange:[10,60],  ampSpeedRange:[0.5,1.8], freqSpeedRange:[0.3,0.8], driftRate:0.008 },
+  { id:'act-throb',       name:'Throb',       icon:'◎', desc:'Deep rhythmic throbbing pulse',
+    ampWave:'pulse',      freqWave:'tidal',         freqRange:[10,55],  ampSpeedRange:[0.6,2.0], freqSpeedRange:[0.2,0.6], driftRate:0.010 },
+  { id:'act-wave',        name:'Wave',        icon:'≋', desc:'Flowing evolving wave sensation',
+    ampWave:'wave',       freqWave:'ws-jelly',      freqRange:[20,90],  ampSpeedRange:[0.5,1.4], freqSpeedRange:[0.4,1.0], driftRate:0.006 },
+  { id:'act-penetration', name:'Penetration', icon:'↕', desc:'Deep rhythmic push-pull sensation',
+    ampWave:'tidal',      freqWave:'ws-rising',     freqRange:[15,100], ampSpeedRange:[0.4,1.2], freqSpeedRange:[0.3,0.8], driftRate:0.010 },
+  { id:'act-climb',       name:'Climb',       icon:'↗', desc:'Steadily building intensity',
+    ampWave:'ramp',       freqWave:'ws-rising',     freqRange:[10,150], ampSpeedRange:[0.3,0.8], freqSpeedRange:[0.2,0.6], driftRate:0.005 },
+  { id:'act-flutter',     name:'Flutter',     icon:'⁓', desc:'Fast fluttering bursts',
+    ampWave:'flutter',    freqWave:'ws-fast-attack',freqRange:[30,130], ampSpeedRange:[1.0,3.0], freqSpeedRange:[0.5,1.5], driftRate:0.015 },
+  { id:'act-tease',       name:'Tease',       icon:'✦', desc:'Unpredictable teasing sensation',
+    ampWave:'ws-jelly',   freqWave:'ws-bounce',     freqRange:[10,80],  ampSpeedRange:[0.3,1.5], freqSpeedRange:[0.4,1.2], driftRate:0.012 },
+  { id:'act-heartbeat',   name:'Heartbeat',   icon:'♥', desc:'Slow evolving heartbeat pattern',
+    ampWave:'heartbeat',  freqWave:'breathe',       freqRange:[15,60],  ampSpeedRange:[0.8,2.5], freqSpeedRange:[0.2,0.5], driftRate:0.008 },
+]
+
 // ── Audio files ──────────────────────────────────────────────────────────────
 const AUDIO_DIR = join(__dirname, 'audio')
 if (!existsSync(AUDIO_DIR)) mkdirSync(AUDIO_DIR, { recursive: true })
@@ -704,12 +723,28 @@ function computeWave(wfId, tick, amp, speed=1, baseFreq=25) {
   }
 }
 
+function lerp(a, b, t) { return a + (b - a) * Math.max(0, Math.min(1, t)) }
+
+function computeActivity(act, ch, tick, amp) {
+  if (!amp) return [[25,0],[25,0],[25,0],[25,0]]
+  const dp = ch.driftPhase || 0
+  // Two out-of-phase slow oscillators drive speed drift so amp and freq evolve independently
+  const ampSpeed  = lerp(act.ampSpeedRange[0],  act.ampSpeedRange[1],  (Math.sin(dp) + 1) / 2)
+  const freqSpeed = lerp(act.freqSpeedRange[0], act.freqSpeedRange[1], (Math.sin(dp * 0.71 + 1.3) + 1) / 2)
+  // Sample amplitude wave — take sub-pulse 0 (uniform per packet after wave fix)
+  const a = computeWave(act.ampWave, tick, amp, ampSpeed, 25)[0][1]
+  // Sample frequency wave — maps 0-100 output → freqRange
+  const frac = computeWave(act.freqWave, tick, 100, freqSpeed, 25)[0][1] / 100
+  const f = Math.max(10, Math.round(lerp(act.freqRange[0], act.freqRange[1], frac)))
+  return [[f,a],[f,a],[f,a],[f,a]]
+}
+
 class CoyoteDevice {
   constructor(id, name, mac, bleName, buttonControl={A:false,B:false}) {
     this.id=id; this.name=name; this.type='coyote'; this.mac=(mac||'').toLowerCase()
     this.bleName=bleName||null; this.status='disconnected'
     this.gattServer=null; this.writeChar=null; this.notifyChar=null
-    this.channels={ A:{intensity:0,waveform:'pulse',speed:1,baseFreq:25}, B:{intensity:0,waveform:'pulse',speed:1,baseFreq:25} }
+    this.channels={ A:{intensity:0,waveform:'pulse',speed:1,baseFreq:25,mode:'waveform',activityId:null,driftPhase:0}, B:{intensity:0,waveform:'pulse',speed:1,baseFreq:25,mode:'waveform',activityId:null,driftPhase:0} }
     this._smoothA=0; this._smoothB=0  // smoothed intensity (0-200), lerped toward target each packet
     this._lastSentA=0; this._lastSentB=0; this._deviceA=0; this._deviceB=0; this._lastBtnAt=0; this.battery=null
     this.buttonControl={ A:!!buttonControl?.A, B:!!buttonControl?.B }  // whether physical buttons control each channel
@@ -919,11 +954,12 @@ class CoyoteDevice {
     broadcast({ type:'device:status', id:this.id, status:'disconnected' })
   }
 
-  setChannel(ch, { intensity, waveform, speed, baseFreq }={}) {
-    if (intensity!==undefined) this.channels[ch].intensity=Math.max(0,Math.min(200,intensity))
-    if (waveform!==undefined)  this.channels[ch].waveform=waveform
-    if (speed!==undefined)     this.channels[ch].speed=Math.max(0.25,Math.min(100,speed))
-    if (baseFreq!==undefined)  this.channels[ch].baseFreq=Math.max(10,Math.min(200,parseInt(baseFreq)))
+  setChannel(ch, { intensity, waveform, speed, baseFreq, activityId }={}) {
+    if (intensity!==undefined)   this.channels[ch].intensity=Math.max(0,Math.min(200,intensity))
+    if (waveform!==undefined)  { this.channels[ch].waveform=waveform; this.channels[ch].mode='waveform' }
+    if (speed!==undefined)       this.channels[ch].speed=Math.max(0.25,Math.min(100,speed))
+    if (baseFreq!==undefined)    this.channels[ch].baseFreq=Math.max(10,Math.min(200,parseInt(baseFreq)))
+    if (activityId!==undefined) { this.channels[ch].activityId=activityId; this.channels[ch].mode='activity'; this.channels[ch].driftPhase=0 }
     broadcast({ type:'device:state', id:this.id, channels:this.channels, ticks:this._ticks, paused:this._paused, buttonControl:this.buttonControl })
   }
 
@@ -958,8 +994,18 @@ class CoyoteDevice {
 
     const aAmp=Math.min(100,Math.round(this._smoothA/2))
     const bAmp=Math.min(100,Math.round(this._smoothB/2))
-    const aW=computeWave(this.channels.A.waveform,tickA,aAmp,this.channels.A.speed||1,this.channels.A.baseFreq||25)
-    const bW=computeWave(this.channels.B.waveform,tickB,bAmp,this.channels.B.speed||1,this.channels.B.baseFreq||25)
+    const chA=this.channels.A, chB=this.channels.B
+    let aW, bW
+    if (chA.mode==='activity') {
+      const act=BUILTIN_ACTIVITIES.find(a=>a.id===chA.activityId)
+      aW = act ? computeActivity(act,chA,tickA,aAmp) : [[25,0],[25,0],[25,0],[25,0]]
+      if (act) chA.driftPhase=(chA.driftPhase||0)+act.driftRate
+    } else { aW=computeWave(chA.waveform,tickA,aAmp,chA.speed||1,chA.baseFreq||25) }
+    if (chB.mode==='activity') {
+      const act=BUILTIN_ACTIVITIES.find(a=>a.id===chB.activityId)
+      bW = act ? computeActivity(act,chB,tickB,bAmp) : [[25,0],[25,0],[25,0],[25,0]]
+      if (act) chB.driftPhase=(chB.driftPhase||0)+act.driftRate
+    } else { bW=computeWave(chB.waveform,tickB,bAmp,chB.speed||1,chB.baseFreq||25) }
     const buf=Buffer.alloc(20)
     buf[0]=0xB0; buf[1]=(((t%15)+1)<<4)|0x0F
     buf[2]=Math.min(200,Math.round(this._smoothA)); this._lastSentA=buf[2]
@@ -2430,7 +2476,7 @@ function waveformsMeta() {
 wss.on('connection', (ws, request) => {
   ws.role = request.session?.role || (config.auth?.enabled ? 'user' : 'admin')
   clients.add(ws)
-  ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
+  ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
   if (_updateAvailable) ws.send(JSON.stringify({ type:'update:available', version:_updateAvailable.version, current:APP_VERSION }))
   ws.on('message', raw => {
     try {
@@ -3204,6 +3250,7 @@ app.get('/api/config',  requireAdmin, (req,res) => res.json(safeConfig()))
 app.put('/api/config',  requireAdmin, (req,res) => { const {boxId}=req.body; if(boxId)config.boxId=boxId; saveConfig(config); res.json(safeConfig()) })
 
 app.get('/api/waveforms', (req,res) => res.json({builtin:BUILTIN_WAVEFORMS,custom:waveformStore.custom}))
+app.get('/api/activities', requireAuth, (req,res) => res.json(BUILTIN_ACTIVITIES))
 
 app.post('/api/waveforms', (req,res) => {
   const {name,frames}=req.body

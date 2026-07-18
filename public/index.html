@@ -173,7 +173,7 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 .qwf-btn:hover{background:#1c1c1c;border-color:#2a2a2a}
 .qwf-btn.qwf-active{background:#1a0f2e;border-color:#6d28d9;box-shadow:0 0 0 1px rgba(109,40,217,.3)}
 .qwf-icon{font-size:14px;line-height:1}
-.qwf-lbl{font-size:8px;color:#383838;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;text-align:center}
+.qwf-lbl{font-size:8px;color:#666;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;text-align:center}
 .qwf-btn.qwf-active .qwf-lbl{color:#8b5cf6}
 
 /* ── Waveform selector ── */
@@ -4241,6 +4241,18 @@ function builtinFrameAmp(wfId, tick, speed=1) {
     case 'heartbeat': { const f=p(0)%32; return f===0?100:f===4?50:f===8?70:f===12?30:0 }
     case 'steps': return [25,50,75,100][Math.floor((p(0)%80)/20)]
     case 'buzz': return 100
+    case 'ws-sawtooth':    { const ph=p(0)%40; return Math.round((ph/40)*100) }
+    case 'ws-triangle':    { const ph=p(0)%40; return Math.round((ph<20?ph/20:(40-ph)/20)*100) }
+    case 'ws-fangs':       { const ph=p(0)%40; const sp=n=>Math.max(0,1-Math.abs(ph-n)/6); return Math.round(Math.max(sp(8),sp(28))*100) }
+    case 'ws-trapezoid':   { const ph=p(0)%40; return Math.round((ph<6?ph/6:ph<28?1:ph<34?(34-ph)/6:0)*100) }
+    case 'ws-gentle':      { const ph=p(0)%80; return Math.round((ph<60?ph/60:(80-ph)/20)*100) }
+    case 'ws-fast-attack': { const ph=p(0)%40; return Math.round(Math.exp(-ph*0.12)*100) }
+    case 'ws-tapslide':    { const ph=p(0)%40; const tap=ph<5?(1-ph/5):0; const slide=ph>=10?(ph-10)/30:0; return Math.round(Math.max(tap,slide)*100) }
+    case 'ws-jelly':       { const t2=p(0)*0.05; return Math.round(Math.max(0,(Math.sin(t2)*0.7+Math.sin(t2*0.3+1)*0.3+1)/2)*100) }
+    case 'ws-double':      { const ph=p(0)%20; return Math.round(Math.max(0,Math.sin(ph/20*Math.PI))*100) }
+    case 'ws-triple':      { const ph=p(0)%40; const sp=ph%(40/3); return Math.round(Math.max(0,Math.sin(sp/(40/3)*Math.PI))*100) }
+    case 'ws-flourish':    { const ph=p(0)%40; const sm=ph<10?Math.sin(ph/10*Math.PI)*0.4:0; const bg=ph>=15&&ph<35?Math.sin((ph-15)/20*Math.PI):0; return Math.round(Math.max(sm,bg)*100) }
+    case 'ws-rising':      { const ph=p(0)%80; const base=ph/80; const wave=(Math.sin(ph*0.25)+1)/2*0.4; return Math.round(Math.min(1,base+wave*base)*100) }
     default: return 0
   }
 }

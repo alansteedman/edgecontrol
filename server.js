@@ -680,7 +680,7 @@ function computeWave(wfId, tick, amp, speed=1, baseFreq=25) {
     case 'pulse':     return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const env=ph<8?(1-Math.cos(ph/8*Math.PI))/2:ph<24?1:ph<32?(1+Math.cos((ph-24)/8*Math.PI))/2:0; return [f,Math.round(env*amp)] })
     case 'breathe':   return Array.from({length:4},(_,i)=>[ f, sv(i,0.025) ])
     case 'tidal':     return Array.from({length:4},(_,i)=>[ f, Math.round((Math.abs(Math.sin(p(i)*0.0125))*0.9+0.05)*amp) ])
-    case 'wave':      return Array.from({length:4},(_,i)=>[ f, i<2?sv(i,0.025):sv(i,0.025,1.57) ])
+    case 'wave':      { const a=sv(0,0.025); return [[f,a],[f,a],[f,a],[f,a]] }
     case 'thud':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const env=ph<12?(1-Math.cos(ph/12*Math.PI))/2:ph<20?1-(ph-12)/8:0; return [f,Math.round(env*amp)] })
     case 'flutter':   return Array.from({length:4},(_,i)=>{ const on=p(i)%8<4; return [f,on?amp:0] })
     case 'ramp':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; const env=ph<72?ph/72:(80-ph)/8*Math.cos((ph-72)/8*Math.PI*0.5); return [f,Math.max(0,Math.round(env*amp))] })
@@ -882,8 +882,6 @@ class CoyoteDevice {
         }
       } catch(e) { console.log(`[${this.id}] HID skip: ${e.message}`) }
       // 0xBF init: limits (200 each), freq balance (200 each), intensity balance (0 each)
-      // Freq balance 200: hardware synthesises multiple micro-pulses for low-freq waveforms
-      // so they feel comparable in intensity to high-freq ones (0 = single weak pulse)
       await this.writeChar.writeValue(Buffer.from([0xBF, 0xC8, 0xC8, 0xC8, 0xC8, 0x00, 0x00]), { type:'command' })
       await new Promise(r=>setTimeout(r,200))
       this._connectLock=false; this.status='connected'

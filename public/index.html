@@ -1197,7 +1197,7 @@ function send(m){ if(ws?.readyState===1) ws.send(JSON.stringify(m)) }
 let _updCurrentVersion = null
 
 const _WF_PRESET_FREQ = {
-  'pulse':25,'breathe':25,'tidal':25,'wave':25,'thud':10,
+  'pulse':25,'breathe':100,'tidal':100,'wave':100,'thud':10,
   'flutter':25,'ramp':25,'heartbeat':25,'steps':25,'buzz':80
 }
 function wfPresetFreq(wfId) { return _WF_PRESET_FREQ[wfId] || 25 }
@@ -4768,7 +4768,7 @@ function simAmps(wfId,n){
       case 'pulse':     a=t%10<5?A:0; break
       case 'breathe':   a=((Math.sin(t*.1)+1)/2)*A; break
       case 'tidal':     a=((Math.sin(t*.05)+1)/2)*A; break
-      case 'wave':      a=(((Math.sin(t*.1)+1)/2)+((Math.sin(t*.1+1.57)+1)/2))/2*A; break
+      case 'wave':      a=((Math.sin(t*.1)+1)/2)*A; break
       case 'thud':      a=t%10===0?A:0; break
       case 'flutter':   a=t%2===0?A:0; break
       case 'ramp':      a=(t%20)/19*A; break
@@ -5600,7 +5600,7 @@ function _bmSimAmp(wfId, t) {
   switch(wfId) {
     case 'pulse':   return t%10<5 ? 100 : 0
     case 'breathe': return Math.round(((Math.sin(t*.1)+1)/2)*100)
-    case 'wave':    return Math.round((((Math.sin(t*.1)+1)/2)+((Math.sin(t*.1+1.57)+1)/2))/2*100)
+    case 'wave':    return Math.round(((Math.sin(t*.1)+1)/2)*100)
     case 'steps':   return [25,50,75,100][Math.floor((t%20)/5)]
     default: {
       const wf = (S.waveforms?.custom||[]).find(w=>w.id===wfId)

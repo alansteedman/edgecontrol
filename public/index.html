@@ -1194,15 +1194,16 @@ function connect() {
 }
 function send(m){ if(ws?.readyState===1) ws.send(JSON.stringify(m)) }
 
-function _showUpdateBanner(version) {
+let _updCurrentVersion = null
+
+function _showUpdateBanner(version, current) {
+  _updCurrentVersion = current || null
   const b = document.getElementById('update-banner')
   document.getElementById('upd-msg').textContent = `v${version} available`
   document.getElementById('upd-btn').disabled = false
   document.getElementById('upd-spinner').style.display = 'none'
   b.style.display = 'flex'
 }
-
-let _updInfoVersion = null
 
 async function _updInfo() {
   const bg = document.getElementById('upd-modal-bg')
@@ -1215,15 +1216,13 @@ async function _updInfo() {
       { signal: AbortSignal.timeout(8000) })
     if (!r.ok) throw new Error('HTTP ' + r.status)
     const text = await r.text()
-    // Extract all version entries from the Versions section
-    // Lines look like: - **v2.1.1** — blah blah; we want everything newer than current
     const lines = text.split('\n')
     const entries = []
     for (const line of lines) {
       const m = line.match(/^-\s+\*\*(v[\d.]+)\*\*\s+[—-]\s+(.+)/)
       if (m) entries.push({ version: m[1], notes: m[2].trim() })
     }
-    const current = _updInfoVersion || document.getElementById('upd-msg').textContent.match(/v([\d.]+)/)?.[1] || '0.0.0'
+    const current = _updCurrentVersion || '0.0.0'
     const cur = current.replace(/^v/,'').split('.').map(Number)
     const newer = entries.filter(e => {
       const v = e.version.replace(/^v/,'').split('.').map(Number)
@@ -1432,7 +1431,7 @@ function handle(m) {
       const ppBatEl=document.getElementById('pp-bat-'+m.id); if(ppBatEl) ppBatEl.textContent=m.battery+'%'
       const ppBatMod=document.getElementById('pp-bat-modal'); if(ppBatMod&&_ppModalId===m.id) ppBatMod.textContent=m.battery+'%'; break
     case 'update:available':
-      _showUpdateBanner(m.version); break
+      _showUpdateBanner(m.version, m.current); break
     case 'update:applying':
       { const b=document.getElementById('update-banner')
         document.getElementById('upd-spinner').style.display='block'

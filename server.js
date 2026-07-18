@@ -2429,6 +2429,8 @@ app.get('/api/tunnel/status', requireAdmin, (req, res) => {
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 const server = createServer(app)
+server.keepAliveTimeout = 65000
+server.headersTimeout = 66000
 const wss    = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (request, socket, head) => {

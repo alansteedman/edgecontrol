@@ -525,7 +525,7 @@ select.mci{cursor:pointer}
         <div class="des-freq">
           <label>Frequency</label>
           <span class="freq-hint">thump</span>
-          <input type="range" min="10" max="100" value="30" id="wf-freq" oninput="dFreq=parseInt(this.value);document.getElementById('wf-freq-val').textContent=this.value+' Hz'"/>
+          <input type="range" min="10" max="200" value="30" id="wf-freq" oninput="dFreq=parseInt(this.value);document.getElementById('wf-freq-val').textContent=this.value+' Hz'"/>
           <span class="freq-hint">buzz</span>
           <span class="freq-val" id="wf-freq-val">30 Hz</span>
         </div>
@@ -5638,7 +5638,7 @@ function renderAudioInputTab() {
       </label>
       <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#888">
         Base freq
-        <input type="range" min="10" max="100" value="${w.baseFreq||25}" style="flex:1;accent-color:${accent}"
+        <input type="range" min="10" max="200" value="${w.baseFreq||25}" style="flex:1;accent-color:${accent}"
           oninput="this.nextElementSibling.textContent=this.value+' Hz'"
           onchange="updateLiveInput('${rawId}',{baseFreq:parseInt(this.value)})"/>
         <span style="font-size:11px;color:${accent};min-width:52px;text-align:right">${w.baseFreq||25} Hz</span>
@@ -5927,7 +5927,7 @@ function renderAudioList(){
       ${Array.isArray(w.frames)?`<div style="overflow-x:auto;border-radius:5px;background:#080808"><canvas id="${safeId}" height="48" style="display:block;min-width:100%"></canvas></div>`:`<div style="font-size:10px;color:#333;padding:4px 0">Loading waveform…</div>`}
       <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
         <span style="font-size:11px;color:#666;white-space:nowrap">Base Hz</span>
-        <input type="range" min="10" max="100" value="${w.baseFreq||25}" style="flex:1;accent-color:#4fc3f7"
+        <input type="range" min="10" max="200" value="${w.baseFreq||25}" style="flex:1;accent-color:#4fc3f7"
           oninput="document.getElementById('freq-lbl-${safeId}').textContent=this.value+' Hz'"
           onchange="setAudioBaseFreq('${w.id}',this.value)"/>
         <span id="freq-lbl-${safeId}" style="font-size:11px;color:#4fc3f7;white-space:nowrap;min-width:44px;text-align:right">${w.baseFreq||25} Hz</span>

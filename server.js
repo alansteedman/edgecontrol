@@ -3212,7 +3212,7 @@ app.put('/api/waveforms/:id', (req,res) => {
   const {name,frames,baseFreq}=req.body
   if (name) waveformStore.custom[idx].name=name
   if (frames) waveformStore.custom[idx].frames=frames
-  if (baseFreq !== undefined) waveformStore.custom[idx].baseFreq = Math.max(10, Math.min(100, parseInt(baseFreq)))
+  if (baseFreq !== undefined) waveformStore.custom[idx].baseFreq = Math.max(10, Math.min(200, parseInt(baseFreq)))
   saveWaveforms()
   broadcast({type:'waveforms:updated',waveforms:waveformsMeta()})
   res.json(waveformStore.custom[idx])
@@ -3934,7 +3934,7 @@ app.post('/api/audio/import', (req, res, next) => audioUpload.single('file')(req
     id: wfId, name: name.trim(), type: 'audio',
     sourceFile: req.file.filename, originalName: req.file.originalname,
     lowCut: parseInt(lowCut)||20, highCut: parseInt(highCut)||20000,
-    baseFreq: Math.max(10, Math.min(100, parseInt(baseFreq)||25)),
+    baseFreq: Math.max(10, Math.min(200, parseInt(baseFreq)||25)),
     frames, importedFrom: 'community'
   }
   waveformStore.custom.push(wf); saveWaveforms()

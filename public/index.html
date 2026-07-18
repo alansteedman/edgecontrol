@@ -4,7 +4,7 @@
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate"/>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>EdgeController</title>
+<title>Kink Controller</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size:14px;display:flex;flex-direction:row;height:100vh;overflow:hidden}
@@ -1173,7 +1173,7 @@ function connect() {
     _wsAlive = true
     _wsSetBanner(true)
     if (_wsReloadOnReconnect) { window.location.reload(); return }
-    lg('Connected to EdgeController')
+    lg('Connected to Kink Controller')
     setTimeout(initBandSelector, 100)
     clearInterval(_wsPingTimer)
     _wsPingTimer = setInterval(() => {

@@ -4679,7 +4679,7 @@ function findWfByCanvasId(cid) {
   return ''
 }
 function buildQwfStrip(devId,ch,activeWfId) {
-  return (S.waveforms.builtin||[]).map(w=>`
+  return (S.waveforms.builtin||[]).filter(w=>w.group==='classic'||!w.group).map(w=>`
     <button class="qwf-btn${w.id===activeWfId?' qwf-active':''}" data-wfid="${w.id}" onclick="quickWf('${devId}','${ch}','${w.id}')" title="${w.name}">
       <span class="qwf-icon">${w.icon||'?'}</span>
       <span class="qwf-lbl">${w.name}</span>
@@ -4977,7 +4977,7 @@ function buildGroupCard(grp) {
   const lives=(S.waveforms.live||[])
   const audioItems=(audios.length?`<div class="wf-drop-sect"><div class="wf-drop-lbl">Audio</div>${audios.map(w=>`<div class="wf-opt${st.waveform===w.id?' sel':''}" onclick="pickGroupWf('${grp.id}','${w.id}')">🎵 ${w.name}</div>`).join('')}</div>`:'')
     +(lives.length?`<div class="wf-drop-sect"><div class="wf-drop-lbl">Live Input</div>${lives.map(w=>`<div class="wf-opt${st.waveform===w.id?' sel':''}" onclick="pickGroupWf('${grp.id}','${w.id}')">🎤 ${w.name}${w.active?'':' (off)'}</div>`).join('')}</div>`:'')
-  const qwfStrip=(S.waveforms.builtin||[]).map(w=>`
+  const qwfStrip=(S.waveforms.builtin||[]).filter(w=>w.group==='classic'||!w.group).map(w=>`
     <button class="qwf-btn${w.id===st.waveform?' qwf-active':''}" data-wfid="${w.id}" onclick="quickGroupWf('${grp.id}','${w.id}')" title="${w.name}">
       <span class="qwf-icon">${w.icon||'?'}</span><span class="qwf-lbl">${w.name}</span>
     </button>`).join('')

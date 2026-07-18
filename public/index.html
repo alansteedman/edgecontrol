@@ -4214,14 +4214,14 @@ function buildCh(devId,ch,c,btnEnabled=false) {
             <span class="ch-num" id="cv-${devId}${ch}" style="min-width:28px;text-align:right">${c.intensity}</span>
           </div>
           <div id="freq-${devId}${ch}row" style="${isBuiltin?'':'opacity:.4;pointer-events:none'}">
-            <div style="display:flex;justify-content:space-between;margin-bottom:2px">
-              <span style="font-size:10px;color:#555">Base Freq</span>
-              <span id="freq-${devId}${ch}vl" style="font-size:10px;color:#888">${baseFreq}Hz</span>
+            <span style="font-size:10px;color:#555;display:block;margin-bottom:2px">Base Freq</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="range" min="10" max="200" value="${baseFreq}" id="freq-${devId}${ch}sl"
+                style="flex:1;accent-color:#fbbf24"
+                oninput="document.getElementById('freq-${devId}${ch}vl').textContent=this.value+'Hz'"
+                onchange="chSetFreq('${devId}','${ch}',this.value)"/>
+              <span id="freq-${devId}${ch}vl" style="font-size:12px;font-weight:700;color:#fbbf24;min-width:38px;text-align:right">${baseFreq}Hz</span>
             </div>
-            <input type="range" min="10" max="200" value="${baseFreq}" id="freq-${devId}${ch}sl"
-              style="width:100%;accent-color:#fbbf24"
-              oninput="document.getElementById('freq-${devId}${ch}vl').textContent=this.value+'Hz'"
-              onchange="chSetFreq('${devId}','${ch}',this.value)"/>
           </div>
         </div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px">
@@ -5005,23 +5005,25 @@ function buildGroupCard(grp) {
     <div class="ch-block" style="${isEnabled?'':'opacity:.4;pointer-events:none'}">
       <div class="ch-top">
         <span class="ch-lbl">Intensity</span>
-        <span class="ch-num" id="gcv-${grp.id}">${st.intensity}</span>
       </div>
       <div style="display:flex;gap:12px;margin-bottom:6px;align-items:flex-start">
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
-          <input class="ch-slider" id="gsl-${grp.id}" type="range" min="0" max="200" value="${st.intensity}"
-            style="width:100%;margin-bottom:0"
-            oninput="document.getElementById('gcv-${grp.id}').textContent=this.value"
-            onchange="groupSetIntensity('${grp.id}',this.value)"/>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="ch-slider" id="gsl-${grp.id}" type="range" min="0" max="200" value="${st.intensity}"
+              style="flex:1;margin-bottom:0"
+              oninput="document.getElementById('gcv-${grp.id}').textContent=this.value"
+              onchange="groupSetIntensity('${grp.id}',this.value)"/>
+            <span class="ch-num" id="gcv-${grp.id}" style="min-width:28px;text-align:right">${st.intensity}</span>
+          </div>
           <div id="freq-${grp.id}row" style="${grpIsBuiltin?'':'opacity:.4;pointer-events:none'}">
-            <div style="display:flex;justify-content:space-between;margin-bottom:2px">
-              <span style="font-size:10px;color:#555">Base Freq</span>
-              <span id="freq-${grp.id}vl" style="font-size:10px;color:#888">${grpBaseFreq}Hz</span>
+            <span style="font-size:10px;color:#555;display:block;margin-bottom:2px">Base Freq</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="range" min="10" max="200" value="${grpBaseFreq}" id="freq-${grp.id}sl"
+                style="flex:1;accent-color:#fbbf24"
+                oninput="document.getElementById('freq-${grp.id}vl').textContent=this.value+'Hz'"
+                onchange="groupSetFreq('${grp.id}',this.value)"/>
+              <span id="freq-${grp.id}vl" style="font-size:12px;font-weight:700;color:#fbbf24;min-width:38px;text-align:right">${grpBaseFreq}Hz</span>
             </div>
-            <input type="range" min="10" max="200" value="${grpBaseFreq}" id="freq-${grp.id}sl"
-              style="width:100%;accent-color:#fbbf24"
-              oninput="document.getElementById('freq-${grp.id}vl').textContent=this.value+'Hz'"
-              onchange="groupSetFreq('${grp.id}',this.value)"/>
           </div>
         </div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px">

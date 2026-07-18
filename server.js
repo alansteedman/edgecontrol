@@ -875,8 +875,10 @@ class CoyoteDevice {
           console.log(`[${this.id}] HID Report subscribed`)
         }
       } catch(e) { console.log(`[${this.id}] HID skip: ${e.message}`) }
-      // 0xBF init: set limits + frequency/intensity balance to defaults
-      await this.writeChar.writeValue(Buffer.from([0xBF, 0xC8, 0xC8, 0x00, 0x00, 0x00, 0x00]), { type:'command' })
+      // 0xBF init: limits (200 each), freq balance (200 each), intensity balance (0 each)
+      // Freq balance 200: hardware synthesises multiple micro-pulses for low-freq waveforms
+      // so they feel comparable in intensity to high-freq ones (0 = single weak pulse)
+      await this.writeChar.writeValue(Buffer.from([0xBF, 0xC8, 0xC8, 0xC8, 0xC8, 0x00, 0x00]), { type:'command' })
       await new Promise(r=>setTimeout(r,200))
       this._connectLock=false; this.status='connected'
       this._retryDelay=5000; this._leAbortCount=0  // reset on success

@@ -1196,6 +1196,19 @@ function send(m){ if(ws?.readyState===1) ws.send(JSON.stringify(m)) }
 
 let _updCurrentVersion = null
 
+const _WF_PRESET_FREQ = {
+  'pulse':25,'breathe':25,'tidal':25,'wave':25,'thud':10,
+  'flutter':25,'ramp':25,'heartbeat':25,'steps':25,'buzz':80
+}
+function wfPresetFreq(wfId) { return _WF_PRESET_FREQ[wfId] || 25 }
+function isBuiltinWf(wfId) { return !!(S.waveforms.builtin||[]).find(w=>w.id===wfId) }
+function _applyFreqSlider(prefix, wfId, freq) {
+  const row=document.getElementById(prefix+'row'); if(!row) return
+  const builtin=isBuiltinWf(wfId)
+  row.style.opacity=builtin?'1':'0.4'; row.style.pointerEvents=builtin?'':'none'
+  if(builtin&&freq!=null){ const sl=document.getElementById(prefix+'sl'); const vl=document.getElementById(prefix+'vl'); if(sl) sl.value=freq; if(vl) vl.textContent=freq+'Hz' }
+}
+
 function _showUpdateBanner(version, current) {
   _updCurrentVersion = current || null
   const b = document.getElementById('update-banner')
@@ -4172,6 +4185,8 @@ function buildCh(devId,ch,c,btnEnabled=false) {
       <input class="ch-slider" id="sl-${devId}${ch}" type="range" min="0" max="200" value="${c.intensity}" disabled style="opacity:.5"/>
     </div>
   `
+  const isBuiltin=isBuiltinWf(c.waveform)
+  const baseFreq=c.baseFreq||wfPresetFreq(c.waveform)
   const wfName=getWfName(c.waveform)
   const dropId=`drop-${devId}-${ch}`
   let builtins='', customs=''
@@ -4207,6 +4222,14 @@ function buildCh(devId,ch,c,btnEnabled=false) {
             <button class="btn btn-ghost btn-xs" id="sync-ch-${devId}-${ch}" onclick="toggleSync('ch:${devId}:${ch}')" title="Sync waveform with other synced cards">Sync</button>
           </div>
         </div>
+      </div>
+      <div id="freq-${devId}${ch}row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px${isBuiltin?'':';opacity:.4;pointer-events:none'}">
+        <span style="font-size:10px;color:#555;white-space:nowrap;min-width:70px">Base Freq</span>
+        <input type="range" min="10" max="200" value="${baseFreq}" id="freq-${devId}${ch}sl"
+          style="flex:1;accent-color:#4fc3f7"
+          oninput="document.getElementById('freq-${devId}${ch}vl').textContent=this.value+'Hz'"
+          onchange="chSetFreq('${devId}','${ch}',this.value)"/>
+        <span id="freq-${devId}${ch}vl" style="font-size:10px;color:#888;min-width:38px;text-align:right">${baseFreq}Hz</span>
       </div>
       <div class="qwf-strip">${buildQwfStrip(devId,ch,c.waveform)}</div>
       <div class="wf-sel">
@@ -4417,6 +4440,16 @@ function startChViz(devId, ch) {
   state.rafId=requestAnimationFrame(draw)
 }
 function chSet(devId,ch,v){ send({type:'device:setChannel',deviceId:devId,channel:ch,params:{intensity:parseInt(v)}}) }
+function chSetFreq(devId,ch,v){
+  const hz=Math.max(10,Math.min(200,parseInt(v)))
+  send({type:'device:setChannel',deviceId:devId,channel:ch,params:{baseFreq:hz}})
+  if(S.devices[devId]?.channels?.[ch]) S.devices[devId].channels[ch].baseFreq=hz
+}
+function groupSetFreq(grpId,v){
+  const hz=Math.max(10,Math.min(200,parseInt(v)))
+  if(groupState[grpId]) groupState[grpId].baseFreq=hz
+  send({type:'group:set',groupId:grpId,params:{baseFreq:hz}})
+}
 function setCoyoteButtonControl(devId,ch,enabled){ send({type:'coyote:setButtonControl',deviceId:devId,channel:ch,enabled}) }
 function chPlayback(devId,ch,action){
   send({type:'device:playback',deviceId:devId,channel:ch,action})
@@ -4653,20 +4686,23 @@ function buildQwfStrip(devId,ch,activeWfId) {
     </button>`).join('')
 }
 
+function _pickWfFreq(devId, ch, wfId) {
+  const preset = wfPresetFreq(wfId)
+  _applyFreqSlider(`freq-${devId}${ch}`, wfId, preset)
+  if(S.devices[devId]?.channels?.[ch]) S.devices[devId].channels[ch].baseFreq = preset
+  return preset
+}
+
 function quickWf(devId,ch,wfId) {
-  // Safety: zero the channel first, then switch waveform
   const sl=document.getElementById('sl-'+devId+ch)
   if(sl) sl.value=0
-  const cv=document.getElementById('cv-'+devId+ch)
-  if(cv) cv.textContent='0'
+  const cv=document.getElementById('cv-'+devId+ch); if(cv) cv.textContent='0'
   document.getElementById('wfn-'+devId+ch).textContent=getWfName(wfId)
-  // Zero intensity AND set waveform atomically
-  send({type:'device:setChannel',deviceId:devId,channel:ch,params:{waveform:wfId,intensity:0}})
-  if(S.devices[devId]?.channels?.[ch]) {
-    S.devices[devId].channels[ch].waveform=wfId
-    S.devices[devId].channels[ch].intensity=0
-  }
-  // Update active highlight on strip buttons
+  const preset = _pickWfFreq(devId, ch, wfId)
+  const params = {waveform:wfId, intensity:0}
+  if(isBuiltinWf(wfId)) params.baseFreq = preset
+  send({type:'device:setChannel',deviceId:devId,channel:ch,params})
+  if(S.devices[devId]?.channels?.[ch]) { S.devices[devId].channels[ch].waveform=wfId; S.devices[devId].channels[ch].intensity=0 }
   const strip=sl?.closest('.ch-block')?.querySelector('.qwf-strip')
   if(strip) strip.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
 }
@@ -4674,9 +4710,11 @@ function quickWf(devId,ch,wfId) {
 function pickWf(devId,ch,wfId) {
   document.getElementById(`wfn-${devId}${ch}`).textContent=getWfName(wfId)
   document.querySelectorAll('.wf-drop.open').forEach(d=>d.classList.remove('open'))
-  send({type:'device:setChannel',deviceId:devId,channel:ch,params:{waveform:wfId}})
+  const preset = _pickWfFreq(devId, ch, wfId)
+  const params = {waveform:wfId}
+  if(isBuiltinWf(wfId)) params.baseFreq = preset
+  send({type:'device:setChannel',deviceId:devId,channel:ch,params})
   if(S.devices[devId]?.channels?.[ch]) S.devices[devId].channels[ch].waveform=wfId
-  // Sync strip highlight
   const sl=document.getElementById('sl-'+devId+ch)
   const strip=sl?.closest('.ch-block')?.querySelector('.qwf-strip')
   if(strip) strip.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
@@ -4902,7 +4940,7 @@ function renderGroups() {
   if(!S.groups.length){ el.innerHTML='<div class="empty">No groups — create one to control individual Coyote channels together</div>'; return }
   el.innerHTML=''
   S.groups.forEach(g=>{
-    if(!groupState[g.id]) groupState[g.id]={intensity:0,waveform:'pulse'}
+    if(!groupState[g.id]) groupState[g.id]={intensity:0,waveform:'pulse',baseFreq:25}
     el.appendChild(buildGroupCard(g))
     requestAnimationFrame(()=>startGrpViz(g.id))
   })
@@ -4925,6 +4963,8 @@ function buildGroupCard(grp) {
   }).join('')
   const isEnabled=grp.enabled!==false
   const st=groupState[grp.id]
+  const grpIsBuiltin=isBuiltinWf(st.waveform)
+  const grpBaseFreq=st.baseFreq||wfPresetFreq(st.waveform)
   const wfName=getWfName(st.waveform)
   const dropId='gdrop-'+grp.id
   let builtins='',customs=''
@@ -4981,6 +5021,14 @@ function buildGroupCard(grp) {
           </div>
         </div>
       </div>
+      <div id="freq-${grp.id}row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px${grpIsBuiltin?'':';opacity:.4;pointer-events:none'}">
+        <span style="font-size:10px;color:#555;white-space:nowrap;min-width:70px">Base Freq</span>
+        <input type="range" min="10" max="200" value="${grpBaseFreq}" id="freq-${grp.id}sl"
+          style="flex:1;accent-color:#4fc3f7"
+          oninput="document.getElementById('freq-${grp.id}vl').textContent=this.value+'Hz'"
+          onchange="groupSetFreq('${grp.id}',this.value)"/>
+        <span id="freq-${grp.id}vl" style="font-size:10px;color:#888;min-width:38px;text-align:right">${grpBaseFreq}Hz</span>
+      </div>
       <div class="qwf-strip">${qwfStrip}</div>
       <div class="wf-sel">
         <button class="wf-sel-btn" onclick="toggleDrop('${dropId}')">
@@ -5020,12 +5068,21 @@ async function deleteGroup(grpId){
   if(!confirm('Delete this group?')) return
   await fetch(`/api/groups/${grpId}`,{method:'DELETE'})
 }
+function _pickGroupWfFreq(grpId, wfId) {
+  const preset = wfPresetFreq(wfId)
+  _applyFreqSlider(`freq-${grpId}`, wfId, preset)
+  if(groupState[grpId]) groupState[grpId].baseFreq = preset
+  return preset
+}
 function quickGroupWf(grpId,wfId){
   const sl=document.getElementById('gsl-'+grpId); if(sl) sl.value=0
   const cv=document.getElementById('gcv-'+grpId); if(cv) cv.textContent='0'
   const nm=document.getElementById('gwfn-'+grpId); if(nm) nm.textContent=getWfName(wfId)
   if(groupState[grpId]){ groupState[grpId].waveform=wfId; groupState[grpId].intensity=0 }
-  send({type:'group:set',groupId:grpId,params:{waveform:wfId,intensity:0}})
+  const preset = _pickGroupWfFreq(grpId, wfId)
+  const params = {waveform:wfId, intensity:0}
+  if(isBuiltinWf(wfId)) params.baseFreq = preset
+  send({type:'group:set',groupId:grpId,params})
   document.getElementById('gc-'+grpId)?.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
   propagateSyncWf('grp:'+grpId, wfId)
 }
@@ -5033,7 +5090,10 @@ function pickGroupWf(grpId,wfId){
   const nm=document.getElementById('gwfn-'+grpId); if(nm) nm.textContent=getWfName(wfId)
   document.querySelectorAll('.wf-drop.open').forEach(d=>d.classList.remove('open'))
   if(groupState[grpId]) groupState[grpId].waveform=wfId
-  send({type:'group:set',groupId:grpId,params:{waveform:wfId}})
+  const preset = _pickGroupWfFreq(grpId, wfId)
+  const params = {waveform:wfId}
+  if(isBuiltinWf(wfId)) params.baseFreq = preset
+  send({type:'group:set',groupId:grpId,params})
   document.getElementById('gc-'+grpId)?.querySelectorAll('.qwf-btn').forEach(b=>b.classList.toggle('qwf-active',b.dataset.wfid===wfId))
   propagateSyncWf('grp:'+grpId, wfId)
 }

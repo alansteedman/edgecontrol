@@ -645,7 +645,7 @@ function encodeFreq(hz) {
   return Math.round((ms - 600) / 10) + 200
 }
 
-function computeWave(wfId, tick, amp, speed=1) {
+function computeWave(wfId, tick, amp, speed=1, baseFreq=25) {
   if (wfId && wfId.startsWith('live-input:')) {
     const li = liveAudioStore.get(wfId.slice('live-input:'.length))
     const lvl = li?.current ?? 0
@@ -675,52 +675,31 @@ function computeWave(wfId, tick, amp, speed=1) {
   // speed scales the phase rate — higher speed = faster cycle.
   const p = i => (tick * 4 + i) * speed
   const sv = (i, rate, offset=0) => Math.round(((Math.sin(p(i)*rate+offset)+1)/2)*amp)
+  const f = baseFreq || 25
   switch (wfId) {
-    // pulse: 25Hz — smooth deep feel on the on/off envelope
-    case 'pulse':     return Array.from({length:4},(_,i)=>{
-      const ph=p(i)%40
-      const env=ph<8?(1-Math.cos(ph/8*Math.PI))/2:ph<24?1:ph<32?(1+Math.cos((ph-24)/8*Math.PI))/2:0
-      return [25,Math.round(env*amp)]
-    })
-    // breathe: 25Hz — sweet spot between deep thump (10Hz) and prickly (50Hz+), 6s cycle
-    case 'breathe':   return Array.from({length:4},(_,i)=>[ 25, sv(i,0.025) ])
-    // tidal: 25Hz rolling wave
-    case 'tidal':     return Array.from({length:4},(_,i)=>[ 25, Math.round((Math.abs(Math.sin(p(i)*0.0125))*0.9+0.05)*amp) ])
-    // wave: 25Hz dual-phase flowing sensation
-    case 'wave':      return Array.from({length:4},(_,i)=>[ 25, i<2?sv(i,0.025):sv(i,0.025,1.57) ])
-    // thud: 10Hz — deep thumping impact, low freq is intentional
-    case 'thud':      return Array.from({length:4},(_,i)=>{
-      const ph=p(i)%40
-      const env=ph<12?(1-Math.cos(ph/12*Math.PI))/2:ph<20?1-(ph-12)/8:0
-      return [10,Math.round(env*amp)]
-    })
-    // flutter: 25Hz on/off bursts
-    case 'flutter':   return Array.from({length:4},(_,i)=>{ const on=p(i)%8<4; return [25,on?amp:0] })
-    // ramp: 25Hz sawtooth envelope
-    case 'ramp':      return Array.from({length:4},(_,i)=>{
-      const ph=p(i)%80
-      const env=ph<72?ph/72:(80-ph)/8*Math.cos((ph-72)/8*Math.PI*0.5)
-      return [25,Math.max(0,Math.round(env*amp))]
-    })
-    // heartbeat: 25Hz
-    case 'heartbeat': return Array.from({length:4},(_,i)=>{ const f=p(i)%32; const hv=f===0?amp:f===4?Math.round(amp*.5):f===8?Math.round(amp*.7):f===12?Math.round(amp*.3):0; return [25,hv] })
-    // steps: 25Hz discrete amplitude steps
-    case 'steps':     return Array.from({length:4},(_,i)=>{ const s=Math.floor((p(i)%80)/20); return [25,[Math.round(amp*.25),Math.round(amp*.5),Math.round(amp*.75),amp][s]] })
-    // buzz: kept high — this one is supposed to feel like a buzz, not a wave
-    case 'buzz':      return [[80,amp],[80,amp],[80,amp],[80,amp]]
+    case 'pulse':     return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const env=ph<8?(1-Math.cos(ph/8*Math.PI))/2:ph<24?1:ph<32?(1+Math.cos((ph-24)/8*Math.PI))/2:0; return [f,Math.round(env*amp)] })
+    case 'breathe':   return Array.from({length:4},(_,i)=>[ f, sv(i,0.025) ])
+    case 'tidal':     return Array.from({length:4},(_,i)=>[ f, Math.round((Math.abs(Math.sin(p(i)*0.0125))*0.9+0.05)*amp) ])
+    case 'wave':      return Array.from({length:4},(_,i)=>[ f, i<2?sv(i,0.025):sv(i,0.025,1.57) ])
+    case 'thud':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const env=ph<12?(1-Math.cos(ph/12*Math.PI))/2:ph<20?1-(ph-12)/8:0; return [f,Math.round(env*amp)] })
+    case 'flutter':   return Array.from({length:4},(_,i)=>{ const on=p(i)%8<4; return [f,on?amp:0] })
+    case 'ramp':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; const env=ph<72?ph/72:(80-ph)/8*Math.cos((ph-72)/8*Math.PI*0.5); return [f,Math.max(0,Math.round(env*amp))] })
+    case 'heartbeat': return Array.from({length:4},(_,i)=>{ const hph=p(i)%32; const hv=hph===0?amp:hph===4?Math.round(amp*.5):hph===8?Math.round(amp*.7):hph===12?Math.round(amp*.3):0; return [f,hv] })
+    case 'steps':     return Array.from({length:4},(_,i)=>{ const s=Math.floor((p(i)%80)/20); return [f,[Math.round(amp*.25),Math.round(amp*.5),Math.round(amp*.75),amp][s]] })
+    case 'buzz':      return [[f,amp],[f,amp],[f,amp],[f,amp]]
     // ── Wave Shapes ───────────────────────────────────────────────────────────
-    case 'ws-sawtooth':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [25,Math.round((ph/40)*amp)] })
-    case 'ws-triangle':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [25,Math.round((ph<20?ph/20:(40-ph)/20)*amp)] })
-    case 'ws-fangs':       return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sp=n=>Math.max(0,1-Math.abs(ph-n)/6); return [25,Math.round(Math.max(sp(8),sp(28))*amp)] })
-    case 'ws-trapezoid':   return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [25,Math.round((ph<6?ph/6:ph<28?1:ph<34?(34-ph)/6:0)*amp)] })
-    case 'ws-gentle':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; return [25,Math.round((ph<60?ph/60:(80-ph)/20)*amp)] })
-    case 'ws-fast-attack': return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [25,Math.round(Math.exp(-ph*0.12)*amp)] })
-    case 'ws-tapslide':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const tap=ph<5?(1-ph/5):0; const slide=ph>=10?(ph-10)/30:0; return [25,Math.round(Math.max(tap,slide)*amp)] })
-    case 'ws-jelly':       return Array.from({length:4},(_,i)=>{ const t=p(i)*0.05; return [25,Math.round(Math.max(0,(Math.sin(t)*0.7+Math.sin(t*0.3+1)*0.3+1)/2)*amp)] })
-    case 'ws-double':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%20; return [25,Math.round(Math.max(0,Math.sin(ph/20*Math.PI))*amp)] })
-    case 'ws-triple':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sp=ph%(40/3); return [25,Math.round(Math.max(0,Math.sin(sp/(40/3)*Math.PI))*amp)] })
-    case 'ws-flourish':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sm=ph<10?Math.sin(ph/10*Math.PI)*0.4:0; const bg=ph>=15&&ph<35?Math.sin((ph-15)/20*Math.PI):0; return [25,Math.round(Math.max(sm,bg)*amp)] })
-    case 'ws-rising':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; const base=ph/80; const wave=(Math.sin(ph*0.25)+1)/2*0.4; return [25,Math.round(Math.min(1,base+wave*base)*amp)] })
+    case 'ws-sawtooth':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [f,Math.round((ph/40)*amp)] })
+    case 'ws-triangle':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [f,Math.round((ph<20?ph/20:(40-ph)/20)*amp)] })
+    case 'ws-fangs':       return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sp=n=>Math.max(0,1-Math.abs(ph-n)/6); return [f,Math.round(Math.max(sp(8),sp(28))*amp)] })
+    case 'ws-trapezoid':   return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [f,Math.round((ph<6?ph/6:ph<28?1:ph<34?(34-ph)/6:0)*amp)] })
+    case 'ws-gentle':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; return [f,Math.round((ph<60?ph/60:(80-ph)/20)*amp)] })
+    case 'ws-fast-attack': return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [f,Math.round(Math.exp(-ph*0.12)*amp)] })
+    case 'ws-tapslide':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const tap=ph<5?(1-ph/5):0; const slide=ph>=10?(ph-10)/30:0; return [f,Math.round(Math.max(tap,slide)*amp)] })
+    case 'ws-jelly':       return Array.from({length:4},(_,i)=>{ const jt=p(i)*0.05; return [f,Math.round(Math.max(0,(Math.sin(jt)*0.7+Math.sin(jt*0.3+1)*0.3+1)/2)*amp)] })
+    case 'ws-double':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%20; return [f,Math.round(Math.max(0,Math.sin(ph/20*Math.PI))*amp)] })
+    case 'ws-triple':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sp=ph%(40/3); return [f,Math.round(Math.max(0,Math.sin(sp/(40/3)*Math.PI))*amp)] })
+    case 'ws-flourish':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sm=ph<10?Math.sin(ph/10*Math.PI)*0.4:0; const bg=ph>=15&&ph<35?Math.sin((ph-15)/20*Math.PI):0; return [f,Math.round(Math.max(sm,bg)*amp)] })
+    case 'ws-rising':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; const base=ph/80; const wave=(Math.sin(ph*0.25)+1)/2*0.4; return [f,Math.round(Math.min(1,base+wave*base)*amp)] })
     default:          return [[25,0],[25,0],[25,0],[25,0]]
   }
 }
@@ -730,7 +709,7 @@ class CoyoteDevice {
     this.id=id; this.name=name; this.type='coyote'; this.mac=(mac||'').toLowerCase()
     this.bleName=bleName||null; this.status='disconnected'
     this.gattServer=null; this.writeChar=null; this.notifyChar=null
-    this.channels={ A:{intensity:0,waveform:'pulse',speed:1}, B:{intensity:0,waveform:'pulse',speed:1} }
+    this.channels={ A:{intensity:0,waveform:'pulse',speed:1,baseFreq:25}, B:{intensity:0,waveform:'pulse',speed:1,baseFreq:25} }
     this._smoothA=0; this._smoothB=0  // smoothed intensity (0-200), lerped toward target each packet
     this._lastSentA=0; this._lastSentB=0; this._deviceA=0; this._deviceB=0; this._lastBtnAt=0; this.battery=null
     this.buttonControl={ A:!!buttonControl?.A, B:!!buttonControl?.B }  // whether physical buttons control each channel
@@ -942,10 +921,11 @@ class CoyoteDevice {
     broadcast({ type:'device:status', id:this.id, status:'disconnected' })
   }
 
-  setChannel(ch, { intensity, waveform, speed }={}) {
+  setChannel(ch, { intensity, waveform, speed, baseFreq }={}) {
     if (intensity!==undefined) this.channels[ch].intensity=Math.max(0,Math.min(200,intensity))
     if (waveform!==undefined)  this.channels[ch].waveform=waveform
     if (speed!==undefined)     this.channels[ch].speed=Math.max(0.25,Math.min(100,speed))
+    if (baseFreq!==undefined)  this.channels[ch].baseFreq=Math.max(10,Math.min(200,parseInt(baseFreq)))
     broadcast({ type:'device:state', id:this.id, channels:this.channels, ticks:this._ticks, paused:this._paused, buttonControl:this.buttonControl })
   }
 
@@ -980,8 +960,8 @@ class CoyoteDevice {
 
     const aAmp=Math.min(100,Math.round(this._smoothA/2))
     const bAmp=Math.min(100,Math.round(this._smoothB/2))
-    const aW=computeWave(this.channels.A.waveform,tickA,aAmp,this.channels.A.speed||1)
-    const bW=computeWave(this.channels.B.waveform,tickB,bAmp,this.channels.B.speed||1)
+    const aW=computeWave(this.channels.A.waveform,tickA,aAmp,this.channels.A.speed||1,this.channels.A.baseFreq||25)
+    const bW=computeWave(this.channels.B.waveform,tickB,bAmp,this.channels.B.speed||1,this.channels.B.baseFreq||25)
     const buf=Buffer.alloc(20)
     buf[0]=0xB0; buf[1]=(((t%15)+1)<<4)|0x0F
     buf[2]=Math.min(200,Math.round(this._smoothA)); this._lastSentA=buf[2]

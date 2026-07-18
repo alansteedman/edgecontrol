@@ -174,16 +174,30 @@ function saveWaveforms() { writeFileSync(WAVEFORMS_PATH, JSON.stringify(waveform
 let waveformStore = loadWaveforms()
 
 const BUILTIN_WAVEFORMS = [
-  { id:'pulse',     name:'Pulse',     desc:'Rhythmic on/off at 1Hz — classic distinct pulses',          icon:'▐▌' },
-  { id:'breathe',   name:'Breathe',   desc:'Smooth sine amplitude envelope — in and out',               icon:'〜' },
-  { id:'tidal',     name:'Tidal',     desc:'Alternating 20/40Hz frequencies — shifting feel',            icon:'〰' },
-  { id:'wave',      name:'Wave',      desc:'Phase-shifted dual wave — flowing sensation',                icon:'∿' },
-  { id:'thud',      name:'Thud',      desc:'Heavy 10Hz impact once per second — deep thumps',           icon:'◉' },
-  { id:'flutter',   name:'Flutter',   desc:'Rapid 5Hz alternating bursts — intense staccato',           icon:'※' },
-  { id:'ramp',      name:'Ramp',      desc:'Amplitude builds over 2 seconds then resets',               icon:'▲' },
-  { id:'heartbeat', name:'Heartbeat', desc:'Lub-dub rhythm — 75bpm cardiac pattern',                    icon:'♥' },
-  { id:'steps',     name:'Steps',     desc:'Staircase: 25% → 50% → 75% → 100% every 500ms',            icon:'▬' },
-  { id:'buzz',      name:'Buzz',      desc:'Smooth continuous 80Hz — vibration-like sensation',         icon:'≈' },
+  // ── Classic ──────────────────────────────────────────────────────────────────
+  { id:'pulse',          name:'Pulse',        group:'classic', desc:'Rhythmic on/off at 1Hz — classic distinct pulses',        icon:'▐▌' },
+  { id:'breathe',        name:'Breathe',      group:'classic', desc:'Smooth sine amplitude envelope — in and out',             icon:'〜' },
+  { id:'tidal',          name:'Tidal',        group:'classic', desc:'Alternating 20/40Hz frequencies — shifting feel',         icon:'〰' },
+  { id:'wave',           name:'Wave',         group:'classic', desc:'Phase-shifted dual wave — flowing sensation',             icon:'∿' },
+  { id:'thud',           name:'Thud',         group:'classic', desc:'Heavy 10Hz impact once per second — deep thumps',        icon:'◉' },
+  { id:'flutter',        name:'Flutter',      group:'classic', desc:'Rapid 5Hz alternating bursts — intense staccato',        icon:'※' },
+  { id:'ramp',           name:'Ramp',         group:'classic', desc:'Amplitude builds over 2 seconds then resets',            icon:'▲' },
+  { id:'heartbeat',      name:'Heartbeat',    group:'classic', desc:'Lub-dub rhythm — 75bpm cardiac pattern',                 icon:'♥' },
+  { id:'steps',          name:'Steps',        group:'classic', desc:'Staircase: 25% → 50% → 75% → 100% every 500ms',         icon:'▬' },
+  { id:'buzz',           name:'Buzz',         group:'classic', desc:'Smooth continuous 80Hz — vibration-like sensation',      icon:'≈' },
+  // ── Wave Shapes ──────────────────────────────────────────────────────────────
+  { id:'ws-sawtooth',    name:'Sawtooth',     group:'wave',    desc:'Linear ramp up then instant reset — 1s cycle',           icon:'╱' },
+  { id:'ws-triangle',    name:'Triangle',     group:'wave',    desc:'Linear sweep up and back down — 1s cycle',               icon:'∧' },
+  { id:'ws-fangs',       name:'Fangs',        group:'wave',    desc:'Two sharp peaks per cycle',                              icon:'⩓' },
+  { id:'ws-trapezoid',   name:'Trapezoid',    group:'wave',    desc:'Smooth attack, flat hold, clean release',                icon:'⊓' },
+  { id:'ws-gentle',      name:'Gentle attack',group:'wave',    desc:'Slow 3s build then quick release',                       icon:'◿' },
+  { id:'ws-fast-attack', name:'Fast attack',  group:'wave',    desc:'Instant peak then slow exponential decay',               icon:'◺' },
+  { id:'ws-tapslide',    name:'Tap & slide',  group:'wave',    desc:'Quick tap then glide up to full intensity',              icon:'↗' },
+  { id:'ws-jelly',       name:'Jelly',        group:'wave',    desc:'Two overlapping sines — wobbly organic feel',            icon:'≋' },
+  { id:'ws-double',      name:'Double',       group:'wave',    desc:'Two smooth pulses per cycle',                            icon:'∩∩' },
+  { id:'ws-triple',      name:'Triple',       group:'wave',    desc:'Three peaks per cycle',                                  icon:'⫷' },
+  { id:'ws-flourish',    name:'Flourish',     group:'wave',    desc:'Small peak then big peak per cycle',                     icon:'↝' },
+  { id:'ws-rising',      name:'Rising tide',  group:'wave',    desc:'Crescendo with oscillation — 2s cycle',                  icon:'⤴' },
 ]
 
 // ── Audio files ──────────────────────────────────────────────────────────────
@@ -694,6 +708,19 @@ function computeWave(wfId, tick, amp, speed=1) {
     case 'steps':     return Array.from({length:4},(_,i)=>{ const s=Math.floor((p(i)%80)/20); return [25,[Math.round(amp*.25),Math.round(amp*.5),Math.round(amp*.75),amp][s]] })
     // buzz: kept high — this one is supposed to feel like a buzz, not a wave
     case 'buzz':      return [[80,amp],[80,amp],[80,amp],[80,amp]]
+    // ── Wave Shapes ───────────────────────────────────────────────────────────
+    case 'ws-sawtooth':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [25,Math.round((ph/40)*amp)] })
+    case 'ws-triangle':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [25,Math.round((ph<20?ph/20:(40-ph)/20)*amp)] })
+    case 'ws-fangs':       return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sp=n=>Math.max(0,1-Math.abs(ph-n)/6); return [25,Math.round(Math.max(sp(8),sp(28))*amp)] })
+    case 'ws-trapezoid':   return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [25,Math.round((ph<6?ph/6:ph<28?1:ph<34?(34-ph)/6:0)*amp)] })
+    case 'ws-gentle':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; return [25,Math.round((ph<60?ph/60:(80-ph)/20)*amp)] })
+    case 'ws-fast-attack': return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; return [25,Math.round(Math.exp(-ph*0.12)*amp)] })
+    case 'ws-tapslide':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const tap=ph<5?(1-ph/5):0; const slide=ph>=10?(ph-10)/30:0; return [25,Math.round(Math.max(tap,slide)*amp)] })
+    case 'ws-jelly':       return Array.from({length:4},(_,i)=>{ const t=p(i)*0.05; return [25,Math.round(Math.max(0,(Math.sin(t)*0.7+Math.sin(t*0.3+1)*0.3+1)/2)*amp)] })
+    case 'ws-double':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%20; return [25,Math.round(Math.max(0,Math.sin(ph/20*Math.PI))*amp)] })
+    case 'ws-triple':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sp=ph%(40/3); return [25,Math.round(Math.max(0,Math.sin(sp/(40/3)*Math.PI))*amp)] })
+    case 'ws-flourish':    return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const sm=ph<10?Math.sin(ph/10*Math.PI)*0.4:0; const bg=ph>=15&&ph<35?Math.sin((ph-15)/20*Math.PI):0; return [25,Math.round(Math.max(sm,bg)*amp)] })
+    case 'ws-rising':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; const base=ph/80; const wave=(Math.sin(ph*0.25)+1)/2*0.4; return [25,Math.round(Math.min(1,base+wave*base)*amp)] })
     default:          return [[25,0],[25,0],[25,0],[25,0]]
   }
 }

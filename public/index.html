@@ -4673,13 +4673,23 @@ function pickWf(devId,ch,wfId) {
 
 // ── Waveforms sub-tab ─────────────────────────────────────────────────────────
 function renderWfTab() {
-  // Built-ins
+  // Built-ins grouped by section
   const bg=document.getElementById('builtin-grid'); bg.innerHTML=''
-  for(const w of S.waveforms.builtin||[]) {
-    const c=document.createElement('div'); c.className='wf-card'
-    c.innerHTML=`<div class="wf-card-name">${w.icon||''} ${w.name}</div><div class="wf-card-desc">${w.desc}</div><canvas id="bc-${w.id}" height="34" style="width:100%;display:block;background:#0a0a0a;border-radius:4px"></canvas>`
-    bg.appendChild(c)
-    requestAnimationFrame(()=>{ const cv=document.getElementById(`bc-${w.id}`); if(cv) drawMini(cv,w.id,34) })
+  const groups=[{key:'classic',label:'Classic'},{key:'wave',label:'Wave Shapes'}]
+  for(const grp of groups) {
+    const items=(S.waveforms.builtin||[]).filter(w=>w.group===grp.key)
+    if(!items.length) continue
+    const hdr=document.createElement('div')
+    hdr.style.cssText='grid-column:1/-1;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#444;padding:6px 0 4px;border-top:1px solid #1a1a1a;margin-top:4px'
+    if(grp.key==='classic') hdr.style.borderTop='none'
+    hdr.textContent=grp.label
+    bg.appendChild(hdr)
+    for(const w of items) {
+      const c=document.createElement('div'); c.className='wf-card'
+      c.innerHTML=`<div class="wf-card-name">${w.icon||''} ${w.name}</div><div class="wf-card-desc">${w.desc}</div><canvas id="bc-${w.id}" height="34" style="width:100%;display:block;background:#0a0a0a;border-radius:4px"></canvas>`
+      bg.appendChild(c)
+      requestAnimationFrame(()=>{ const cv=document.getElementById(`bc-${w.id}`); if(cv) drawMini(cv,w.id,34) })
+    }
   }
   // Custom
   const cl=document.getElementById('custom-list')
@@ -4715,6 +4725,18 @@ function simAmps(wfId,n){
       case 'heartbeat': { const f=t%8; a=f===0?A:f===1?50:f===2?70:f===3?30:0; break }
       case 'steps':     { const s=Math.floor((t%20)/5); a=[25,50,75,100][s]; break }
       case 'buzz':      a=A; break
+      case 'ws-sawtooth':    a=(t%40)/40*A; break
+      case 'ws-triangle':    { const ph=t%40; a=(ph<20?ph/20:(40-ph)/20)*A; break }
+      case 'ws-fangs':       { const ph=t%40; const sp=n=>Math.max(0,1-Math.abs(ph-n)/6); a=Math.max(sp(8),sp(28))*A; break }
+      case 'ws-trapezoid':   { const ph=t%40; a=(ph<6?ph/6:ph<28?1:ph<34?(34-ph)/6:0)*A; break }
+      case 'ws-gentle':      { const ph=t%80; a=(ph<60?ph/60:(80-ph)/20)*A; break }
+      case 'ws-fast-attack': { const ph=t%40; a=Math.exp(-ph*0.12)*A; break }
+      case 'ws-tapslide':    { const ph=t%40; const tap=ph<5?(1-ph/5):0; const slide=ph>=10?(ph-10)/30:0; a=Math.max(tap,slide)*A; break }
+      case 'ws-jelly':       { const v=t*0.05; a=Math.max(0,(Math.sin(v)*0.7+Math.sin(v*0.3+1)*0.3+1)/2)*A; break }
+      case 'ws-double':      { const ph=t%20; a=Math.max(0,Math.sin(ph/20*Math.PI))*A; break }
+      case 'ws-triple':      { const ph=t%40; const sp=ph%(40/3); a=Math.max(0,Math.sin(sp/(40/3)*Math.PI))*A; break }
+      case 'ws-flourish':    { const ph=t%40; const sm=ph<10?Math.sin(ph/10*Math.PI)*0.4:0; const bg=ph>=15&&ph<35?Math.sin((ph-15)/20*Math.PI):0; a=Math.max(sm,bg)*A; break }
+      case 'ws-rising':      { const ph=t%80; const base=ph/80; const wave=(Math.sin(ph*0.25)+1)/2*0.4; a=Math.min(1,base+wave*base)*A; break }
     }
     r.push(a)
   }

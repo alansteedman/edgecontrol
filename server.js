@@ -2424,6 +2424,7 @@ wss.on('connection', (ws, request) => {
   ws.role = request.session?.role || (config.auth?.enabled ? 'user' : 'admin')
   clients.add(ws)
   ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
+  if (_updateAvailable) ws.send(JSON.stringify({ type:'update:available', version:_updateAvailable.version, current:APP_VERSION }))
   ws.on('message', raw => {
     try {
       const msg = JSON.parse(raw)
@@ -4339,6 +4340,52 @@ app.post('/api/custom-layout', requireAuth, (req, res) => {
   saveConfig(config)
   broadcast({ type: 'customLayout:updated', layout: config.customLayout })
   res.json({ ok: true })
+})
+
+// ── Auto-update check ────────────────────────────────────────────────────────
+let _updateAvailable = null  // { version } or null
+
+async function checkForUpdate() {
+  try {
+    const r = await fetch('https://raw.githubusercontent.com/alansteedman/edgecontrol/main/package.json',
+      { signal: AbortSignal.timeout(10000) })
+    if (!r.ok) return
+    const { version } = await r.json()
+    const newer = version.split('.').map(Number)
+    const current = APP_VERSION.split('.').map(Number)
+    const isNewer = newer[0] > current[0] || (newer[0] === current[0] && newer[1] > current[1]) ||
+      (newer[0] === current[0] && newer[1] === current[1] && newer[2] > current[2])
+    if (isNewer && _updateAvailable?.version !== version) {
+      _updateAvailable = { version }
+      console.log(`[update] v${version} available (running v${APP_VERSION})`)
+      broadcast({ type: 'update:available', version, current: APP_VERSION })
+    }
+  } catch { /* network unavailable */ }
+}
+
+setTimeout(checkForUpdate, 30000)
+setInterval(checkForUpdate, 4 * 60 * 60 * 1000)
+
+app.get('/api/update/status', requireAuth, (req, res) => {
+  res.json({ current: APP_VERSION, available: _updateAvailable })
+})
+
+app.post('/api/update/apply', requireAdmin, (req, res) => {
+  exec('git -C /home/alans/edgecontroller rev-parse --is-inside-work-tree', (err) => {
+    if (err) return res.status(400).json({ error: 'Not a git install — update manually via SCP' })
+    res.json({ ok: true, message: 'Updating...' })
+    broadcast({ type: 'update:applying', version: _updateAvailable?.version })
+    setTimeout(() => {
+      exec('cd /home/alans/edgecontroller && git pull && npm install --omit=dev && pm2 restart edgecontroller',
+        { timeout: 120000 },
+        (e, stdout, stderr) => {
+          if (e) {
+            console.error('[update] failed:', stderr)
+            broadcast({ type: 'update:failed', error: stderr })
+          }
+        })
+    }, 500)
+  })
 })
 
 process.on('SIGINT',  () => { tunnelStop(); destroy(); streamDeck?.close(); process.exit() })

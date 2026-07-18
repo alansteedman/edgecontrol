@@ -29,6 +29,14 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 
 /* ── Main area ── */
 #main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+#update-banner{display:none;align-items:center;gap:10px;padding:7px 14px;background:#1a2e1a;border-bottom:1px solid #2d5a2d;font-size:12px;color:#86efac;flex-shrink:0}
+#update-banner button{padding:3px 10px;border-radius:4px;border:none;cursor:pointer;font-size:11px;font-weight:600}
+#update-banner .upd-btn{background:#16a34a;color:#fff}
+#update-banner .upd-btn:hover{background:#15803d}
+#update-banner .upd-dismiss{background:transparent;color:#6b7280}
+#update-banner .upd-dismiss:hover{color:#9ca3af}
+#update-banner .upd-spinner{display:none;width:12px;height:12px;border:2px solid #2d5a2d;border-top-color:#86efac;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 /* ── Sub-nav (top of content, coyote only) ── */
 #sub-nav{background:#141414;border-bottom:1px solid #1e1e1e;display:none;flex-shrink:0}
@@ -410,6 +418,14 @@ select.mci{cursor:pointer}
 
 <!-- ══ Main ══════════════════════════════════════════════════════════════ -->
 <div id="main">
+
+  <!-- Update banner -->
+  <div id="update-banner">
+    <span class="upd-spinner" id="upd-spinner"></span>
+    <span id="upd-msg">A new version is available</span>
+    <button class="upd-btn" id="upd-btn" onclick="_updApply()">Update now</button>
+    <button class="upd-dismiss" onclick="document.getElementById('update-banner').style.display='none'">✕</button>
+  </div>
 
   <!-- Sub-nav (only visible for Coyote tab) -->
   <div id="sub-nav">
@@ -1158,6 +1174,34 @@ function connect() {
 }
 function send(m){ if(ws?.readyState===1) ws.send(JSON.stringify(m)) }
 
+function _showUpdateBanner(version) {
+  const b = document.getElementById('update-banner')
+  document.getElementById('upd-msg').textContent = `v${version} available`
+  document.getElementById('upd-btn').disabled = false
+  document.getElementById('upd-spinner').style.display = 'none'
+  b.style.display = 'flex'
+}
+
+async function _updApply() {
+  document.getElementById('upd-btn').disabled = true
+  document.getElementById('upd-spinner').style.display = 'block'
+  document.getElementById('upd-msg').textContent = 'Applying update…'
+  try {
+    const r = await fetch('/api/update/apply', { method: 'POST' })
+    const d = await r.json()
+    if (!r.ok) {
+      document.getElementById('upd-spinner').style.display = 'none'
+      document.getElementById('upd-msg').textContent = d.error || 'Update failed'
+      document.getElementById('upd-btn').disabled = false
+    }
+    // On success the server will broadcast update:applying then restart
+  } catch(e) {
+    document.getElementById('upd-spinner').style.display = 'none'
+    document.getElementById('upd-msg').textContent = 'Update request failed'
+    document.getElementById('upd-btn').disabled = false
+  }
+}
+
 function handle(m) {
   switch(m.type) {
     case 'state':
@@ -1327,6 +1371,18 @@ function handle(m) {
       if(S.devices[m.id]) S.devices[m.id].battery=m.battery
       const ppBatEl=document.getElementById('pp-bat-'+m.id); if(ppBatEl) ppBatEl.textContent=m.battery+'%'
       const ppBatMod=document.getElementById('pp-bat-modal'); if(ppBatMod&&_ppModalId===m.id) ppBatMod.textContent=m.battery+'%'; break
+    case 'update:available':
+      _showUpdateBanner(m.version); break
+    case 'update:applying':
+      { const b=document.getElementById('update-banner')
+        document.getElementById('upd-spinner').style.display='block'
+        document.getElementById('upd-msg').textContent='Updating to v'+m.version+'…'
+        document.getElementById('upd-btn').disabled=true
+        b.style.display='flex' }; break
+    case 'update:failed':
+      { document.getElementById('upd-spinner').style.display='none'
+        document.getElementById('upd-msg').textContent='Update failed — check logs'
+        document.getElementById('upd-btn').disabled=false }; break
     case 'tunnel:status':
       updateTunnelUI({status:m.status,hostname:m.hostname,enabled:m.enabled}); break
     case 'scan:start':

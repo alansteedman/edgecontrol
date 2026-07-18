@@ -36,7 +36,15 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 #update-banner .upd-dismiss{background:transparent;color:#6b7280}
 #update-banner .upd-dismiss:hover{color:#9ca3af}
 #update-banner .upd-spinner{display:none;width:12px;height:12px;border:2px solid #2d5a2d;border-top-color:#86efac;border-radius:50%;animation:spin .7s linear infinite}
+#update-banner .upd-info{background:transparent;color:#86efac;border:1px solid #2d5a2d;border-radius:4px;padding:2px 7px;font-size:13px;line-height:1}
+#update-banner .upd-info:hover{background:#162e16}
 @keyframes spin{to{transform:rotate(360deg)}}
+#upd-modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
+#upd-modal-bg.open{display:flex}
+#upd-modal{background:#141414;border:1px solid #2d5a2d;border-radius:10px;width:480px;max-width:90vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden}
+#upd-modal-hdr{padding:14px 16px 10px;border-bottom:1px solid #1e1e1e;display:flex;justify-content:space-between;align-items:center}
+#upd-modal-hdr h3{font-size:14px;color:#86efac;margin:0}
+#upd-modal-body{padding:14px 16px;overflow-y:auto;font-size:12px;line-height:1.7;color:#ccc}
 
 /* ── Sub-nav (top of content, coyote only) ── */
 #sub-nav{background:#141414;border-bottom:1px solid #1e1e1e;display:none;flex-shrink:0}
@@ -423,8 +431,20 @@ select.mci{cursor:pointer}
   <div id="update-banner">
     <span class="upd-spinner" id="upd-spinner"></span>
     <span id="upd-msg">A new version is available</span>
+    <button class="upd-info" onclick="_updInfo()" title="What's in this update">ℹ</button>
     <button class="upd-btn" id="upd-btn" onclick="_updApply()">Update now</button>
     <button class="upd-dismiss" onclick="document.getElementById('update-banner').style.display='none'">✕</button>
+  </div>
+
+  <!-- Update info modal -->
+  <div id="upd-modal-bg" onclick="if(event.target===this)this.classList.remove('open')">
+    <div id="upd-modal">
+      <div id="upd-modal-hdr">
+        <h3 id="upd-modal-title">What's new</h3>
+        <button onclick="document.getElementById('upd-modal-bg').classList.remove('open')" style="background:none;border:none;color:#666;cursor:pointer;font-size:16px;padding:0 4px">✕</button>
+      </div>
+      <div id="upd-modal-body">Loading…</div>
+    </div>
   </div>
 
   <!-- Sub-nav (only visible for Coyote tab) -->
@@ -1180,6 +1200,46 @@ function _showUpdateBanner(version) {
   document.getElementById('upd-btn').disabled = false
   document.getElementById('upd-spinner').style.display = 'none'
   b.style.display = 'flex'
+}
+
+let _updInfoVersion = null
+
+async function _updInfo() {
+  const bg = document.getElementById('upd-modal-bg')
+  const body = document.getElementById('upd-modal-body')
+  const title = document.getElementById('upd-modal-title')
+  bg.classList.add('open')
+  body.textContent = 'Loading…'
+  try {
+    const r = await fetch('https://raw.githubusercontent.com/alansteedman/edgecontrol/main/README.md',
+      { signal: AbortSignal.timeout(8000) })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    const text = await r.text()
+    // Extract all version entries from the Versions section
+    // Lines look like: - **v2.1.1** — blah blah; we want everything newer than current
+    const lines = text.split('\n')
+    const entries = []
+    for (const line of lines) {
+      const m = line.match(/^-\s+\*\*(v[\d.]+)\*\*\s+[—-]\s+(.+)/)
+      if (m) entries.push({ version: m[1], notes: m[2].trim() })
+    }
+    const current = _updInfoVersion || document.getElementById('upd-msg').textContent.match(/v([\d.]+)/)?.[1] || '0.0.0'
+    const cur = current.replace(/^v/,'').split('.').map(Number)
+    const newer = entries.filter(e => {
+      const v = e.version.replace(/^v/,'').split('.').map(Number)
+      return v[0] > cur[0] || (v[0]===cur[0] && v[1]>cur[1]) || (v[0]===cur[0] && v[1]===cur[1] && v[2]>cur[2])
+    })
+    if (!newer.length) {
+      body.textContent = 'No changelog entries found.'
+      return
+    }
+    title.textContent = newer.length === 1 ? `What's new in ${newer[0].version}` : `What's new (${newer.length} versions)`
+    body.innerHTML = newer.map(e =>
+      `<div style="margin-bottom:12px"><strong style="color:#86efac">${e.version}</strong><br>${e.notes}</div>`
+    ).join('')
+  } catch(e) {
+    body.textContent = 'Could not load changelog: ' + e.message
+  }
 }
 
 async function _updApply() {

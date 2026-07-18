@@ -4315,10 +4315,15 @@ app.get('/api/wifi/ap-status', (req, res) => {
   res.json({ apMode: isAP, ssid: isAP ? readFileSync(AP_FLAG, 'utf8').trim() : null })
 })
 
+let _preHotspotConn = null
+
 app.post('/api/wifi/hotspot/start', requireAuth, async (req, res) => {
   const ssid = `EdgeController-${config.boxId || 'setup'}`
   const password = 'edgesetup'
   try {
+    const out = await nmcli('-t -f GENERAL.CONNECTION dev show wlan0').catch(() => '')
+    const name = out.split(':')[1]?.trim()
+    if (name && name !== '--') _preHotspotConn = name
     await nmcli(`connection delete "Hotspot"`).catch(() => {})
     await nmcli(`dev wifi hotspot ifname wlan0 ssid "${ssid}" password "${password}"`)
     res.json({ ok: true, ssid, password, ip: '10.42.0.1' })
@@ -4329,7 +4334,12 @@ app.post('/api/wifi/hotspot/stop', requireAuth, async (req, res) => {
   try {
     await nmcli('connection down Hotspot').catch(() => {})
     await nmcli('connection delete Hotspot').catch(() => {})
-    await nmcli('device connect wlan0').catch(() => {})
+    if (_preHotspotConn) {
+      await nmcli(`connection up "${_preHotspotConn}"`).catch(() => {})
+      _preHotspotConn = null
+    } else {
+      await nmcli('device connect wlan0').catch(() => {})
+    }
     res.json({ ok: true })
   } catch(e) { res.status(500).json({ error: e.message }) }
 })

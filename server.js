@@ -2267,7 +2267,7 @@ function requireAuth(req, res, next) {
   if (req.session?.authed) return next()
   if (req.path === '/login' || req.path === '/setup.html' || req.path.startsWith('/api/auth')) return next()
   // WiFi/status endpoints always accessible — needed during AP setup mode
-  if (req.path === '/api/status' || req.path === '/api/wifi/ap-status' || req.path === '/api/wifi/scan' || req.path === '/api/wifi/connect') return next()
+  if (req.path === '/api/status' || req.path === '/api/wifi/ap-status' || req.path === '/api/wifi/scan' || req.path === '/api/wifi/connect' || req.path === '/api/wifi/hotspot/start' || req.path === '/api/wifi/hotspot/stop') return next()
   // Audio monitor stream — <audio> elements don't forward session cookies reliably; the capture being active is auth enough
   if (req.method === 'GET' && req.path.endsWith('/stream') && req.path.startsWith('/api/live-audio/')) return next()
   if (req.headers.accept?.includes('application/json')) return res.status(401).json({ error: 'Unauthorized' })

@@ -4205,12 +4205,22 @@ function buildCh(devId,ch,c,btnEnabled=false) {
           Device buttons
         </label>
       </div>
-      <div style="display:flex;gap:12px;margin-bottom:6px;align-items:center">
-        <div style="flex:1;min-width:0;display:flex;align-items:center">
+      <div style="display:flex;gap:12px;margin-bottom:6px;align-items:flex-start">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
           <input class="ch-slider" id="sl-${devId}${ch}" type="range" min="0" max="200" value="${c.intensity}"
             style="width:100%;margin-bottom:0"
             oninput="document.getElementById('cv-${devId}${ch}').textContent=this.value"
             onchange="chSet('${devId}','${ch}',this.value)"/>
+          <div id="freq-${devId}${ch}row" style="${isBuiltin?'':'opacity:.4;pointer-events:none'}">
+            <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+              <span style="font-size:10px;color:#555">Base Freq</span>
+              <span id="freq-${devId}${ch}vl" style="font-size:10px;color:#888">${baseFreq}Hz</span>
+            </div>
+            <input type="range" min="10" max="200" value="${baseFreq}" id="freq-${devId}${ch}sl"
+              style="width:100%;accent-color:#fbbf24"
+              oninput="document.getElementById('freq-${devId}${ch}vl').textContent=this.value+'Hz'"
+              onchange="chSetFreq('${devId}','${ch}',this.value)"/>
+          </div>
         </div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px">
           <canvas id="chviz-${devId}-${ch}" style="width:100%;height:120px;border-radius:4px;background:#080808;display:block"></canvas>
@@ -4222,14 +4232,6 @@ function buildCh(devId,ch,c,btnEnabled=false) {
             <button class="btn btn-ghost btn-xs" id="sync-ch-${devId}-${ch}" onclick="toggleSync('ch:${devId}:${ch}')" title="Sync waveform with other synced cards">Sync</button>
           </div>
         </div>
-      </div>
-      <div id="freq-${devId}${ch}row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px${isBuiltin?'':';opacity:.4;pointer-events:none'}">
-        <span style="font-size:10px;color:#555;white-space:nowrap;min-width:70px">Base Freq</span>
-        <input type="range" min="10" max="200" value="${baseFreq}" id="freq-${devId}${ch}sl"
-          style="flex:1;accent-color:#4fc3f7"
-          oninput="document.getElementById('freq-${devId}${ch}vl').textContent=this.value+'Hz'"
-          onchange="chSetFreq('${devId}','${ch}',this.value)"/>
-        <span id="freq-${devId}${ch}vl" style="font-size:10px;color:#888;min-width:38px;text-align:right">${baseFreq}Hz</span>
       </div>
       <div class="qwf-strip">${buildQwfStrip(devId,ch,c.waveform)}</div>
       <div class="wf-sel">
@@ -5003,12 +5005,22 @@ function buildGroupCard(grp) {
         <span class="ch-lbl">Intensity</span>
         <span class="ch-num" id="gcv-${grp.id}">${st.intensity}</span>
       </div>
-      <div style="display:flex;gap:12px;margin-bottom:6px;align-items:center">
-        <div style="flex:1;min-width:0;display:flex;align-items:center">
+      <div style="display:flex;gap:12px;margin-bottom:6px;align-items:flex-start">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
           <input class="ch-slider" id="gsl-${grp.id}" type="range" min="0" max="200" value="${st.intensity}"
             style="width:100%;margin-bottom:0"
             oninput="document.getElementById('gcv-${grp.id}').textContent=this.value"
             onchange="groupSetIntensity('${grp.id}',this.value)"/>
+          <div id="freq-${grp.id}row" style="${grpIsBuiltin?'':'opacity:.4;pointer-events:none'}">
+            <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+              <span style="font-size:10px;color:#555">Base Freq</span>
+              <span id="freq-${grp.id}vl" style="font-size:10px;color:#888">${grpBaseFreq}Hz</span>
+            </div>
+            <input type="range" min="10" max="200" value="${grpBaseFreq}" id="freq-${grp.id}sl"
+              style="width:100%;accent-color:#fbbf24"
+              oninput="document.getElementById('freq-${grp.id}vl').textContent=this.value+'Hz'"
+              onchange="groupSetFreq('${grp.id}',this.value)"/>
+          </div>
         </div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px">
           <canvas id="gviz-${grp.id}" style="width:100%;height:120px;border-radius:4px;background:#080808;display:block"></canvas>
@@ -5020,14 +5032,6 @@ function buildGroupCard(grp) {
             <button class="btn btn-ghost btn-xs" id="sync-grp-${grp.id}" onclick="toggleSync('grp:${grp.id}')" title="Sync waveform with other synced cards">Sync</button>
           </div>
         </div>
-      </div>
-      <div id="freq-${grp.id}row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px${grpIsBuiltin?'':';opacity:.4;pointer-events:none'}">
-        <span style="font-size:10px;color:#555;white-space:nowrap;min-width:70px">Base Freq</span>
-        <input type="range" min="10" max="200" value="${grpBaseFreq}" id="freq-${grp.id}sl"
-          style="flex:1;accent-color:#4fc3f7"
-          oninput="document.getElementById('freq-${grp.id}vl').textContent=this.value+'Hz'"
-          onchange="groupSetFreq('${grp.id}',this.value)"/>
-        <span id="freq-${grp.id}vl" style="font-size:10px;color:#888;min-width:38px;text-align:right">${grpBaseFreq}Hz</span>
       </div>
       <div class="qwf-strip">${qwfStrip}</div>
       <div class="wf-sel">

@@ -49,6 +49,7 @@ LTGRAY   = (200, 205, 210)
 BTN_BG   = (30,  80,  160)
 BTN_GRN  = (35,  120, 60)
 BTN_RED  = (160, 30,  30)
+BTN_AMB  = (150, 80,  0)
 FIELD_BG = (20,  28,  38)
 KEY_BG   = (45,  52,  65)
 KEY_ACT  = (80,  90,  115)
@@ -309,7 +310,11 @@ def draw_status(info):
     footer_str = (f"v{st.get('version','?')}  ·  up {fmt_uptime(st.get('uptime',0))}"
                   f"  ·  {st.get('deviceCount',0)} device{'s' if st.get('deviceCount',0)!=1 else ''}")
     text_centered(d, footer_str, 134, MDGRAY, F_SM)
-    button(d, 12, 152, W-24, 76, "WiFi Setup", BTN_BG, WHITE, F_LG)
+    if in_ap:
+        button(d, 12, 152, W-24, 76, "Exit Hotspot", BTN_RED, WHITE, F_LG)
+    else:
+        button(d, 6,       152, W//2-10, 76, "AP Mode",   BTN_AMB, WHITE, F_LG)
+        button(d, W//2+4,  152, W//2-10, 76, "WiFi Setup", BTN_BG, WHITE, F_LG)
     return img
 
 def draw_scanning():
@@ -446,6 +451,40 @@ def draw_result(ok, ssid, msg, ip=None):
     button(d, W//2-70, H-50, 140, 40, "Done", BTN_BG, WHITE, F_MD)
     return img
 
+def draw_ap_activating():
+    img = Image.new('RGB', (W, H), BG)
+    d = ImageDraw.Draw(img)
+    header(d, "AP Mode")
+    text_centered(d, "Starting hotspot...", 105, WHITE, F_LG)
+    text_centered(d, "Please wait", 133, GRAY, F_MD)
+    return img
+
+def draw_ap_info(ssid, password, ip):
+    img = Image.new('RGB', (W, H), BG)
+    d = ImageDraw.Draw(img)
+    header(d, "Hotspot Active")
+    d.ellipse([12, 43, 22, 53], fill=ORANGE)
+    d.text((28, 41), "Hotspot", fill=ORANGE, font=F_SM)
+    d.line([0, 62, W, 62], fill=MDGRAY)
+    d.text((12, 70),  "SSID",     fill=GRAY,  font=F_SM)
+    d.text((60, 68),  ssid,       fill=CYAN,  font=F_MD)
+    d.text((12, 92),  "Pass",     fill=GRAY,  font=F_SM)
+    d.text((60, 90),  password,   fill=WHITE, font=F_MD)
+    d.text((12, 114), "URL",      fill=GRAY,  font=F_SM)
+    d.text((60, 112), f"{ip}:3000", fill=GREEN, font=F_MD)
+    d.line([0, 136, W, 136], fill=MDGRAY)
+    text_centered(d, "Connect device to hotspot above", 142, GRAY, F_SM)
+    button(d, 12, 162, W-24, 66, "Exit Hotspot", BTN_RED, WHITE, F_LG)
+    return img
+
+def draw_ap_stopping():
+    img = Image.new('RGB', (W, H), BG)
+    d = ImageDraw.Draw(img)
+    header(d, "AP Mode")
+    text_centered(d, "Stopping hotspot...", 105, WHITE, F_LG)
+    text_centered(d, "Reconnecting to WiFi", 133, GRAY, F_MD)
+    return img
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 def main():
     print("[ui] init display")
@@ -463,6 +502,7 @@ def main():
     password, caps, num_mode = '', False, False
     pw_keys = []
     result_ok, result_msg, result_ip = False, {}, None
+    ap_ssid, ap_password, ap_ip = '', '', ''
 
     def fetch_status():
         ssid, ip = get_network_info()
@@ -498,9 +538,31 @@ def main():
                 img = draw_confirm(selected_ssid, password)
             elif state == 'RESULT':
                 img = draw_result(result_ok, selected_ssid, result_msg, result_ip)
-            if state not in ('SCANNING', 'CONNECTING'):
+            elif state == 'AP_INFO':
+                img = draw_ap_info(ap_ssid, ap_password, ap_ip)
+            if state not in ('SCANNING', 'CONNECTING', 'AP_ACTIVATING', 'AP_STOPPING'):
                 show(img)
             needs_redraw = False
+
+        if state == 'AP_ACTIVATING':
+            show(draw_ap_activating())
+            ok, result = api_post('/api/wifi/hotspot/start', {})
+            if ok:
+                ap_ssid     = result.get('ssid', '')
+                ap_password = result.get('password', '')
+                ap_ip       = result.get('ip', '10.42.0.1')
+                state = 'AP_INFO'
+            else:
+                result_ok, result_msg, result_ip = False, result, None
+                state = 'RESULT'
+            continue
+
+        if state == 'AP_STOPPING':
+            show(draw_ap_stopping())
+            api_post('/api/wifi/hotspot/stop', {})
+            time.sleep(3)
+            info = fetch_status(); last_refresh = time.monotonic()
+            state = 'STATUS'; continue
 
         if state == 'SCANNING':
             show(draw_scanning())
@@ -527,8 +589,14 @@ def main():
         print(f"[touch] state={state} tx={tx} ty={ty}")
 
         if state == 'STATUS':
-            if ty >= 152 and 12 <= tx <= W-12:
-                state = 'SCANNING'
+            if ty >= 152:
+                in_ap = info.get('ap', {}).get('apMode', False)
+                if in_ap:
+                    state = 'AP_STOPPING'
+                elif tx < W // 2:
+                    state = 'AP_ACTIVATING'
+                else:
+                    state = 'SCANNING'
 
         elif state == 'SSID_LIST':
             ROW_H, VISIBLE, y0 = 42, 3, 40
@@ -574,6 +642,10 @@ def main():
                     state = 'PASSWORD'   # back to password entry
                 else:
                     state = 'CONNECTING'
+
+        elif state == 'AP_INFO':
+            if ty >= 162:
+                state = 'AP_STOPPING'
 
         elif state == 'RESULT':
             if ty >= H-50 and W//2-70 <= tx <= W//2+70:

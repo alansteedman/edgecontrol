@@ -4430,7 +4430,7 @@ app.post('/api/update/apply', requireAdmin, (req, res) => {
     res.json({ ok: true, message: 'Updating...' })
     broadcast({ type: 'update:applying', version: _updateAvailable?.version })
     setTimeout(() => {
-      exec('cd /home/alans/edgecontroller && git pull && npm install --omit=dev && pm2 restart edgecontroller',
+      exec('cd /home/alans/edgecontroller && git stash && git pull && npm install --omit=dev && pm2 restart edgecontroller',
         { timeout: 120000 },
         (e, stdout, stderr) => {
           if (e) {

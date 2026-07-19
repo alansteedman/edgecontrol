@@ -4420,15 +4420,22 @@ function applyWifiBand(onlyFiveGhz) {
     if (!line) return
     const connName = line.split(':')[0]
     const band = onlyFiveGhz ? 'a' : ''
-    exec(`sudo nmcli connection modify "${connName}" 802-11-wireless.band "${band}"`, err2 => {
-      if (err2) { console.error('[wifi] band change failed:', err2.message); return }
-      console.log(`[wifi] band set to ${onlyFiveGhz ? '5GHz only' : '2.4GHz + 5GHz'}`)
-      // Reconnect so the new band preference takes effect
-      exec(`sudo nmcli connection down "${connName}"`, () => {
-        setTimeout(() => exec(`sudo nmcli connection up "${connName}"`, err3 => {
-          if (err3) console.error('[wifi] reconnect failed:', err3.message)
-          else console.log('[wifi] reconnected')
-        }), 2000)
+    // Check current band setting before applying — avoid unnecessary reconnect on restart
+    exec(`nmcli -t -f 802-11-wireless.band connection show "${connName}"`, (err0, cur) => {
+      const currentBand = (cur || '').split(':').pop().trim()
+      if (currentBand === band) {
+        console.log(`[wifi] band already ${onlyFiveGhz ? '5GHz only' : '2.4GHz + 5GHz'} — skipping reconnect`)
+        return
+      }
+      exec(`sudo nmcli connection modify "${connName}" 802-11-wireless.band "${band}"`, err2 => {
+        if (err2) { console.error('[wifi] band change failed:', err2.message); return }
+        console.log(`[wifi] band set to ${onlyFiveGhz ? '5GHz only' : '2.4GHz + 5GHz'}`)
+        exec(`sudo nmcli connection down "${connName}"`, () => {
+          setTimeout(() => exec(`sudo nmcli connection up "${connName}"`, err3 => {
+            if (err3) console.error('[wifi] reconnect failed:', err3.message)
+            else console.log('[wifi] reconnected')
+          }), 2000)
+        })
       })
     })
   })

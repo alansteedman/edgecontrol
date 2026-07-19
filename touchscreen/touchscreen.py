@@ -508,7 +508,7 @@ def main():
 
     splash = Image.new('RGB', (W, H), BG)
     sd = ImageDraw.Draw(splash)
-    logo_path = '/home/alans/touchscreen/logo.png'
+    logo_path = '/home/alans/edgecontroller/touchscreen/logo.png'
     try:
         logo = Image.open(logo_path).convert('RGBA')
         lw, lh = logo.size

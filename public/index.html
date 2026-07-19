@@ -4765,6 +4765,11 @@ function buildActStripGroup(grpId, activeActId) {
 function chSetActivity(devId, ch, actId) {
   const act = (S.activities||[]).find(a=>a.id===actId)
   if (!act) return
+  // Reset intensity to 0
+  const sl = document.getElementById(`sl-${devId}${ch}`)
+  if (sl) sl.value = 0
+  const cv = document.getElementById(`cv-${devId}${ch}`)
+  if (cv) cv.textContent = '0'
   // Update waveform name display to show activity name
   const wfnEl = document.getElementById(`wfn-${devId}${ch}`)
   if (wfnEl) wfnEl.textContent = act.name
@@ -4781,13 +4786,19 @@ function chSetActivity(devId, ch, actId) {
   if (S.devices[devId]?.channels?.[ch]) {
     S.devices[devId].channels[ch].mode = 'activity'
     S.devices[devId].channels[ch].activityId = actId
+    S.devices[devId].channels[ch].intensity = 0
   }
-  send({type:'device:setChannel', deviceId:devId, channel:ch, params:{activityId:actId}})
+  send({type:'device:setChannel', deviceId:devId, channel:ch, params:{activityId:actId, intensity:0}})
 }
 
 function groupSetActivity(grpId, actId) {
   const act = (S.activities||[]).find(a=>a.id===actId)
   if (!act) return
+  // Reset intensity to 0
+  const sl = document.getElementById(`gsl-${grpId}`)
+  if (sl) sl.value = 0
+  const cv = document.getElementById(`gcv-${grpId}`)
+  if (cv) cv.textContent = '0'
   const nm = document.getElementById(`gwfn-${grpId}`); if (nm) nm.textContent = act.name
   const freqRow = document.getElementById(`freq-${grpId}row`)
   if (freqRow) { freqRow.style.opacity='0.4'; freqRow.style.pointerEvents='none' }
@@ -4796,8 +4807,8 @@ function groupSetActivity(grpId, actId) {
     gc.querySelectorAll('.act-btn').forEach(b=>b.classList.toggle('qwf-active', b.dataset.actid===actId))
     gc.querySelectorAll('.qwf-btn:not(.act-btn)').forEach(b=>b.classList.remove('qwf-active'))
   }
-  if (groupState[grpId]) { groupState[grpId].mode='activity'; groupState[grpId].activityId=actId }
-  send({type:'group:set', groupId:grpId, params:{activityId:actId}})
+  if (groupState[grpId]) { groupState[grpId].mode='activity'; groupState[grpId].activityId=actId; groupState[grpId].intensity=0 }
+  send({type:'group:set', groupId:grpId, params:{activityId:actId, intensity:0}})
 }
 
 function buildQwfStrip(devId,ch,activeWfId) {

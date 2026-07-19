@@ -4653,6 +4653,11 @@ app.get('/api/update/status', requireAuth, (req, res) => {
   res.json({ current: APP_VERSION, available: _updateAvailable })
 })
 
+app.post('/api/update/check', requireAuth, async (req, res) => {
+  await checkForUpdate()
+  res.json({ current: APP_VERSION, available: _updateAvailable })
+})
+
 app.post('/api/update/apply', requireAdmin, (req, res) => {
   exec('git -C /home/alans/edgecontroller rev-parse --is-inside-work-tree', (err) => {
     if (err) return res.status(400).json({ error: 'Not a git install — update manually via SCP' })

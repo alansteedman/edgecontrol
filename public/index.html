@@ -772,7 +772,11 @@ select.mci{cursor:pointer}
         </div>
         <div class="cfg-row">
           <label>Version</label>
-          <span id="cfg-version" style="font-family:monospace;font-size:14px;color:#888;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:6px;padding:6px 10px;display:inline-block">—</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="cfg-version" style="font-family:monospace;font-size:14px;color:#888;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:6px;padding:6px 10px;display:inline-block">—</span>
+            <button class="btn btn-ghost btn-sm" id="cfg-update-check-btn" onclick="cfgCheckForUpdate()">Check for updates</button>
+            <span id="cfg-update-status" style="font-size:12px;color:#6b7280;display:none"></span>
+          </div>
         </div>
       </div>
 
@@ -1270,6 +1274,32 @@ async function _updInfo() {
   } catch(e) {
     body.textContent = 'Could not load changelog: ' + e.message
   }
+}
+
+async function cfgCheckForUpdate() {
+  const btn = document.getElementById('cfg-update-check-btn')
+  const status = document.getElementById('cfg-update-status')
+  btn.disabled = true
+  btn.textContent = 'Checking…'
+  status.style.display = 'none'
+  try {
+    const r = await fetch('/api/update/check', { method: 'POST' })
+    const d = await r.json()
+    if (d.available) {
+      status.textContent = `v${d.available.version} available`
+      status.style.color = '#86efac'
+    } else {
+      status.textContent = 'Up to date'
+      status.style.color = '#6b7280'
+    }
+    status.style.display = 'inline'
+  } catch {
+    status.textContent = 'Check failed'
+    status.style.color = '#f87171'
+    status.style.display = 'inline'
+  }
+  btn.textContent = 'Check for updates'
+  btn.disabled = false
 }
 
 async function _updApply() {

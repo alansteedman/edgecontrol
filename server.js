@@ -4406,9 +4406,9 @@ function applyBtAdapter(deviceId) {
     if (err && !stdout) return
     for (const iface of parseHciConfig(stdout || '')) {
       if (iface.index === deviceId) {
-        exec(`sudo hciconfig hci${iface.index} up`, () => {})
+        if (!iface.up) exec(`sudo hciconfig hci${iface.index} up`, () => {})
       } else {
-        exec(`sudo hciconfig hci${iface.index} down`, () => {})
+        if (iface.up) exec(`sudo hciconfig hci${iface.index} down`, () => {})
       }
     }
   })

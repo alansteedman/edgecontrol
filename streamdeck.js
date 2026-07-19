@@ -37,11 +37,24 @@ const BUILTIN_WAVEFORMS = [
   { id:'buzz',      name:'Buzz',      type:'builtin' },
 ]
 
-// Load all waveform items: builtins + custom + audio
+const BUILTIN_ACTIVITIES = [
+  { id:'act-lick',        name:'Lick',        icon:'〜', type:'activity' },
+  { id:'act-throb',       name:'Throb',       icon:'◎', type:'activity' },
+  { id:'act-wave',        name:'Wave',        icon:'≋', type:'activity' },
+  { id:'act-penetration', name:'Penetration', icon:'↕', type:'activity' },
+  { id:'act-climb',       name:'Climb',       icon:'↗', type:'activity' },
+  { id:'act-flutter',     name:'Flutter',     icon:'⁓', type:'activity' },
+  { id:'act-tease',       name:'Tease',       icon:'✦', type:'activity' },
+  { id:'act-heartbeat',   name:'Heartbeat',   icon:'♥', type:'activity' },
+]
+
+// Load all waveform items: builtins + activities + custom + audio, filtered by deckHidden
 function loadCoyoteItems() {
-  const items = [...BUILTIN_WAVEFORMS]
+  let hidden = []
   try {
     const store = JSON.parse(readFileSync(WAVEFORMS_PATH, 'utf8'))
+    hidden = store.deckHidden || []
+    const items = [...BUILTIN_WAVEFORMS, ...BUILTIN_ACTIVITIES]
     for (const w of store.custom || []) {
       if (w.type === 'audio') {
         items.push({ id: w.id, name: w.name.replace(/\.mp3$/i,''), type:'audio' })
@@ -49,8 +62,9 @@ function loadCoyoteItems() {
         items.push({ id: w.id, name: w.name, type:'custom', bars: framesTo24Bars(w.frames) })
       }
     }
+    return items.filter(it => !hidden.includes(it.id))
   } catch {}
-  return items
+  return [...BUILTIN_WAVEFORMS, ...BUILTIN_ACTIVITIES]
 }
 
 // Generate bar heights (0–1) for a waveform visualization
@@ -555,6 +569,19 @@ function renderWaveformKey(item, active, levelBuf) {
     ctx.textBaseline = 'middle'
     ctx.fillText(line1, S/2, S*0.57)
     ctx.fillText(line2, S/2, S*0.76)
+    return rgba(canvas)
+  }
+
+  if (item.type === 'activity') {
+    ctx.font = '34px sans-serif'
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillStyle = active ? '#fde68a' : '#92400e'
+    ctx.fillText(item.icon || '◎', S/2, S * 0.40)
+    const name = item.name.length > 10 ? item.name.slice(0,9)+'…' : item.name
+    ctx.font = `bold ${name.length > 8 ? 9 : 10}px sans-serif`
+    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'
+    ctx.fillStyle = active ? '#fde68a' : '#92400e'
+    ctx.fillText(name.toUpperCase(), S/2, S - 4)
     return rgba(canvas)
   }
 
@@ -1123,7 +1150,11 @@ function renderCoyoteGroupModeLcd(groups, devices, viewOffset, selectedIdx = nul
       if (dev?.status === 'connected') {
         totalIntensity += dev.channels?.[channel]?.intensity ?? 0
         connCount++
-        if (!waveform && dev.channels?.[channel]?.waveform) waveform = dev.channels[channel].waveform
+        if (!waveform) {
+          const chData = dev.channels?.[channel]
+          if (chData?.mode === 'activity' && chData.activityId) waveform = chData.activityId
+          else if (chData?.waveform) waveform = chData.waveform
+        }
         if (speed === 1 && dev.channels?.[channel]?.speed) speed = dev.channels[channel].speed
       }
     }
@@ -2067,6 +2098,10 @@ export class StreamDeckController {
     if (idx >= 4 && idx <= 7) {
       const item = this._coyoteItems[this._waveOffset + (idx - 4)]
       if (!item) return
+      const applyItem = (dev, ch) => {
+        if (item.type === 'activity') dev.setChannel(ch, { activityId: item.id })
+        else dev.setChannel(ch, { waveform: item.id })
+      }
       if (this._groupMode) {
         if (this._selectedChannel !== null) {
           // A specific group is selected: apply waveform only to that group
@@ -2074,7 +2109,7 @@ export class StreamDeckController {
           if (group) {
             for (const {deviceId, channel} of group.channels || []) {
               const d = this.devices[deviceId]
-              if (d?.setChannel) d.setChannel(channel, { waveform: item.id })
+              if (d?.setChannel) applyItem(d, channel)
             }
           }
           this._lastSetWaveformId = item.id
@@ -2086,7 +2121,7 @@ export class StreamDeckController {
             if (!group) continue
             for (const {deviceId, channel} of group.channels || []) {
               const d = this.devices[deviceId]
-              if (d?.setChannel) d.setChannel(channel, { waveform: item.id })
+              if (d?.setChannel) applyItem(d, channel)
             }
           }
           this._lastSetWaveformId = item.id
@@ -2094,7 +2129,7 @@ export class StreamDeckController {
         this._renderKeys(); this._refreshLcd()
       } else if (this._selectedChannel !== null) {
         const { dev, ch } = this._coyoteChannelFor(this._selectedChannel)
-        if (dev) dev.setChannel(ch, { intensity: 0, waveform: item.id })
+        if (dev) { applyItem(dev, ch); if (item.type !== 'activity') dev.setChannel(ch, { intensity: 0 }) }
         this._lastSetWaveformId = item.id
         this._selectedChannel = null
         this._renderKeys(); this._renderEncoders()
@@ -2102,8 +2137,9 @@ export class StreamDeckController {
         // No channel selected — apply to all Coyotes
         for (const d of Object.values(this.devices)) {
           if (d.type === 'coyote') {
-            d.setChannel('A', { intensity: 0, waveform: item.id })
-            d.setChannel('B', { intensity: 0, waveform: item.id })
+            applyItem(d, 'A')
+            applyItem(d, 'B')
+            if (item.type !== 'activity') { d.setChannel('A', { intensity: 0 }); d.setChannel('B', { intensity: 0 }) }
           }
         }
         this._lastSetWaveformId = item.id
@@ -3094,7 +3130,7 @@ export class StreamDeckController {
           label:     CH_LABELS[i],
           color:     CH_COLORS[i],
           intensity: dev?.channels?.[ch]?.intensity ?? 0,
-          waveform:  this._resolveWfName(dev?.channels?.[ch]?.waveform ?? '—'),
+          waveform:  this._resolveWfName(dev?.channels?.[ch]?.mode === 'activity' ? (dev.channels[ch].activityId ?? '—') : (dev?.channels?.[ch]?.waveform ?? '—')),
           connected: !!dev && dev.status === 'connected',
           selected,
           grouped:   this._groupMode,
@@ -3201,7 +3237,7 @@ export class StreamDeckController {
           label:     a.label || `Coyote ${ch}`,
           color:     ch === 'A' ? '#e74c3c' : '#e67e22',
           intensity: dev?.channels?.[ch]?.intensity ?? 0,
-          waveform:  this._resolveWfName(dev?.channels?.[ch]?.waveform ?? '—'),
+          waveform:  this._resolveWfName(dev?.channels?.[ch]?.mode === 'activity' ? (dev.channels[ch].activityId ?? '—') : (dev?.channels?.[ch]?.waveform ?? '—')),
           connected: conn,
           selected:  false,
           grouped:   false,
@@ -3220,7 +3256,7 @@ export class StreamDeckController {
           label:     a.label || group?.name || 'Group',
           color:     '#16a085',
           intensity: dev?.channels?.[ch]?.intensity ?? 0,
-          waveform:  this._resolveWfName(dev?.channels?.[ch]?.waveform ?? '—'),
+          waveform:  this._resolveWfName(dev?.channels?.[ch]?.mode === 'activity' ? (dev.channels[ch].activityId ?? '—') : (dev?.channels?.[ch]?.waveform ?? '—')),
           connected: conn,
           selected:  false,
           grouped:   true,

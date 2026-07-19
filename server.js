@@ -3254,6 +3254,16 @@ app.put('/api/config',  requireAdmin, (req,res) => { const {boxId}=req.body; if(
 app.get('/api/waveforms', (req,res) => res.json({builtin:BUILTIN_WAVEFORMS,custom:waveformStore.custom}))
 app.get('/api/activities', requireAuth, (req,res) => res.json(BUILTIN_ACTIVITIES))
 
+app.get('/api/deck-wf-hidden', requireAuth, (req,res) => res.json({ hidden: waveformStore.deckHidden || [] }))
+app.post('/api/deck-wf-hidden', requireAuth, (req,res) => {
+  const { hidden } = req.body
+  if (!Array.isArray(hidden)) return res.status(400).json({ error: 'hidden[] required' })
+  waveformStore.deckHidden = hidden
+  saveWaveforms()
+  streamDeck?.reloadWaveforms()
+  res.json({ ok: true })
+})
+
 app.post('/api/waveforms', (req,res) => {
   const {name,frames}=req.body
   if (!name||!frames||!Array.isArray(frames)||!frames.length) return res.status(400).json({error:'name and frames[] required'})

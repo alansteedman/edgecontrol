@@ -194,6 +194,9 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 .wf-card{background:#181818;border:1px solid #222;border-radius:8px;padding:11px}
 .wf-card-name{font-size:12px;font-weight:600;margin-bottom:2px}
 .wf-card-desc{font-size:10px;color:#444;line-height:1.4;margin-bottom:7px}
+.wf-deck-row{display:flex;align-items:center;gap:5px;margin-top:6px;padding-top:6px;border-top:1px solid #1e1e1e}
+.wf-deck-label{font-size:9px;color:#3a3a3a;flex:1}
+.wf-deck-chk{accent-color:#00c3dc;width:13px;height:13px;cursor:pointer}
 .custom-item{display:flex;align-items:center;gap:9px;background:#181818;border:1px solid #222;border-radius:8px;padding:9px 12px;margin-bottom:7px}
 .ci-name{flex:1;font-size:13px;font-weight:500}
 .ci-frames{font-size:10px;color:#3a3a3a;white-space:nowrap}
@@ -550,6 +553,8 @@ select.mci{cursor:pointer}
     <div id="sub-waveforms" class="sub-pane">
       <div class="sec-label" style="margin-bottom:9px">Built-in Waveforms</div>
       <div class="wf-grid" id="builtin-grid"></div>
+      <div class="sec-label" style="margin-bottom:9px;margin-top:4px">Activities</div>
+      <div class="wf-grid" id="activities-grid"></div>
       <div class="sec-row" style="margin-bottom:9px">
         <div class="sec-label">Custom Waveforms</div>
         <button class="btn btn-primary btn-sm" onclick="newWf()">+ New</button>
@@ -1174,6 +1179,7 @@ function connect() {
     _wsSetBanner(true)
     if (_wsReloadOnReconnect) { window.location.reload(); return }
     lg('Connected to Kink Controller')
+    fetch('/api/deck-wf-hidden').then(r=>r.json()).then(d=>{ S.deckHidden=d.hidden||[]; renderWfTab() }).catch(()=>{})
     setTimeout(initBandSelector, 100)
     clearInterval(_wsPingTimer)
     _wsPingTimer = setInterval(() => {
@@ -4812,6 +4818,15 @@ function pickWf(devId,ch,wfId) {
 }
 
 // ── Waveforms sub-tab ─────────────────────────────────────────────────────────
+function deckChkHtml(id) {
+  const on=!(S.deckHidden||[]).includes(id)
+  return `<div class="wf-deck-row"><span class="wf-deck-label">Stream Deck</span><input type="checkbox" class="wf-deck-chk" ${on?'checked':''} onchange="toggleDeckWf('${id}',this.checked)" title="Show on Stream Deck"></div>`
+}
+function toggleDeckWf(id, visible) {
+  S.deckHidden = (S.deckHidden||[]).filter(x=>x!==id)
+  if (!visible) S.deckHidden.push(id)
+  fetch('/api/deck-wf-hidden',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hidden:S.deckHidden})}).catch(()=>{})
+}
 function renderWfTab() {
   // Built-ins grouped by section
   const bg=document.getElementById('builtin-grid'); bg.innerHTML=''
@@ -4826,10 +4841,17 @@ function renderWfTab() {
     bg.appendChild(hdr)
     for(const w of items) {
       const c=document.createElement('div'); c.className='wf-card'
-      c.innerHTML=`<div class="wf-card-name">${w.icon||''} ${w.name}</div><div class="wf-card-desc">${w.desc}</div><canvas id="bc-${w.id}" height="34" style="width:100%;display:block;background:#0a0a0a;border-radius:4px"></canvas>`
+      c.innerHTML=`<div class="wf-card-name">${w.icon||''} ${w.name}</div><div class="wf-card-desc">${w.desc}</div><canvas id="bc-${w.id}" height="34" style="width:100%;display:block;background:#0a0a0a;border-radius:4px"></canvas>${deckChkHtml(w.id)}`
       bg.appendChild(c)
       requestAnimationFrame(()=>{ const cv=document.getElementById(`bc-${w.id}`); if(cv) drawMini(cv,w.id,34) })
     }
+  }
+  // Activities
+  const ag=document.getElementById('activities-grid'); ag.innerHTML=''
+  for(const a of S.activities||[]) {
+    const c=document.createElement('div'); c.className='wf-card'
+    c.innerHTML=`<div class="wf-card-name" style="color:#fde68a">${a.icon||''} ${a.name}</div><div class="wf-card-desc">${a.desc}</div>${deckChkHtml(a.id)}`
+    ag.appendChild(c)
   }
   // Custom
   const cl=document.getElementById('custom-list')
@@ -4838,10 +4860,14 @@ function renderWfTab() {
   cl.innerHTML=''
   cc.forEach(w=>{
     const item=document.createElement('div'); item.className='custom-item'
+    const on=!(S.deckHidden||[]).includes(w.id)
     item.innerHTML=`
       <canvas id="cc2-${w.id}" width="72" height="28" style="flex-shrink:0;border-radius:3px;background:#0a0a0a"></canvas>
       <span class="ci-name">${w.name}</span>
       <span class="ci-frames">${w.frames.length}fr · ${w.frames.length*100}ms</span>
+      <label style="display:flex;align-items:center;gap:4px;font-size:9px;color:#3a3a3a;white-space:nowrap" title="Show on Stream Deck">
+        <input type="checkbox" class="wf-deck-chk" ${on?'checked':''} onchange="toggleDeckWf('${w.id}',this.checked)">SD
+      </label>
       <button class="btn btn-ghost btn-xs" onclick="editWf('${w.id}')">Edit</button>
       <button class="btn btn-danger btn-xs" onclick="deleteWf('${w.id}')">×</button>
     `

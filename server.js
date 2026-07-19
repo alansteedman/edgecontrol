@@ -4400,7 +4400,30 @@ function parseHciConfig(output) {
   return interfaces
 }
 
+function applyWifiBand(onlyFiveGhz) {
+  exec('nmcli -t -f name,type connection show --active', (err, stdout) => {
+    if (err || !stdout) return
+    const line = stdout.split('\n').find(l => l.includes('802-11-wireless'))
+    if (!line) return
+    const connName = line.split(':')[0]
+    const band = onlyFiveGhz ? 'a' : ''
+    exec(`sudo nmcli connection modify "${connName}" 802-11-wireless.band "${band}"`, err2 => {
+      if (err2) { console.error('[wifi] band change failed:', err2.message); return }
+      console.log(`[wifi] band set to ${onlyFiveGhz ? '5GHz only' : '2.4GHz + 5GHz'}`)
+      // Reconnect so the new band preference takes effect
+      exec(`sudo nmcli connection down "${connName}"`, () => {
+        setTimeout(() => exec(`sudo nmcli connection up "${connName}"`, err3 => {
+          if (err3) console.error('[wifi] reconnect failed:', err3.message)
+          else console.log('[wifi] reconnected')
+        }), 2000)
+      })
+    })
+  })
+}
+
 function applyBtAdapter(deviceId) {
+  const usingDongle = deviceId != null && deviceId > 0
+  applyWifiBand(!usingDongle)
   if (deviceId == null) return
   exec('hciconfig -a', (err, stdout) => {
     if (err && !stdout) return

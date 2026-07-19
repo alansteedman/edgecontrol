@@ -508,9 +508,19 @@ def main():
 
     splash = Image.new('RGB', (W, H), BG)
     sd = ImageDraw.Draw(splash)
-    text_centered(sd, "Kink Controller", 95, CYAN, F_XL)
-    text_centered(sd, "Starting...", 128, GRAY, F_MD)
+    logo_path = '/home/alans/touchscreen/logo.png'
+    try:
+        logo = Image.open(logo_path).convert('RGBA')
+        lw, lh = logo.size
+        lx, ly = (W - lw) // 2, (H - lh) // 2 - 10
+        splash.paste(logo, (lx, ly), logo)
+        sd = ImageDraw.Draw(splash)
+        text_centered(sd, "Kink Controller", ly + lh + 6, CYAN, F_MD)
+    except Exception:
+        text_centered(sd, "Kink Controller", 95, CYAN, F_XL)
+        text_centered(sd, "Starting...", 128, GRAY, F_MD)
     show(splash)
+    time.sleep(5)
 
     state = 'STATUS'
     networks, scroll = [], 0

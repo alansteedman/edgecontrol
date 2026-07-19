@@ -4699,8 +4699,8 @@ app.post('/api/update/apply', requireAdmin, (req, res) => {
   })
 })
 
-process.on('SIGINT',  () => { tunnelStop(); destroy(); streamDeck?.close(); process.exit() })
-process.on('SIGTERM', () => { tunnelStop(); destroy(); streamDeck?.close(); process.exit() })
+process.on('SIGINT',  () => { tunnelStop(); destroy(); streamDeck?.close(); server.closeAllConnections(); process.exit() })
+process.on('SIGTERM', () => { tunnelStop(); destroy(); streamDeck?.close(); server.closeAllConnections(); process.exit() })
 process.on('uncaughtException',  err => console.error('[CRASH]',  err.message))
 process.on('unhandledRejection', r   => console.error('[REJECT]', r))
 

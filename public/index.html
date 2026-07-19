@@ -5146,7 +5146,7 @@ function renderGroups() {
 function initGroupDnD(container) {
   if (container._dndInit) return
   container._dndInit = true
-  let draggingId = null, fromHandle = false
+  let draggingId = null, fromHandle = false, dropTarget = null, dropBefore = false
   container.addEventListener('pointerdown', e => {
     fromHandle = !!e.target.closest('.grp-drag-handle')
   })
@@ -5165,28 +5165,32 @@ function initGroupDnD(container) {
     if (!card || card.dataset.groupId === draggingId) return
     container.querySelectorAll('.coyote-card').forEach(c => c.classList.remove('drag-over'))
     card.classList.add('drag-over')
+    const rect = card.getBoundingClientRect()
+    dropTarget = card
+    dropBefore = e.clientY < rect.top + rect.height / 2
   })
   container.addEventListener('dragleave', e => {
-    if (!container.contains(e.relatedTarget))
+    if (!container.contains(e.relatedTarget)) {
       container.querySelectorAll('.coyote-card').forEach(c => c.classList.remove('drag-over'))
+      dropTarget = null
+    }
   })
   container.addEventListener('dragend', () => {
     container.querySelectorAll('.coyote-card').forEach(c => c.classList.remove('dragging','drag-over'))
-    draggingId = null; fromHandle = false
+    draggingId = null; fromHandle = false; dropTarget = null
   })
   container.addEventListener('drop', e => {
     e.preventDefault()
-    const target = e.target.closest('.coyote-card[data-group-id]')
+    const target = e.target.closest('.coyote-card[data-group-id]') || dropTarget
     if (!target || !draggingId || target.dataset.groupId === draggingId) return
     const draggingEl = container.querySelector(`.coyote-card[data-group-id="${draggingId}"]`)
-    const rect = target.getBoundingClientRect()
-    if (e.clientY < rect.top + rect.height / 2) container.insertBefore(draggingEl, target)
+    if (dropBefore) container.insertBefore(draggingEl, target)
     else container.insertBefore(draggingEl, target.nextSibling)
     const ids = [...container.querySelectorAll('.coyote-card[data-group-id]')].map(c => c.dataset.groupId)
     S.groups = ids.map(id => S.groups.find(g => g.id === id)).filter(Boolean)
     fetch('/api/groups/reorder', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids}) })
     container.querySelectorAll('.coyote-card').forEach(c => c.classList.remove('dragging','drag-over'))
-    draggingId = null; fromHandle = false
+    draggingId = null; fromHandle = false; dropTarget = null
   })
 }
 

@@ -4654,7 +4654,6 @@ process.on('unhandledRejection', r   => console.error('[REJECT]', r))
 // Start HTTP server immediately — don't wait for Bluetooth
 server.listen(3000, '0.0.0.0', () => {
   checkLicenseState()
-  if (config.hciDeviceId != null) applyBtAdapter(config.hciDeviceId)
   console.log('EdgeController running on http://0.0.0.0:3000')
   if (config.tunnel?.token) {
     if (config.tunnel?.enabled) {
@@ -4668,8 +4667,11 @@ server.listen(3000, '0.0.0.0', () => {
   // Always try to register with community fleet (independent of tunnel)
   communityFleetInit()
 })
-// Restart Bluetooth in background (only needed for Coyote BLE, non-blocking)
+// Restart Bluetooth in background, then enforce adapter selection
 exec('sudo systemctl restart bluetooth', err => {
   if (err) console.error('BT restart error:', err.message)
-  else console.log('Bluetooth restarted')
+  else {
+    console.log('Bluetooth restarted')
+    if (config.hciDeviceId != null) applyBtAdapter(config.hciDeviceId)
+  }
 })

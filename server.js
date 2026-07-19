@@ -611,7 +611,11 @@ if (bluetooth.dbus) {
 }
 let adapter = null
 async function getAdapter() {
-  if (!adapter) adapter = await bluetooth.defaultAdapter()
+  if (!adapter) {
+    adapter = config.hciDeviceId != null
+      ? await bluetooth.getAdapter(`hci${config.hciDeviceId}`)
+      : await bluetooth.defaultAdapter()
+  }
   return adapter
 }
 

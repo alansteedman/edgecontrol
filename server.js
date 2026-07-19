@@ -3415,6 +3415,19 @@ app.post('/api/groups', (req,res) => {
   res.json(group)
 })
 
+app.put('/api/groups/reorder', requireAuth, (req, res) => {
+  const { ids } = req.body
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids required' })
+  const current = config.groups || []
+  const reordered = ids.map(id => current.find(g => g.id === id)).filter(Boolean)
+  const missing = current.filter(g => !ids.includes(g.id))
+  config.groups = [...reordered, ...missing]
+  saveConfig(config)
+  broadcast({ type: 'groups:reordered', ids: config.groups.map(g => g.id) })
+  if (streamDeck) streamDeck.updateGroups(config.groups)
+  res.json({ ok: true })
+})
+
 app.put('/api/groups/:id', (req,res) => {
   const g=(config.groups||[]).find(g=>g.id===req.params.id)
   if(!g) return res.status(404).json({error:'not found'})

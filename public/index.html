@@ -90,6 +90,10 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 
 /* ── Coyote cards ── */
 .coyote-card{background:#181818;border:1px solid #222;border-radius:10px;padding:15px;margin-bottom:14px}
+.coyote-card.dragging{opacity:.35;border-color:#444}
+.coyote-card.drag-over{border-color:#4fc3f7;box-shadow:0 0 0 1px #4fc3f7}
+.grp-drag-handle{cursor:grab;color:#444;padding:0 8px 0 0;font-size:18px;line-height:1;user-select:none;flex-shrink:0}
+.grp-drag-handle:hover{color:#888}
 .coy-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .coy-name{font-size:15px;font-weight:600}
 .coy-ble{font-size:11px;color:#333;margin-top:2px}
@@ -5136,10 +5140,58 @@ function renderGroups() {
     requestAnimationFrame(()=>startGrpViz(g.id))
   })
   requestAnimationFrame(restoreAudioBtns)
+  initGroupDnD(el)
+}
+
+function initGroupDnD(container) {
+  if (container._dndInit) return
+  container._dndInit = true
+  let draggingId = null, fromHandle = false
+  container.addEventListener('pointerdown', e => {
+    fromHandle = !!e.target.closest('.grp-drag-handle')
+  })
+  container.addEventListener('dragstart', e => {
+    if (!fromHandle) { e.preventDefault(); return }
+    const card = e.target.closest('.coyote-card[data-group-id]')
+    if (!card) return
+    draggingId = card.dataset.groupId
+    e.dataTransfer.effectAllowed = 'move'
+    setTimeout(() => card.classList.add('dragging'), 0)
+  })
+  container.addEventListener('dragover', e => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const card = e.target.closest('.coyote-card[data-group-id]')
+    if (!card || card.dataset.groupId === draggingId) return
+    container.querySelectorAll('.coyote-card').forEach(c => c.classList.remove('drag-over'))
+    card.classList.add('drag-over')
+  })
+  container.addEventListener('dragleave', e => {
+    if (!container.contains(e.relatedTarget))
+      container.querySelectorAll('.coyote-card').forEach(c => c.classList.remove('drag-over'))
+  })
+  container.addEventListener('dragend', () => {
+    container.querySelectorAll('.coyote-card').forEach(c => c.classList.remove('dragging','drag-over'))
+    draggingId = null; fromHandle = false
+  })
+  container.addEventListener('drop', e => {
+    e.preventDefault()
+    const target = e.target.closest('.coyote-card[data-group-id]')
+    if (!target || !draggingId || target.dataset.groupId === draggingId) return
+    const draggingEl = container.querySelector(`.coyote-card[data-group-id="${draggingId}"]`)
+    const rect = target.getBoundingClientRect()
+    if (e.clientY < rect.top + rect.height / 2) container.insertBefore(draggingEl, target)
+    else container.insertBefore(draggingEl, target.nextSibling)
+    const ids = [...container.querySelectorAll('.coyote-card[data-group-id]')].map(c => c.dataset.groupId)
+    S.groups = ids.map(id => S.groups.find(g => g.id === id)).filter(Boolean)
+    fetch('/api/groups/reorder', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids}) })
+    container.querySelectorAll('.coyote-card').forEach(c => c.classList.remove('dragging','drag-over'))
+    draggingId = null; fromHandle = false
+  })
 }
 
 function buildGroupCard(grp) {
-  const el=document.createElement('div'); el.className='coyote-card'; el.id='gc-'+grp.id
+  const el=document.createElement('div'); el.className='coyote-card'; el.id='gc-'+grp.id; el.draggable=true; el.dataset.groupId=grp.id
   const channels=grp.channels||[]
   // Determine connection status from member devices
   const devs=channels.map(({deviceId})=>S.devices[deviceId]).filter(Boolean)
@@ -5174,6 +5226,7 @@ function buildGroupCard(grp) {
     </button>`).join('')
   el.innerHTML=`
     <div class="coy-header">
+      <span class="grp-drag-handle" title="Drag to reorder">⠿</span>
       <div style="flex:1;min-width:0">
         <div class="coy-name">${grp.name}</div>
         <div style="margin-top:4px">${chips||'<span style="color:#444;font-size:11px">No channels</span>'}</div>

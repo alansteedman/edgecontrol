@@ -112,6 +112,8 @@ _display_asleep = False
 def display_sleep():
     global _display_asleep
     if not _display_asleep:
+        blank = Image.new('RGB', (W, H), (0, 0, 0))
+        show(blank)
         _cmd(0x10)  # SLPIN
         _display_asleep = True
 
@@ -501,6 +503,17 @@ def draw_ap_stopping():
     text_centered(d, "Reconnecting to WiFi", 133, GRAY, F_MD)
     return img
 
+def draw_lockout():
+    RED = (220, 50, 50)
+    img = Image.new('RGB', (W, H), BG)
+    d = ImageDraw.Draw(img)
+    header(d, "Not Authorised")
+    text_centered(d, "This device is not", 90, RED, F_LG)
+    text_centered(d, "authorised to run.", 114, RED, F_LG)
+    text_centered(d, "Contact the administrator", 148, GRAY, F_SM)
+    text_centered(d, "to approve this device.", 164, GRAY, F_SM)
+    return img
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 def main():
     print("[ui] init display")
@@ -535,7 +548,8 @@ def main():
         return {'ssid': ssid, 'ip': ip,
                 'status': api_get('/api/status'),
                 'ap': api_get('/api/wifi/ap-status'),
-                'tunnel': get_tunnel_info(ip)}
+                'tunnel': get_tunnel_info(ip),
+                'license': api_get('/api/license-status')}
 
     info = fetch_status()
     last_refresh = time.monotonic()
@@ -560,8 +574,13 @@ def main():
             display_sleep()
             continue
 
-        if state == 'STATUS' and now - last_refresh > 15:
+        if state in ('STATUS', 'LOCKOUT') and now - last_refresh > 15:
             info = fetch_status(); last_refresh = now; needs_redraw = True
+            license_mode = (info.get('license') or {}).get('mode', 'ok')
+            if license_mode == 'lockout' and state != 'LOCKOUT':
+                state = 'LOCKOUT'
+            elif license_mode != 'lockout' and state == 'LOCKOUT':
+                state = 'STATUS'
 
         if state != prev_state:
             needs_redraw = True; prev_state = state
@@ -569,6 +588,8 @@ def main():
         if needs_redraw:
             if state == 'STATUS':
                 img = draw_status(info)
+            elif state == 'LOCKOUT':
+                img = draw_lockout()
             elif state == 'SSID_LIST':
                 img = draw_ssid_list(networks, scroll)
             elif state == 'PASSWORD':

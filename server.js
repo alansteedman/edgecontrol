@@ -96,7 +96,7 @@ class EomWS extends EventEmitter {
   close() { if(this.readyState===1){this._frame(0x08,Buffer.alloc(0));setTimeout(()=>this._sock?.destroy(),300)} else this._sock?.destroy() }
   terminate() { this._sock?.destroy(); this.readyState=3 }
 }
-import { randomBytes, createHash } from 'crypto'
+import { randomBytes, createHash, createVerify } from 'crypto'
 import session from 'express-session'
 import SessionFileStore from 'session-file-store'
 import bcrypt from 'bcryptjs'
@@ -152,6 +152,57 @@ if (config.auth.username && !config.auth.admin) {
 }
 if (!config.auth.admin) config.auth.admin = { username: '', passwordHash: '' }
 if (!config.auth.user)  config.auth.user  = { username: '', passwordHash: '' }
+
+// ── License / authorisation ───────────────────────────────────────────────────
+const LICENSE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAth1lYx+hhTo5FhVoo2dG
+96U90GkHGLBM3On6mP77zF+Wzxais/BvDTYSZ+f0rkC6UvIPod878nfmugNXsKCZ
+5ZjGXJrHsjMsyV81cOxJ5dtD6kn5hzKCdnfF80XhnqHLgqqQXusuY4+QG25zX478
+5Ny6yjMkA2pM8h8VcJSsqv1bPDd4fEdP2RS1wr9zGBPHpta8vRbOLG2r+PTdHsxm
+38XYhnPERPBwgTGu95dk+FmsPt7JjnT5mHq+wWppMIx058+T9hb3B8GMoUy91fz9
+QA85HaNU7SMT6c+jo/0HpGlLoyBLIHsE6keV8Q1kzHX8AIdKTniP768W8g3lNsO1
+3wIDAQAB
+-----END PUBLIC KEY-----`
+const LICENSE_GRACE_SECS = 7 * 24 * 3600
+const LICENSE_PENDING_HRS = 24
+
+function verifyLicenseToken(token) {
+  if (!token) return null
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
+    const now = Math.floor(Date.now() / 1000)
+    if (now > payload.exp + LICENSE_GRACE_SECS) return null
+    const v = createVerify('RSA-SHA256')
+    v.update(`${parts[0]}.${parts[1]}`)
+    if (!v.verify(LICENSE_PUBLIC_KEY, parts[2], 'base64url')) return null
+    return payload
+  } catch { return null }
+}
+
+// 'ok' | 'pending' | 'lockout'
+let _licenseMode = 'ok'
+
+function checkLicenseState() {
+  if (config.licenseToken && verifyLicenseToken(config.licenseToken)) {
+    _licenseMode = 'ok'; return
+  }
+  const registeredAt = config.communityRegisteredAt
+  if (!registeredAt) { _licenseMode = 'pending'; return }
+  const hoursSince = (Date.now() / 1000 - registeredAt) / 3600
+  if (hoursSince < LICENSE_PENDING_HRS) {
+    _licenseMode = 'pending'
+  } else {
+    _licenseMode = 'lockout'
+    console.warn('[license] no valid token after 24h — lockout mode')
+  }
+}
+
+const LOCKOUT_HTML = `<!DOCTYPE html><html><head><title>Not Authorised</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:0;background:#111;color:#eee;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center}h1{font-size:2rem;color:#f44;margin-bottom:.5rem}p{color:#aaa;max-width:400px}</style>
+</head><body><div><h1>Not Authorised</h1><p>This device has not been authorised. Please contact the administrator to approve this device.</p></div></body></html>`
 
 function loadWaveforms() {
   if (!existsSync(WAVEFORMS_PATH)) {
@@ -2285,6 +2336,15 @@ app.use((req, res, next) => {
   res.redirect('http://10.42.0.1/setup.html')
 })
 
+// License lockout middleware — blocks all routes except status/wifi when not authorised
+app.use((req, res, next) => {
+  if (_licenseMode !== 'lockout') return next()
+  if (req.path === '/api/status' || req.path === '/api/license-status' ||
+      req.path.startsWith('/api/wifi')) return next()
+  if (req.method === 'GET' && !req.path.startsWith('/api/')) return res.status(403).send(LOCKOUT_HTML)
+  return res.status(403).json({ error: 'Not authorised', lockout: true })
+})
+
 app.use(requireAuth)
 
 // Admin-only guard — used on config routes
@@ -2426,6 +2486,8 @@ app.put('/api/tunnel', requireAdmin, (req, res) => {
 app.get('/api/tunnel/status', requireAdmin, (req, res) => {
   res.json({ status: tunnelStatus, hostname: config.tunnel?.hostname || '', enabled: config.tunnel?.enabled || false, hasToken: !!config.tunnel?.token })
 })
+
+app.get('/api/license-status', (req, res) => res.json({ mode: _licenseMode }))
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 const server = createServer(app)
@@ -4180,13 +4242,17 @@ async function communityFleetInit() {
         body: JSON.stringify({ device_id: deviceId }), signal: AbortSignal.timeout(15000)
       })
       const d = await r.json()
-      if (d.token) { config.communityDeviceToken = d.token; saveConfig(config); console.log('[fleet] registered with community') }
-      else throw new Error(d.error || 'no token')
+      if (d.token) {
+        config.communityDeviceToken = d.token
+        if (!config.communityRegisteredAt) config.communityRegisteredAt = Math.floor(Date.now() / 1000)
+        saveConfig(config); console.log('[fleet] registered with community')
+      } else throw new Error(d.error || 'no token')
     } catch (e) { console.error('[fleet] registration failed:', e.message); setTimeout(communityFleetInit, 60000); return }
   }
   communityHeartbeat()
   if (_fleetHeartbeatTimer) clearInterval(_fleetHeartbeatTimer)
   _fleetHeartbeatTimer = setInterval(communityHeartbeat, 60000)
+  communityWsConnect()
 }
 
 function communityHeartbeat() {
@@ -4202,8 +4268,57 @@ function communityHeartbeat() {
   fetch(`${COMMUNITY_URL}/api/devices/heartbeat`, {
     method: 'POST', headers: {'Content-Type':'application/json', Authorization:`Bearer ${config.communityDeviceToken}`},
     body: JSON.stringify({ name: config.boxId, version: APP_VERSION, meta }), signal: AbortSignal.timeout(10000)
-  }).then(r => { if (r.status === 401) { delete config.communityDeviceToken; saveConfig(config); clearInterval(_fleetHeartbeatTimer) } })
-    .catch(e => console.error('[fleet] heartbeat failed:', e.message))
+  }).then(async r => {
+    if (r.status === 401) { delete config.communityDeviceToken; saveConfig(config); clearInterval(_fleetHeartbeatTimer); return }
+    const d = await r.json().catch(() => null)
+    if (!d) return
+    if (d.licenseToken && d.authorised && !d.revoked) {
+      config.licenseToken = d.licenseToken
+      if (!config.communityRegisteredAt) config.communityRegisteredAt = Math.floor(Date.now() / 1000)
+      saveConfig(config)
+      if (_licenseMode !== 'ok') { _licenseMode = 'ok'; console.log('[license] authorised via heartbeat'); broadcast({ type: 'license:status', mode: 'ok' }) }
+    } else if (d.revoked) {
+      config.licenseToken = null; saveConfig(config)
+      if (_licenseMode !== 'lockout') { _licenseMode = 'lockout'; console.warn('[license] revoked via heartbeat'); broadcast({ type: 'license:status', mode: 'lockout' }) }
+    }
+  }).catch(e => console.error('[fleet] heartbeat failed:', e.message))
+}
+
+let _communityWs = null
+let _communityWsReconnectTimer = null
+
+function communityWsConnect() {
+  if (_communityWs || !config.communityDeviceToken) return
+  const url = `wss://community.kinkcontrol.org/ws/fleet?token=${encodeURIComponent(config.communityDeviceToken)}`
+  const ws = new WebSocket(url)
+  _communityWs = ws
+  ws.on('open', () => console.log('[license] community WS connected'))
+  ws.on('message', raw => {
+    let msg; try { msg = JSON.parse(raw) } catch { return }
+    if (msg.type === 'authorised' && msg.licenseToken) {
+      config.licenseToken = msg.licenseToken
+      if (!config.communityRegisteredAt) config.communityRegisteredAt = Math.floor(Date.now() / 1000)
+      saveConfig(config)
+      _licenseMode = 'ok'
+      console.log('[license] authorised via WS push')
+      broadcast({ type: 'license:status', mode: 'ok' })
+    } else if (msg.type === 'revoke') {
+      config.licenseToken = null; saveConfig(config)
+      _licenseMode = 'lockout'
+      console.warn('[license] revoked via WS push')
+      broadcast({ type: 'license:status', mode: 'lockout' })
+    } else if (msg.type === 'pending') {
+      _licenseMode = 'pending'
+      broadcast({ type: 'license:status', mode: 'pending' })
+    }
+  })
+  ws.on('close', () => {
+    _communityWs = null
+    if (!_communityWsReconnectTimer) {
+      _communityWsReconnectTimer = setTimeout(() => { _communityWsReconnectTimer = null; communityWsConnect() }, 30000)
+    }
+  })
+  ws.on('error', err => { console.error('[license] WS:', err.message); ws.terminate() })
 }
 
 function communityPost(path, token, body) {
@@ -4493,6 +4608,7 @@ process.on('unhandledRejection', r   => console.error('[REJECT]', r))
 
 // Start HTTP server immediately — don't wait for Bluetooth
 server.listen(3000, '0.0.0.0', () => {
+  checkLicenseState()
   console.log('EdgeController running on http://0.0.0.0:3000')
   if (config.tunnel?.token) {
     if (config.tunnel?.enabled) {

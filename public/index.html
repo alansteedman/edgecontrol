@@ -2491,6 +2491,15 @@ async function loadCommFleet() {
   _commFleetDevices = await r.json()
 }
 
+async function fleetAuthorise(deviceId) {
+  const r = await commFetch(`/api/admin/devices/${encodeURIComponent(deviceId)}/authorise`, { method: 'POST' })
+  if (r) { await loadCommFleet(); renderCommFleet() }
+}
+async function fleetRevoke(deviceId) {
+  const r = await commFetch(`/api/admin/devices/${encodeURIComponent(deviceId)}/revoke`, { method: 'POST' })
+  if (r) { await loadCommFleet(); renderCommFleet() }
+}
+
 function renderCommFleet() {
   const wrap = document.getElementById('comm-wrap'); if (!wrap) return
   const now = Math.floor(Date.now() / 1000)
@@ -2516,10 +2525,22 @@ function renderCommFleet() {
       ? `<a href="https://${escHtml(meta.tunnel_hostname)}" target="_blank" style="color:#4fc3f7;font-size:10px;text-decoration:none">${escHtml(meta.tunnel_hostname)}</a>`
       : '<span style="color:#444;font-size:10px">no tunnel</span>'
     const uptime = meta.uptime_s != null ? fmtUptime(meta.uptime_s) : '—'
-    return `<div style="background:#141414;border:1px solid ${online?'#1e3a1e':'#1e1e1e'};border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px">
+    // Auth status
+    const isRevoked = !!d.revoked
+    const isAuthorised = !!d.authorised && !isRevoked
+    const badge = isRevoked
+      ? `<span style="background:#3b0a0a;border:1px solid #7f1d1d;border-radius:4px;padding:2px 6px;font-size:9px;color:#f87171;font-weight:600">REVOKED</span>`
+      : isAuthorised
+        ? `<span style="background:#0a2012;border:1px solid #14532d;border-radius:4px;padding:2px 6px;font-size:9px;color:#4ade80;font-weight:600">AUTHORISED</span>`
+        : `<span style="background:#1a1208;border:1px solid #854d0e;border-radius:4px;padding:2px 6px;font-size:9px;color:#fbbf24;font-weight:600">PENDING</span>`
+    const authBtn = isRevoked
+      ? `<button onclick="fleetAuthorise('${escHtml(d.device_id)}')" style="background:#0a2012;border:1px solid #14532d;border-radius:5px;color:#4ade80;font-size:10px;padding:3px 8px;cursor:pointer">Authorise</button>`
+      : `<button onclick="fleetRevoke('${escHtml(d.device_id)}')" style="background:#1e1010;border:1px solid #3b1515;border-radius:5px;color:#f87171;font-size:10px;padding:3px 8px;cursor:pointer">Revoke</button>`
+    return `<div style="background:#141414;border:1px solid ${isRevoked?'#2a1010':online?'#1e3a1e':'#1e1e1e'};border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px">
       <div style="display:flex;align-items:center;gap:10px">
         <div style="width:8px;height:8px;border-radius:50%;background:${online?'#4ade80':'#333'};flex-shrink:0"></div>
         <div style="font-size:13px;font-weight:600;color:#e0e0e0;flex:1">${escHtml(d.name||d.device_id)}</div>
+        ${badge}
         <div style="font-size:10px;color:#444">${escHtml(d.version||'—')}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -2528,6 +2549,8 @@ function renderCommFleet() {
         <span style="font-size:10px;color:#555">up ${uptime}</span>
         <span style="color:#333;font-size:10px">·</span>
         <span style="font-size:10px;color:#444">${online?'online':'last seen '+ago}</span>
+        <span style="flex:1"></span>
+        ${authBtn}
       </div>
       ${grouped ? `<div style="display:flex;flex-direction:column;gap:6px">${grouped}</div>` : ''}
     </div>`

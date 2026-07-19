@@ -4672,6 +4672,7 @@ exec('sudo systemctl restart bluetooth', err => {
   if (err) console.error('BT restart error:', err.message)
   else {
     console.log('Bluetooth restarted')
-    if (config.hciDeviceId != null) applyBtAdapter(config.hciDeviceId)
+    // Wait 3s for BlueZ to finish initialising all adapters before bringing unwanted ones down
+    if (config.hciDeviceId != null) setTimeout(() => applyBtAdapter(config.hciDeviceId), 3000)
   }
 })

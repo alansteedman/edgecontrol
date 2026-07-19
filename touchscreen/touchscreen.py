@@ -34,6 +34,7 @@ TOUCH_IRQ  = 26
 W, H = 320, 240
 MADCTL = 0xE8   # MY|MX|MV|BGR — landscape 180°
 API = "http://localhost:3000"
+SLEEP_TIMEOUT = 120  # seconds of inactivity before display sleeps
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 BG       = (10,  15,  22)
@@ -105,6 +106,21 @@ def _init_display():
     _cmd(0xE0, 0x0F,0x31,0x2B,0x0C,0x0E,0x08,0x4E,0xF1,0x37,0x07,0x10,0x03,0x0E,0x09,0x00)
     _cmd(0xE1, 0x00,0x0E,0x14,0x03,0x11,0x07,0x31,0xC1,0x48,0x08,0x0F,0x0C,0x31,0x36,0x0F)
     _cmd(0x29); time.sleep(0.1)
+
+_display_asleep = False
+
+def display_sleep():
+    global _display_asleep
+    if not _display_asleep:
+        _cmd(0x10)  # SLPIN
+        _display_asleep = True
+
+def display_wake():
+    global _display_asleep
+    if _display_asleep:
+        _cmd(0x11)  # SLPOUT
+        time.sleep(0.12)
+        _display_asleep = False
 
 def show(image):
     _cmd(0x2A, 0, 0, 1, 63)
@@ -513,6 +529,7 @@ def main():
 
     info = fetch_status()
     last_refresh = time.monotonic()
+    last_activity = time.monotonic()
     prev_state = None
     needs_redraw = True
 
@@ -520,6 +537,18 @@ def main():
 
     while True:
         now = time.monotonic()
+
+        # Sleep / wake on inactivity
+        if _display_asleep:
+            if _read(TOUCH_IRQ) == 0:
+                display_wake()
+                last_activity = now
+                needs_redraw = True
+            time.sleep(0.05)
+            continue
+        elif now - last_activity > SLEEP_TIMEOUT:
+            display_sleep()
+            continue
 
         if state == 'STATUS' and now - last_refresh > 15:
             info = fetch_status(); last_refresh = now; needs_redraw = True
@@ -586,6 +615,7 @@ def main():
         if pt is None:
             time.sleep(0.05); continue
         tx, ty = pt
+        last_activity = now
         print(f"[touch] state={state} tx={tx} ty={ty}")
 
         if state == 'STATUS':

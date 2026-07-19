@@ -804,6 +804,17 @@ select.mci{cursor:pointer}
         </div>
       </div>
 
+      <!-- Bluetooth Adapter -->
+      <div class="cfg-card">
+        <div class="sec-row" style="margin-bottom:12px">
+          <div class="sec-label">Bluetooth Adapter</div>
+          <button class="btn btn-ghost btn-sm" onclick="btScan()">Scan</button>
+        </div>
+        <div id="bt-current" style="font-size:12px;color:#555;margin-bottom:10px">Loading…</div>
+        <div id="bt-list" style="display:none;margin-top:4px"></div>
+        <div id="bt-status" style="font-size:11px;color:#555;margin-top:8px;display:none"></div>
+      </div>
+
       <!-- Remote Access -->
       <div class="cfg-card">
         <div class="sec-row" style="margin-bottom:14px">
@@ -1589,7 +1600,7 @@ function showTab(name,btn) {
   if(name==='eom') renderEomCards()
   if(name==='hue') renderHueCards()
   if(name==='community') initCommunity()
-  if(name==='config') loadWifiStatus()
+  if(name==='config') { loadWifiStatus(); loadBtCurrent() }
   if(name==='waveforms') setTimeout(initBandSelector, 50)
   if(name==='macros') setTimeout(()=>window._macroTabActivated?.(), 50)
   if(name==='camera') { _cameraActive=true; cameraStart() }
@@ -6807,6 +6818,57 @@ async function loadWifiStatus() {
     const cur = document.getElementById('wifi-current')
     if (cur) cur.textContent = 'Unable to read WiFi status'
   }
+}
+
+// ── Bluetooth adapter ─────────────────────────────────────────────────────────
+let _btInterfaces = []
+
+async function loadBtCurrent() {
+  const el = document.getElementById('bt-current')
+  const r = await fetch('/api/bluetooth/interfaces').catch(() => null)
+  if (!r || !r.ok) { if (el) el.textContent = 'Unable to load adapters'; return }
+  const d = await r.json()
+  _btInterfaces = d.interfaces || []
+  const cur = d.current
+  const active = _btInterfaces.find(i => i.index === cur) || _btInterfaces.find(i => i.index === 0)
+  if (el) el.textContent = active ? `${active.bus === 'USB' ? 'USB dongle' : 'Built-in'}: ${active.name} (hci${active.index})` : 'Not configured'
+}
+
+async function btScan() {
+  const list = document.getElementById('bt-list')
+  const st   = document.getElementById('bt-status')
+  if (st) { st.style.display = 'block'; st.textContent = 'Scanning…' }
+  if (list) list.style.display = 'none'
+  const r = await fetch('/api/bluetooth/interfaces').catch(() => null)
+  if (!r || !r.ok) { if (st) st.textContent = 'Scan failed'; return }
+  const d = await r.json()
+  _btInterfaces = d.interfaces || []
+  if (st) st.style.display = 'none'
+  if (!list) return
+  if (!_btInterfaces.length) { list.style.display = 'block'; list.innerHTML = '<div style="font-size:12px;color:#555">No Bluetooth adapters found</div>'; return }
+  list.innerHTML = _btInterfaces.map(i => {
+    const label = i.bus === 'USB' ? 'USB dongle' : 'Built-in'
+    const checked = i.index === (d.current ?? 0) ? 'checked' : ''
+    return `<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid #1e1e1e;border-radius:7px;margin-bottom:6px;cursor:pointer;background:#111">
+      <input type="radio" name="bt-iface" value="${i.index}" ${checked} style="accent-color:#4fc3f7;flex-shrink:0">
+      <div>
+        <div style="font-size:12px;color:#e0e0e0;font-weight:600">${escHtml(i.name)} <span style="font-size:10px;font-weight:400;color:#555">(hci${i.index})</span></div>
+        <div style="font-size:10px;color:#555">${label} · ${escHtml(i.address)} · ${i.up ? '<span style="color:#4ade80">active</span>' : '<span style="color:#555">inactive</span>'}</div>
+      </div>
+    </label>`
+  }).join('') + `<button class="btn btn-primary btn-sm" style="margin-top:4px" onclick="btApply()">Apply & Restart</button>`
+  list.style.display = 'block'
+}
+
+async function btApply() {
+  const sel = document.querySelector('input[name="bt-iface"]:checked')
+  if (!sel) return
+  const st = document.getElementById('bt-status')
+  if (st) { st.style.display = 'block'; st.textContent = 'Applying… server will restart' }
+  document.querySelector('#bt-list button').disabled = true
+  await fetch('/api/bluetooth/interface', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ index: parseInt(sel.value) }) }).catch(() => null)
+  if (st) st.textContent = 'Restarting… reconnecting in 5s'
+  setTimeout(() => location.reload(), 5000)
 }
 
 async function wifiScan() {

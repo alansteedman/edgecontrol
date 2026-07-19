@@ -153,6 +153,9 @@ if (config.auth.username && !config.auth.admin) {
 if (!config.auth.admin) config.auth.admin = { username: '', passwordHash: '' }
 if (!config.auth.user)  config.auth.user  = { username: '', passwordHash: '' }
 
+// Apply saved Bluetooth adapter selection before node-ble initialises
+if (config.hciDeviceId != null) process.env.NOBLE_HCI_DEVICE_ID = String(config.hciDeviceId)
+
 // ── License / authorisation ───────────────────────────────────────────────────
 const LICENSE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAth1lYx+hhTo5FhVoo2dG
@@ -4379,6 +4382,34 @@ function nmcli(...args) {
     })
   })
 }
+
+// ── Bluetooth adapter selection ───────────────────────────────────────────────
+function parseHciConfig(output) {
+  const interfaces = []
+  for (const block of output.split(/(?=hci\d+:)/)) {
+    const m = block.match(/^hci(\d+):.*?Bus:\s*(\S+).*?BD Address:\s*(\S+)/s)
+    if (!m) continue
+    const name = (block.match(/Name:\s*'([^']+)'/) || [])[1] || `hci${m[1]}`
+    interfaces.push({ index: parseInt(m[1]), bus: m[2], address: m[3], name, up: /UP RUNNING/.test(block) })
+  }
+  return interfaces
+}
+
+app.get('/api/bluetooth/interfaces', requireAdmin, (req, res) => {
+  exec('hciconfig -a', (err, stdout) => {
+    if (err && !stdout) return res.status(500).json({ error: err.message })
+    res.json({ interfaces: parseHciConfig(stdout || ''), current: config.hciDeviceId ?? null })
+  })
+})
+
+app.post('/api/bluetooth/interface', requireAdmin, express.json(), (req, res) => {
+  const { index } = req.body
+  if (index == null) return res.status(400).json({ error: 'index required' })
+  config.hciDeviceId = index
+  saveConfig(config)
+  res.json({ ok: true })
+  setTimeout(() => exec('pm2 restart edgecontroller'), 300)
+})
 
 app.get('/api/wifi/status', requireAdmin, async (req, res) => {
   try {

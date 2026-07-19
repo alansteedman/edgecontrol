@@ -4395,6 +4395,20 @@ function parseHciConfig(output) {
   return interfaces
 }
 
+function applyBtAdapter(deviceId) {
+  if (deviceId == null) return
+  exec('hciconfig -a', (err, stdout) => {
+    if (err && !stdout) return
+    for (const iface of parseHciConfig(stdout || '')) {
+      if (iface.index === deviceId) {
+        exec(`sudo hciconfig hci${iface.index} up`, () => {})
+      } else {
+        exec(`sudo hciconfig hci${iface.index} down`, () => {})
+      }
+    }
+  })
+}
+
 app.get('/api/bluetooth/interfaces', requireAdmin, (req, res) => {
   exec('hciconfig -a', (err, stdout) => {
     if (err && !stdout) return res.status(500).json({ error: err.message })
@@ -4640,6 +4654,7 @@ process.on('unhandledRejection', r   => console.error('[REJECT]', r))
 // Start HTTP server immediately — don't wait for Bluetooth
 server.listen(3000, '0.0.0.0', () => {
   checkLicenseState()
+  if (config.hciDeviceId != null) applyBtAdapter(config.hciDeviceId)
   console.log('EdgeController running on http://0.0.0.0:3000')
   if (config.tunnel?.token) {
     if (config.tunnel?.enabled) {

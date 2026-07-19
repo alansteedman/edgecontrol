@@ -4672,7 +4672,7 @@ app.post('/api/update/apply', requireAdmin, (req, res) => {
             broadcast({ type: 'update:failed', error: stderr })
           } else {
             broadcast({ type: 'update:restarting' })
-            setTimeout(() => process.exit(0), 500)
+            setTimeout(() => process.exit(0), 2000)
           }
         })
     }, 500)

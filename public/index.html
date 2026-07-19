@@ -1499,9 +1499,9 @@ function handle(m) {
         document.getElementById('upd-spinner').style.display='block'
         document.getElementById('upd-msg').textContent='Updating to v'+m.version+'…'
         document.getElementById('upd-btn').disabled=true
-        b.style.display='flex' }; break
+        b.style.display='flex'
+        _wsReloadOnReconnect = true }; break
     case 'update:restarting':
-      _wsReloadOnReconnect = true
       document.getElementById('upd-msg').textContent='Restarting…'; break
     case 'update:failed':
       { document.getElementById('upd-spinner').style.display='none'

@@ -6259,6 +6259,9 @@ function renderAudioList(){
         <button class="btn btn-ghost btn-xs" id="synth-btn-${safeId}" onclick="toggleSynthPlayback('${w.id}','${safeId}')" style="font-size:11px;padding:2px 7px;color:#a78bfa" title="Preview processed waveform as audio">⚡</button>
         <span style="flex:1;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.name}">${w.name}</span>
         <span style="font-size:10px;color:#444;white-space:nowrap">${mins}:${secs} &nbsp; ${frameCount} frames</span>
+        <label style="display:flex;align-items:center;gap:4px;font-size:9px;color:#3a3a3a;white-space:nowrap" title="Show on Stream Deck">
+          <input type="checkbox" class="wf-deck-chk" ${!(S.deckHidden||[]).includes(w.id)?'checked':''} onchange="toggleDeckWf('${w.id}',this.checked)">SD
+        </label>
         <button class="btn btn-ghost btn-xs" onclick="reEditAudio('${w.id}')">Edit</button>
         <button class="btn btn-danger btn-xs" onclick="deleteAudio('${w.id}')">×</button>
       </div>

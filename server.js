@@ -615,6 +615,7 @@ async function getAdapter() {
     adapter = config.hciDeviceId != null
       ? await bluetooth.getAdapter(`hci${config.hciDeviceId}`)
       : await bluetooth.defaultAdapter()
+    if (!await adapter.isPowered()) await adapter.setPowered(true)
   }
   return adapter
 }

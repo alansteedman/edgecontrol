@@ -184,15 +184,25 @@ function connect() {
       if (S.devices[m.device.id]) Object.assign(S.devices[m.device.id], m.device)
       renderChannels()
     }
-    if (m.type==='group:updated') { S.groups=S.groups.map(g=>g.id===m.group.id?m.group:g); renderGroups() }
-    if (m.type==='group:added')   { S.groups=[...S.groups,m.group]; renderGroups() }
-    if (m.type==='group:removed') { S.groups=S.groups.filter(g=>g.id!==m.id); renderGroups() }
+    if (m.type==='group:updated') { S.groups=S.groups.map(g=>g.id===m.group.id?m.group:g); renderAll() }
+    if (m.type==='group:added')   { S.groups=[...S.groups,m.group]; renderAll() }
+    if (m.type==='group:removed') { S.groups=S.groups.filter(g=>g.id!==m.id); renderAll() }
     if (m.type==='groups:reordered') {
       const map=Object.fromEntries(S.groups.map(g=>[g.id,g]))
       S.groups=m.ids.map(id=>map[id]).filter(Boolean)
-      renderGroups()
+      renderAll()
     }
   }
+}
+
+// ── Group lockout (mirrors main UI getUsedChannels) ───────────────────────────
+function getUsedChannels() {
+  const used = new Map()
+  for (const grp of S.groups) {
+    if (grp.enabled === false) continue
+    for (const {deviceId, channel} of grp.channels||[]) used.set(deviceId+':'+channel, grp.name)
+  }
+  return used
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -307,6 +317,23 @@ function buildChannelCard(dev, ch) {
   const chData = dev.channels?.[ch]; if (!chData) return null
   const connected = dev.status==='connected'
   const key = dev.id+':'+ch
+  const groupName = getUsedChannels().get(key)
+  if (groupName) {
+    const el = document.createElement('div')
+    el.className='app-card'; el.id='cc-app-'+dev.id+ch
+    el.style.opacity='0.5'; el.style.pointerEvents='none'
+    el.innerHTML=`
+      <div class="card-header">
+        <div class="card-name">${dev.name||dev.id} &middot; ${ch}</div>
+        <span class="card-status" style="background:#0d2a38;color:#4fc3f7;border:1px solid #1a4a60;font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;flex-shrink:0">In group: ${groupName}</span>
+      </div>
+      <div class="slider-row">
+        <span class="slider-lbl">I</span>
+        <input type="range" class="app-slider int-slider" min="0" max="200" value="${chData.intensity||0}" disabled>
+        <span class="slider-val int-val">${chData.intensity||0}</span>
+      </div>`
+    return el
+  }
   if (!cState[key]) {
     const isAct = chData.mode==='activity' && !!chData.activityId
     const activeWf = isAct ? 'activity:'+chData.activityId : (chData.waveform||'pulse')

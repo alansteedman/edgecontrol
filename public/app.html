@@ -79,6 +79,19 @@ input[type=range].app-slider.freq-slider::-moz-range-thumb{background:#fbbf24}
 
 .app-empty{color:#444;font-size:13px;text-align:center;padding:24px}
 
+/* Camera */
+.cam-card{background:#141414;border:1px solid #222;border-radius:14px;overflow:hidden;flex-shrink:0}
+.cam-header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px}
+.cam-name{font-size:14px;font-weight:600;color:#e0e0e0}
+.cam-status{font-size:10px;font-weight:700;color:#4ade80}
+.cam-video-wrap{position:relative;width:100%;background:#000;aspect-ratio:16/9}
+.cam-video-wrap video{width:100%;height:100%;object-fit:contain;display:block}
+.cam-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.cam-status-badge{font-size:11px;font-weight:700;color:#f59e0b;background:rgba(0,0,0,.7);padding:4px 10px;border-radius:6px}
+.cam-footer{display:flex;align-items:center;justify-content:flex-end;padding:8px 14px;gap:8px}
+.cam-mute-btn{padding:6px 14px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;color:#888;font-size:12px;font-weight:600;cursor:pointer}
+.cam-mute-btn:active{background:#222}
+
 /* Disconnected banner */
 #disc-banner{display:none;position:fixed;bottom:0;left:0;right:0;padding:10px 16px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0));background:#1a1a00;border-top:1px solid #3a3a00;color:#fbbf24;font-size:12px;text-align:center;z-index:20}
 </style>
@@ -101,9 +114,11 @@ input[type=range].app-slider.freq-slider::-moz-range-thumb{background:#fbbf24}
   <div class="tab-bar">
     <button class="tab-btn active" id="tab-btn-groups" onclick="showTab('groups')">Groups</button>
     <button class="tab-btn" id="tab-btn-channels" onclick="showTab('channels')">Channels</button>
+    <button class="tab-btn" id="tab-btn-camera" onclick="showTab('camera')">Camera</button>
   </div>
   <div class="tab-pane active" id="tab-groups"></div>
   <div class="tab-pane" id="tab-channels"></div>
+  <div class="tab-pane" id="tab-camera"></div>
 </div>
 <div id="disc-banner">Reconnecting&hellip;</div>
 
@@ -121,6 +136,8 @@ function showTab(name) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'))
   document.getElementById('tab-btn-'+name).classList.add('active')
   document.getElementById('tab-'+name).classList.add('active')
+  if (name === 'camera') { _camActive = true; _camStartAll() }
+  else { _camActive = false; _camStopAll() }
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -181,8 +198,24 @@ function connect() {
       renderChannels()
     }
     if (m.type==='device:updated') {
+      const wasCamera = S.devices[m.device.id]?.type === 'camera'
       if (S.devices[m.device.id]) Object.assign(S.devices[m.device.id], m.device)
-      renderChannels()
+      if (wasCamera || m.device.type === 'camera') renderCamera()
+      else renderChannels()
+    }
+    if (m.type==='device:added') {
+      S.devices[m.device.id] = m.device
+      if (m.device.type === 'camera') renderCamera()
+      else renderChannels()
+    }
+    if (m.type==='device:removed') {
+      const wasCam = S.devices[m.id]?.type === 'camera'
+      if (wasCam && _camPCs[S.devices[m.id]?.streamKey]) {
+        _camPCs[S.devices[m.id].streamKey].close()
+        delete _camPCs[S.devices[m.id].streamKey]
+      }
+      delete S.devices[m.id]
+      if (wasCam) renderCamera(); else renderChannels()
     }
     if (m.type==='group:updated') { S.groups=S.groups.map(g=>g.id===m.group.id?m.group:g); renderAll() }
     if (m.type==='group:added')   { S.groups=[...S.groups,m.group]; renderAll() }
@@ -206,7 +239,7 @@ function getUsedChannels() {
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
-function renderAll() { renderGroups(); renderChannels() }
+function renderAll() { renderGroups(); renderChannels(); renderCamera() }
 
 function renderGroups() {
   const el = document.getElementById('tab-groups')
@@ -461,6 +494,183 @@ function stopAll() {
   Object.values(S.devices).filter(d=>d.type==='coyote').forEach(dev=>{
     ['A','B'].forEach(ch=>{ if(dev.channels?.[ch]) stopChannel(dev.id,ch) })
   })
+}
+
+// ── Camera ────────────────────────────────────────────────────────────────────
+const _camPCs = {}, _camMseWs = {}, _camBlobUrl = {}
+let _camActive = false
+
+function renderCamera() {
+  const el = document.getElementById('tab-camera')
+  const cameras = Object.values(S.devices).filter(d => d.type === 'camera')
+  if (!cameras.length) { el.innerHTML = '<div class="app-empty">No cameras configured</div>'; return }
+  el.innerHTML = ''
+  cameras.forEach(cam => el.appendChild(buildCamCard(cam)))
+}
+
+function buildCamCard(cam) {
+  const el = document.createElement('div')
+  el.className = 'cam-card'
+  el.innerHTML = `
+    <div class="cam-header">
+      <span class="cam-name">${cam.name}</span>
+      <span class="cam-status" id="cam-status-${cam.streamKey}">CONNECTING…</span>
+    </div>
+    <div class="cam-video-wrap">
+      <video id="cam-video-${cam.streamKey}" playsinline muted autoplay></video>
+      <div class="cam-overlay"><span class="cam-status-badge" id="cam-badge-${cam.streamKey}">CONNECTING…</span></div>
+    </div>
+    <div class="cam-footer">
+      <button class="cam-mute-btn" id="cam-mute-${cam.streamKey}" onclick="camToggleMute('${cam.streamKey}')">🔇 Unmute</button>
+    </div>`
+  return el
+}
+
+function camToggleMute(streamKey) {
+  const vid = document.getElementById('cam-video-'+streamKey)
+  const btn = document.getElementById('cam-mute-'+streamKey)
+  if (!vid) return
+  vid.muted = !vid.muted
+  btn.textContent = vid.muted ? '🔇 Unmute' : '🔊 Mute'
+}
+
+function _camSetStatus(streamKey, text, color) {
+  const s = document.getElementById('cam-status-'+streamKey)
+  const b = document.getElementById('cam-badge-'+streamKey)
+  if (s) { s.textContent = text; s.style.color = color }
+  if (b) {
+    b.textContent = text
+    b.style.display = (text === '● LIVE') ? 'none' : 'block'
+  }
+}
+
+function _camCleanupMse(streamKey) {
+  if (_camMseWs[streamKey]) { try { _camMseWs[streamKey].close() } catch {} ; delete _camMseWs[streamKey] }
+  if (_camBlobUrl[streamKey]) { URL.revokeObjectURL(_camBlobUrl[streamKey]); delete _camBlobUrl[streamKey] }
+}
+
+async function _camStartMse(streamKey, video) {
+  _camSetStatus(streamKey, 'CONNECTING (MSE)…', '#f59e0b')
+  _camCleanupMse(streamKey)
+  video.srcObject = null; video.src = ''
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${wsProto}//${location.host}/api/go2rtc/api/ws?src=${streamKey}`
+  return new Promise((resolve, reject) => {
+    const ms = new MediaSource()
+    const blobUrl = URL.createObjectURL(ms)
+    _camBlobUrl[streamKey] = blobUrl
+    video.src = blobUrl
+    let sb = null, queue = [], done = false
+    ms.addEventListener('sourceopen', () => {
+      if (!_camActive) return
+      const ws = new WebSocket(wsUrl)
+      _camMseWs[streamKey] = ws
+      ws.binaryType = 'arraybuffer'
+      ws.onopen = () => ws.send(JSON.stringify({type:'mse', value:'avc1.640029,avc1.64002A,avc1.640033,mp4a.40.2'}))
+      ws.onmessage = e => {
+        if (typeof e.data === 'string') {
+          const msg = JSON.parse(e.data)
+          if (msg.type === 'mse' && !sb) {
+            try {
+              sb = ms.addSourceBuffer(msg.value); sb.mode = 'segments'
+              sb.addEventListener('updateend', drain); drain()
+            } catch(err) { if (!done) { done = true; reject(err) } }
+          }
+        } else {
+          queue.push(new Uint8Array(e.data))
+          if (sb && !sb.updating) drain()
+        }
+      }
+      ws.onerror = () => { if (!done) { done = true; reject(new Error('MSE ws error')) } }
+      ws.onclose = () => {
+        if (!done) { done = true; reject(new Error('MSE ws closed')) }
+        else if (_camActive) setTimeout(() => _camConnect(streamKey), 3000)
+      }
+    })
+    function drain() {
+      if (!sb || sb.updating || queue.length === 0) return
+      try { sb.appendBuffer(queue.shift()) } catch { queue = [] }
+      if (!done) { done = true; _camSetStatus(streamKey, '● LIVE', '#4ade80'); video.play().catch(()=>{}); resolve() }
+    }
+    setTimeout(() => { if (!done) { done = true; reject(new Error('MSE timeout')) } }, 10000)
+  })
+}
+
+async function _camConnect(streamKey) {
+  if (_camPCs[streamKey]) { _camPCs[streamKey].close(); delete _camPCs[streamKey] }
+  _camCleanupMse(streamKey)
+  const video = document.getElementById('cam-video-'+streamKey)
+  if (!video) return
+  _camSetStatus(streamKey, 'CONNECTING…', '#4fc3f7')
+  video.srcObject = null; video.src = ''
+  try {
+    const pc = new RTCPeerConnection({ iceServers:[], bundlePolicy:'max-bundle', iceCandidatePoolSize:4 })
+    _camPCs[streamKey] = pc
+    pc.addTransceiver('video', {direction:'recvonly'})
+    pc.addTransceiver('audio', {direction:'recvonly'})
+    pc.ontrack = e => {
+      if (!video.srcObject) video.srcObject = new MediaStream()
+      video.srcObject.addTrack(e.track)
+      video.play().catch(()=>{})
+    }
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    await new Promise(r => {
+      if (pc.iceGatheringState === 'complete') return r()
+      pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') r() }
+      setTimeout(r, 400)
+    })
+    const res = await fetch(`/api/go2rtc/api/webrtc?src=${streamKey}`, {
+      method:'POST', headers:{'Content-Type':'application/sdp'}, body:pc.localDescription.sdp
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    await pc.setRemoteDescription({type:'answer', sdp: await res.text()})
+    const iceResult = await Promise.race([
+      new Promise(r => {
+        const check = () => {
+          const s = pc.iceConnectionState
+          if (s==='connected'||s==='completed') r('ok')
+          else if (s==='failed') r('failed')
+        }
+        pc.oniceconnectionstatechange = check; check()
+      }),
+      new Promise(r => setTimeout(() => r('timeout'), 3000))
+    ])
+    if (iceResult !== 'ok') {
+      pc.close(); delete _camPCs[streamKey]; video.srcObject = null
+      await _camStartMse(streamKey, video)
+      return
+    }
+    _camSetStatus(streamKey, '● LIVE', '#4ade80')
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState
+      if (s==='failed'||s==='disconnected') {
+        _camSetStatus(streamKey, 'RECONNECTING…', '#f59e0b')
+        pc.close(); delete _camPCs[streamKey]; video.srcObject = null
+        if (_camActive) setTimeout(() => _camConnect(streamKey), 3000)
+      }
+    }
+  } catch(e) {
+    if (!_camActive) return
+    if (e.message?.includes('MSE')) {
+      _camSetStatus(streamKey, 'RECONNECTING…', '#f59e0b')
+      setTimeout(() => _camConnect(streamKey), 5000)
+    } else {
+      if (_camPCs[streamKey]) { _camPCs[streamKey].close(); delete _camPCs[streamKey] }
+      try { await _camStartMse(streamKey, video) }
+      catch { _camSetStatus(streamKey, 'RECONNECTING…', '#f59e0b'); setTimeout(() => _camConnect(streamKey), 5000) }
+    }
+  }
+}
+
+function _camStartAll() {
+  Object.values(S.devices).filter(d => d.type === 'camera').forEach(cam => _camConnect(cam.streamKey))
+}
+
+function _camStopAll() {
+  Object.keys(_camPCs).forEach(k => { try { _camPCs[k].close() } catch {}; delete _camPCs[k] })
+  Object.keys(_camMseWs).forEach(k => { try { _camMseWs[k].close() } catch {}; delete _camMseWs[k] })
+  Object.keys(_camBlobUrl).forEach(k => { URL.revokeObjectURL(_camBlobUrl[k]); delete _camBlobUrl[k] })
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

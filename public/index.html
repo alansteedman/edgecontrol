@@ -912,7 +912,7 @@ select.mci{cursor:pointer}
           <div class="cfg-row">
             <label>Share link</label>
             <div style="display:flex;gap:8px;align-items:center;flex:1;min-width:0">
-              <span id="app-link-url" style="font-size:12px;color:#4fc3f7;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"></span>
+              <a id="app-link-url" href="#" target="_blank" style="font-size:12px;color:#4fc3f7;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-decoration:none"></a>
               <button class="btn btn-ghost btn-sm" onclick="appCopyLink()">Copy</button>
             </div>
           </div>
@@ -1318,7 +1318,7 @@ async function loadAppSettings() {
     document.getElementById('app-enabled-chk').checked = _appSettings.enabled
     document.getElementById('app-enabled-lbl').textContent = _appSettings.enabled ? 'Enabled' : 'Disabled'
     document.getElementById('app-access-body').style.display = _appSettings.enabled ? 'block' : 'none'
-    document.getElementById('app-link-url').textContent = _appSettings.link || ''
+    const _lu1=document.getElementById('app-link-url'); _lu1.textContent=_appSettings.link||''; _lu1.href=_appSettings.link||'#'
     document.getElementById('app-no-pwd-warn').style.display = (_appSettings.enabled && !_appSettings.hasPassword) ? 'block' : 'none'
   } catch {}
 }
@@ -1328,7 +1328,7 @@ async function appSetEnabled(val) {
   const r = await fetch('/api/app/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ enabled: val }) })
   const d = await r.json()
   _appSettings = d
-  document.getElementById('app-link-url').textContent = d.link || ''
+  const _lu2=document.getElementById('app-link-url'); _lu2.textContent=d.link||''; _lu2.href=d.link||'#'
   document.getElementById('app-no-pwd-warn').style.display = (val && !d.hasPassword) ? 'block' : 'none'
 }
 async function appSetPassword() {

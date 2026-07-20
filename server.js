@@ -2355,7 +2355,10 @@ app.use((req, res, next) => {
 
 // ── Mobile app (PWA) — public routes registered before auth guard ─────────────
 function getAppLink() {
-  if (config.tunnel?.enabled && config.tunnel?.hostname) return `https://${config.tunnel.hostname}/app`
+  if (config.tunnel?.enabled && config.tunnel?.hostname) {
+    const host = config.tunnel.hostname.replace(/^https?:\/\//, '')
+    return `https://${host}/app`
+  }
   return `http://${config.boxId}.local:3000/app`
 }
 app.get('/app', (req, res) => res.sendFile(join(__dirname, 'public', 'app.html')))

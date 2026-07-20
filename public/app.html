@@ -136,8 +136,15 @@ function showTab(name) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'))
   document.getElementById('tab-btn-'+name).classList.add('active')
   document.getElementById('tab-'+name).classList.add('active')
-  if (name === 'camera') { _camActive = true; _camStartAll() }
-  else { _camActive = false; _camStopAll() }
+  if (name === 'camera') {
+    _camActive = true
+    // Resume any paused videos and connect any that haven't started yet
+    Object.values(S.devices).filter(d => d.type === 'camera').forEach(cam => {
+      const vid = document.getElementById('cam-video-'+cam.streamKey)
+      if (vid && (vid.srcObject || vid.src)) vid.play().catch(()=>{})
+      else _camConnect(cam.streamKey)
+    })
+  }
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -498,19 +505,30 @@ function stopAll() {
 
 // ── Camera ────────────────────────────────────────────────────────────────────
 const _camPCs = {}, _camMseWs = {}, _camBlobUrl = {}
-let _camActive = false
+const _camActive = true  // streams run continuously once started
 
 function renderCamera() {
   const el = document.getElementById('tab-camera')
   const cameras = Object.values(S.devices).filter(d => d.type === 'camera')
   if (!cameras.length) { el.innerHTML = '<div class="app-empty">No cameras configured</div>'; return }
-  el.innerHTML = ''
-  cameras.forEach(cam => el.appendChild(buildCamCard(cam)))
+  // Only rebuild DOM for cameras that don't have a card yet
+  cameras.forEach(cam => {
+    if (!document.getElementById('cam-card-'+cam.streamKey)) {
+      const card = buildCamCard(cam)
+      el.innerHTML === '<div class="app-empty">No cameras configured</div>' && (el.innerHTML = '')
+      el.appendChild(card)
+    }
+  })
+  // Start any streams not yet connected
+  cameras.forEach(cam => {
+    const vid = document.getElementById('cam-video-'+cam.streamKey)
+    if (vid && !vid.srcObject && !vid.src) _camConnect(cam.streamKey)
+  })
 }
 
 function buildCamCard(cam) {
   const el = document.createElement('div')
-  el.className = 'cam-card'
+  el.className = 'cam-card'; el.id = 'cam-card-'+cam.streamKey
   el.innerHTML = `
     <div class="cam-header">
       <span class="cam-name">${cam.name}</span>

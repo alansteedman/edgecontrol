@@ -2353,6 +2353,35 @@ app.use((req, res, next) => {
   return res.status(403).json({ error: 'Not authorised', lockout: true })
 })
 
+// ── Mobile app (PWA) — public routes registered before auth guard ─────────────
+function getAppLink() {
+  if (config.tunnel?.enabled && config.tunnel?.hostname) return `https://${config.tunnel.hostname}/app`
+  return `http://${config.boxId}.local:3000/app`
+}
+app.get('/app', (req, res) => res.sendFile(join(__dirname, 'public', 'app.html')))
+app.get('/app/manifest.json', (req, res) => res.json({
+  name: 'EdgeController', short_name: 'EdgeCtrl', start_url: '/app',
+  display: 'standalone', background_color: '#0a0a0a', theme_color: '#0a0a0a',
+  icons: []
+}))
+app.post('/api/app/login', (req, res) => {
+  if (!config.app?.enabled) return res.status(403).json({ error: 'Mobile access not enabled' })
+  if (!config.app?.passwordHash) return res.status(403).json({ error: 'No password set' })
+  const { password } = req.body
+  if (!password) return res.status(400).json({ error: 'Password required' })
+  if (!bcrypt.compareSync(password, config.app.passwordHash)) return res.status(401).json({ error: 'Wrong password' })
+  req.session.appAuthed = true
+  req.session.save(() => res.json({ ok: true }))
+})
+app.post('/api/app/logout', (req, res) => {
+  req.session.appAuthed = false
+  req.session.save(() => res.json({ ok: true }))
+})
+app.get('/api/app/ping', (req, res) => {
+  if (config.auth?.enabled && !req.session?.authed && !req.session?.appAuthed) return res.status(401).json({ error: 'Unauthorized' })
+  res.json({ ok: true })
+})
+
 app.use(requireAuth)
 
 // Admin-only guard — used on config routes
@@ -2505,7 +2534,7 @@ const wss    = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (request, socket, head) => {
   sessionMW(request, {}, () => {
-    if (config.auth?.enabled && !request.session?.authed) {
+    if (config.auth?.enabled && !request.session?.authed && !request.session?.appAuthed) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
       socket.destroy()
       return
@@ -2547,6 +2576,7 @@ function waveformsMeta() {
 
 wss.on('connection', (ws, request) => {
   ws.role = request.session?.role || (config.auth?.enabled ? 'user' : 'admin')
+  ws.isApp = !!(request.session?.appAuthed && !request.session?.authed)
   clients.add(ws)
   ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
   if (_updateAvailable) ws.send(JSON.stringify({ type:'update:available', version:_updateAvailable.version, current:APP_VERSION }))
@@ -2554,6 +2584,7 @@ wss.on('connection', (ws, request) => {
     try {
       const msg = JSON.parse(raw)
       if (msg.type==='ping') { ws.send(JSON.stringify({type:'pong'})); return }
+      if (ws.isApp && !['device:setChannel','group:set','group:stop'].includes(msg.type)) return
       const dev = devices[msg.deviceId]
       if (msg.type==='device:setChannel' && dev?.setChannel) dev.setChannel(msg.channel, msg.params)
       if (msg.type==='coyote:setButtonControl' && dev?.type==='coyote') {
@@ -4671,6 +4702,17 @@ setInterval(checkForUpdate, 4 * 60 * 60 * 1000)
 
 app.get('/api/update/status', requireAuth, (req, res) => {
   res.json({ current: APP_VERSION, available: _updateAvailable })
+})
+app.get('/api/app/settings', requireAdmin, (req, res) => {
+  res.json({ enabled: config.app?.enabled || false, hasPassword: !!(config.app?.passwordHash), link: getAppLink() })
+})
+app.put('/api/app/settings', requireAdmin, (req, res) => {
+  const { enabled, password } = req.body
+  if (!config.app) config.app = {}
+  if (typeof enabled === 'boolean') config.app.enabled = enabled
+  if (password) config.app.passwordHash = bcrypt.hashSync(password, 10)
+  saveConfig(config)
+  res.json({ ok: true, enabled: config.app.enabled, hasPassword: !!(config.app.passwordHash), link: getAppLink() })
 })
 
 app.post('/api/update/check', requireAuth, async (req, res) => {

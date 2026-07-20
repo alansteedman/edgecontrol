@@ -1,0 +1,327 @@
+<title>EdgeController</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0a0a">
+<link rel="manifest" href="/app/manifest.json">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100dvh;overscroll-behavior:none}
+
+/* Login */
+#login-overlay{display:none;position:fixed;inset:0;background:#0a0a0a;z-index:100;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:32px}
+#login-overlay.show{display:flex}
+.login-logo{font-size:32px;font-weight:700;color:#fff;letter-spacing:-1px}
+.login-sub{font-size:13px;color:#555;margin-top:-12px}
+.login-box{width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px}
+.login-input{width:100%;padding:14px 16px;background:#181818;border:1px solid #2a2a2a;border-radius:10px;color:#e0e0e0;font-size:16px;outline:none}
+.login-input:focus{border-color:#4fc3f7}
+.login-btn{width:100%;padding:14px;background:#1a3a50;border:1px solid #1e5070;border-radius:10px;color:#4fc3f7;font-size:16px;font-weight:600;cursor:pointer}
+.login-btn:active{background:#0f2a3a}
+.login-err{font-size:13px;color:#f87171;text-align:center;min-height:18px}
+
+/* App shell */
+#app{display:none;flex-direction:column;min-height:100dvh}
+#app.show{display:flex}
+header{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:12px 16px env(safe-area-inset-top,0) 16px;background:#111;border-bottom:1px solid #1e1e1e;padding-top:calc(12px + env(safe-area-inset-top,0))}
+.app-title{font-size:16px;font-weight:700;color:#fff}
+.stop-all{padding:8px 14px;background:#2a0a0a;border:1px solid #6b1a1a;border-radius:8px;color:#f87171;font-size:13px;font-weight:700;cursor:pointer}
+.stop-all:active{background:#3a0a0a}
+
+main{flex:1;padding:12px 12px calc(12px + env(safe-area-inset-bottom,0));display:flex;flex-direction:column;gap:16px}
+
+.section-title{font-size:11px;font-weight:700;color:#444;letter-spacing:.08em;text-transform:uppercase;padding:0 4px;margin-bottom:4px}
+
+/* Device cards */
+.app-card{background:#141414;border:1px solid #222;border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:12px}
+.card-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card-name{font-size:15px;font-weight:600;color:#e0e0e0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-status{font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;flex-shrink:0}
+.st-on{background:#0d2a0d;color:#86efac;border:1px solid #1a4a1a}
+.st-off{background:#1a1a1a;color:#555;border:1px solid #2a2a2a}
+.st-part{background:#2a1a0d;color:#fbbf24;border:1px solid #4a2a0d}
+
+/* Intensity */
+.intensity-row{display:flex;align-items:center;gap:10px}
+.int-val{font-size:20px;font-weight:700;color:#4fc3f7;min-width:36px;text-align:right;font-variant-numeric:tabular-nums}
+input[type=range].app-slider{flex:1;-webkit-appearance:none;height:36px;background:transparent;cursor:pointer}
+input[type=range].app-slider::-webkit-slider-runnable-track{height:8px;background:#1e1e1e;border-radius:4px}
+input[type=range].app-slider::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;border-radius:50%;background:#4fc3f7;margin-top:-10px;box-shadow:0 2px 6px rgba(0,0,0,.5)}
+input[type=range].app-slider::-moz-range-track{height:8px;background:#1e1e1e;border-radius:4px}
+input[type=range].app-slider::-moz-range-thumb{width:28px;height:28px;border:none;border-radius:50%;background:#4fc3f7}
+
+/* Waveform strip */
+.wf-row{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.wf-row::-webkit-scrollbar{display:none}
+.wf-chip{flex-shrink:0;padding:6px 12px;background:#1e1e1e;border:1px solid #2a2a2a;border-radius:20px;font-size:12px;color:#888;cursor:pointer;white-space:nowrap;user-select:none}
+.wf-chip:active,.wf-chip.active{background:#1a2e3a;border-color:#2a5a7a;color:#4fc3f7}
+.wf-chip.act{background:#2a1e0a;border-color:#4a2e0a;color:#fbbf24}
+.wf-chip.act.active{background:#3a2e0a;border-color:#7a5a1a}
+
+/* Card footer */
+.card-foot{display:flex;justify-content:flex-end}
+.stop-btn{padding:6px 16px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;color:#888;font-size:12px;font-weight:600;cursor:pointer}
+.stop-btn:active{background:#2a0a0a;border-color:#5a1a1a;color:#f87171}
+
+/* Empty state */
+.app-empty{color:#444;font-size:13px;text-align:center;padding:24px}
+
+/* Disconnected banner */
+#disc-banner{display:none;position:fixed;bottom:0;left:0;right:0;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0));background:#1a1a00;border-top:1px solid #3a3a00;color:#fbbf24;font-size:12px;text-align:center;z-index:20}
+</style>
+
+<div id="login-overlay">
+  <div class="login-logo">EdgeController</div>
+  <div class="login-sub">Mobile Control</div>
+  <div class="login-box">
+    <input class="login-input" id="pwd" type="password" placeholder="Password" autocomplete="current-password">
+    <button class="login-btn" onclick="login()">Enter</button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
+
+<div id="app">
+  <header>
+    <span class="app-title">EdgeController</span>
+    <button class="stop-all" onclick="stopAll()">&#9632; Stop All</button>
+  </header>
+  <main>
+    <div>
+      <div class="section-title">Groups</div>
+      <div id="group-cards"><div class="app-empty">No groups</div></div>
+    </div>
+    <div>
+      <div class="section-title">Channels</div>
+      <div id="channel-cards"><div class="app-empty">No devices</div></div>
+    </div>
+  </main>
+</div>
+<div id="disc-banner">Reconnecting&#8230;</div>
+
+<script>
+let ws, S = { devices: {}, groups: [], waveforms: { builtin: [] }, activities: [] }
+const gState = {}, cState = {}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+async function login() {
+  const pwd = document.getElementById('pwd').value
+  const err = document.getElementById('login-err')
+  err.textContent = ''
+  try {
+    const r = await fetch('/api/app/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: pwd }) })
+    const d = await r.json()
+    if (!r.ok) { err.textContent = d.error || 'Login failed'; return }
+    document.getElementById('login-overlay').classList.remove('show')
+    document.getElementById('app').classList.add('show')
+    connect()
+  } catch { err.textContent = 'Connection error' }
+}
+document.getElementById('pwd').addEventListener('keydown', e => { if (e.key === 'Enter') login() })
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function send(obj) { if (ws?.readyState === 1) ws.send(JSON.stringify(obj)) }
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  ws = new WebSocket(`${proto}//${location.host}`)
+  ws.onopen = () => { document.getElementById('disc-banner').style.display = 'none' }
+  ws.onclose = () => { document.getElementById('disc-banner').style.display = 'block'; setTimeout(connect, 2000) }
+  ws.onerror = () => ws.close()
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data)
+    if (m.type === 'state') {
+      S.groups = m.groups || []
+      S.activities = m.activities || []
+      S.waveforms = m.waveforms || { builtin: [] }
+      if (m.devices) { S.devices = {}; m.devices.forEach(d => S.devices[d.id] = d) }
+      renderAll()
+    }
+    if (m.type === 'device:state') {
+      const d = S.devices[m.id]; if (d) { d.channels = m.channels; d.status = m.status || d.status }
+      renderChannels()
+    }
+    if (m.type === 'device:updated') {
+      const d = S.devices[m.device.id]; if (d) Object.assign(d, m.device)
+      renderChannels()
+    }
+    if (m.type === 'group:updated') { S.groups = S.groups.map(g => g.id === m.group.id ? m.group : g); renderGroups() }
+    if (m.type === 'group:added')   { S.groups = [...S.groups, m.group]; renderGroups() }
+    if (m.type === 'group:removed') { S.groups = S.groups.filter(g => g.id !== m.id); renderGroups() }
+  }
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderAll() { renderGroups(); renderChannels() }
+
+function renderGroups() {
+  const el = document.getElementById('group-cards')
+  const groups = S.groups || []
+  if (!groups.length) { el.innerHTML = '<div class="app-empty">No groups configured</div>'; return }
+  el.innerHTML = ''
+  groups.forEach(g => el.appendChild(buildGroupCard(g)))
+}
+
+function renderChannels() {
+  const el = document.getElementById('channel-cards')
+  const coyotes = Object.values(S.devices).filter(d => d.type === 'coyote')
+  if (!coyotes.length) { el.innerHTML = '<div class="app-empty">No Coyote devices connected</div>'; return }
+  el.innerHTML = ''
+  coyotes.forEach(dev => {
+    ['A','B'].forEach(ch => {
+      const card = buildChannelCard(dev, ch)
+      if (card) el.appendChild(card)
+    })
+  })
+}
+
+function buildGroupCard(grp) {
+  const channels = grp.channels || []
+  const allConn = channels.length > 0 && channels.every(c => S.devices[c.deviceId]?.status === 'connected')
+  const anyConn = channels.some(c => S.devices[c.deviceId]?.status === 'connected')
+  const sc = allConn ? 'st-on' : anyConn ? 'st-part' : 'st-off'
+  const stLabel = allConn ? 'connected' : anyConn ? 'partial' : 'offline'
+  if (!gState[grp.id]) gState[grp.id] = { intensity: 0, waveform: 'pulse' }
+  const st = gState[grp.id]
+  const el = document.createElement('div')
+  el.className = 'app-card'; el.id = 'gc-app-' + grp.id
+  el.innerHTML = `
+    <div class="card-header">
+      <div class="card-name">${grp.name}</div>
+      <span class="card-status ${sc}">${stLabel}</span>
+    </div>
+    <div class="intensity-row">
+      <input type="range" class="app-slider" min="0" max="200" value="${st.intensity}"
+        oninput="onGrpInt('${grp.id}',this.value)"
+        onchange="sendGrpInt('${grp.id}',this.value)">
+      <div class="int-val" id="giv-${grp.id}">${st.intensity}</div>
+    </div>
+    <div class="wf-row">${buildWfChips('g:'+grp.id, st.waveform)}</div>
+    <div class="card-foot"><button class="stop-btn" onclick="stopGroup('${grp.id}')">Stop</button></div>`
+  return el
+}
+
+function buildChannelCard(dev, ch) {
+  const chData = dev.channels?.[ch]
+  if (!chData) return null
+  const connected = dev.status === 'connected'
+  const key = dev.id + ':' + ch
+  if (!cState[key]) cState[key] = { intensity: chData.intensity || 0, waveform: chData.waveform || 'pulse' }
+  const st = cState[key]
+  const el = document.createElement('div')
+  el.className = 'app-card'; el.id = 'cc-app-' + dev.id + ch
+  el.innerHTML = `
+    <div class="card-header">
+      <div class="card-name">${dev.name || dev.id} · ${ch}</div>
+      <span class="card-status ${connected ? 'st-on' : 'st-off'}">${connected ? 'connected' : 'offline'}</span>
+    </div>
+    <div class="intensity-row">
+      <input type="range" class="app-slider" min="0" max="200" value="${st.intensity}"
+        oninput="onChInt('${dev.id}','${ch}',this.value)"
+        onchange="sendChInt('${dev.id}','${ch}',this.value)">
+      <div class="int-val" id="civ-${dev.id}${ch}">${st.intensity}</div>
+    </div>
+    <div class="wf-row">${buildWfChips('c:'+dev.id+':'+ch, st.waveform)}</div>
+    <div class="card-foot"><button class="stop-btn" onclick="stopChannel('${dev.id}','${ch}')">Stop</button></div>`
+  return el
+}
+
+function buildWfChips(prefix, activeWf) {
+  let html = ''
+  ;(S.activities || []).forEach(a => {
+    const active = activeWf === 'activity:' + a.id
+    html += `<button class="wf-chip act${active?' active':''}" onclick="pickWf('${prefix}','activity:${a.id}')">${a.icon || a.name}</button>`
+  })
+  ;(S.waveforms.builtin || []).filter(w => !w.group || w.group === 'classic').forEach(w => {
+    const active = activeWf === w.id
+    html += `<button class="wf-chip${active?' active':''}" onclick="pickWf('${prefix}','${w.id}')">${w.icon || w.name}</button>`
+  })
+  return html
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+function onGrpInt(grpId, val) {
+  val = parseInt(val)
+  if (!gState[grpId]) gState[grpId] = {}
+  gState[grpId].intensity = val
+  const el = document.getElementById('giv-' + grpId); if (el) el.textContent = val
+}
+function sendGrpInt(grpId, val) {
+  send({ type:'group:set', groupId:grpId, params:{ intensity: parseInt(val) } })
+}
+function onChInt(devId, ch, val) {
+  val = parseInt(val)
+  const key = devId + ':' + ch
+  if (!cState[key]) cState[key] = {}
+  cState[key].intensity = val
+  const el = document.getElementById('civ-' + devId + ch); if (el) el.textContent = val
+}
+function sendChInt(devId, ch, val) {
+  send({ type:'device:setChannel', deviceId:devId, channel:ch, params:{ intensity: parseInt(val) } })
+}
+
+function pickWf(prefix, wfId) {
+  const parts = prefix.split(':')
+  const isActivity = wfId.startsWith('activity:')
+  const actId = isActivity ? wfId.slice(9) : null
+  if (parts[0] === 'g') {
+    const grpId = parts[1]
+    if (!gState[grpId]) gState[grpId] = {}
+    gState[grpId].waveform = wfId
+    gState[grpId].intensity = 0
+    const el = document.getElementById('gc-app-' + grpId)
+    if (el) { el.querySelectorAll('.wf-chip').forEach(b => b.classList.remove('active')); el.querySelector(`.wf-chip[onclick*="${CSS.escape(wfId)}"]`)?.classList.add('active') }
+    const iv = document.getElementById('giv-' + grpId); if (iv) iv.textContent = '0'
+    const sl = document.querySelector(`#gc-app-${grpId} .app-slider`); if (sl) sl.value = 0
+    if (isActivity) send({ type:'group:set', groupId:grpId, params:{ activityId:actId, intensity:0 } })
+    else send({ type:'group:set', groupId:grpId, params:{ waveform:wfId, intensity:0 } })
+  } else {
+    const devId = parts[1], ch = parts[2]
+    const key = devId + ':' + ch
+    if (!cState[key]) cState[key] = {}
+    cState[key].waveform = wfId
+    cState[key].intensity = 0
+    const el = document.getElementById('cc-app-' + devId + ch)
+    if (el) { el.querySelectorAll('.wf-chip').forEach(b => b.classList.remove('active')); el.querySelector(`.wf-chip[onclick*="${CSS.escape(wfId)}"]`)?.classList.add('active') }
+    const iv = document.getElementById('civ-' + devId + ch); if (iv) iv.textContent = '0'
+    const sl = document.querySelector(`#cc-app-${devId}${ch} .app-slider`); if (sl) sl.value = 0
+    if (isActivity) send({ type:'device:setChannel', deviceId:devId, channel:ch, params:{ activityId:actId, intensity:0 } })
+    else send({ type:'device:setChannel', deviceId:devId, channel:ch, params:{ waveform:wfId, intensity:0 } })
+  }
+}
+
+function stopGroup(grpId) {
+  if (!gState[grpId]) gState[grpId] = {}
+  gState[grpId].intensity = 0
+  const sl = document.querySelector(`#gc-app-${grpId} .app-slider`); if (sl) sl.value = 0
+  const iv = document.getElementById('giv-' + grpId); if (iv) iv.textContent = '0'
+  send({ type:'group:stop', groupId:grpId })
+}
+
+function stopChannel(devId, ch) {
+  const key = devId + ':' + ch
+  if (!cState[key]) cState[key] = {}
+  cState[key].intensity = 0
+  const sl = document.querySelector(`#cc-app-${devId}${ch} .app-slider`); if (sl) sl.value = 0
+  const iv = document.getElementById('civ-' + devId + ch); if (iv) iv.textContent = '0'
+  send({ type:'device:setChannel', deviceId:devId, channel:ch, params:{ intensity:0 } })
+}
+
+function stopAll() {
+  ;(S.groups || []).forEach(g => stopGroup(g.id))
+  Object.values(S.devices).filter(d => d.type === 'coyote').forEach(dev => {
+    ['A','B'].forEach(ch => { if (dev.channels?.[ch]) stopChannel(dev.id, ch) })
+  })
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const r = await fetch('/api/app/ping')
+    if (r.status === 401) { document.getElementById('login-overlay').classList.add('show'); return }
+    document.getElementById('app').classList.add('show')
+    connect()
+  } catch { document.getElementById('login-overlay').classList.add('show') }
+}
+init()
+</script>

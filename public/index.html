@@ -891,6 +891,35 @@ select.mci{cursor:pointer}
         <div style="font-size:10px;color:#2e2e2e;line-height:1.6">If locked out, SSH in and set <span style="font-family:monospace;color:#444">auth.enabled: false</span> in config.json.</div>
       </div>
 
+      <!-- Mobile Access -->
+      <div class="cfg-card">
+        <div class="sec-row" style="margin-bottom:14px">
+          <div class="sec-label">Mobile Access</div>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <span style="font-size:12px;color:#666" id="app-enabled-lbl">Disabled</span>
+            <input type="checkbox" id="app-enabled-chk" onchange="appSetEnabled(this.checked)" style="width:16px;height:16px;cursor:pointer">
+          </label>
+        </div>
+        <div id="app-access-body" style="display:none">
+          <div class="cfg-row" style="margin-bottom:10px">
+            <label>Password</label>
+            <div style="display:flex;gap:8px;flex:1">
+              <input type="password" id="app-pwd-input" placeholder="Set app password…" style="flex:1;background:#0d0d0d;border:1px solid #1e1e1e;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:13px">
+              <button class="btn btn-ghost btn-sm" onclick="appSetPassword()">Set</button>
+            </div>
+          </div>
+          <div id="app-pwd-status" style="font-size:11px;color:#6b7280;margin-bottom:10px;display:none"></div>
+          <div class="cfg-row">
+            <label>Share link</label>
+            <div style="display:flex;gap:8px;align-items:center;flex:1;min-width:0">
+              <span id="app-link-url" style="font-size:12px;color:#4fc3f7;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"></span>
+              <button class="btn btn-ghost btn-sm" onclick="appCopyLink()">Copy</button>
+            </div>
+          </div>
+          <div id="app-no-pwd-warn" style="font-size:11px;color:#f59e0b;margin-top:8px;display:none">&#9888; Set a password before sharing the link</div>
+        </div>
+      </div>
+
       <!-- Backup & Restore -->
       <div class="cfg-card">
         <div class="sec-label" style="margin-bottom:6px">Backup &amp; Restore</div>
@@ -1280,6 +1309,47 @@ async function _updInfo() {
   }
 }
 
+let _appSettings = {}
+async function loadAppSettings() {
+  try {
+    const r = await fetch('/api/app/settings')
+    if (!r.ok) return
+    _appSettings = await r.json()
+    document.getElementById('app-enabled-chk').checked = _appSettings.enabled
+    document.getElementById('app-enabled-lbl').textContent = _appSettings.enabled ? 'Enabled' : 'Disabled'
+    document.getElementById('app-access-body').style.display = _appSettings.enabled ? 'block' : 'none'
+    document.getElementById('app-link-url').textContent = _appSettings.link || ''
+    document.getElementById('app-no-pwd-warn').style.display = (_appSettings.enabled && !_appSettings.hasPassword) ? 'block' : 'none'
+  } catch {}
+}
+async function appSetEnabled(val) {
+  document.getElementById('app-enabled-lbl').textContent = val ? 'Enabled' : 'Disabled'
+  document.getElementById('app-access-body').style.display = val ? 'block' : 'none'
+  const r = await fetch('/api/app/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ enabled: val }) })
+  const d = await r.json()
+  _appSettings = d
+  document.getElementById('app-link-url').textContent = d.link || ''
+  document.getElementById('app-no-pwd-warn').style.display = (val && !d.hasPassword) ? 'block' : 'none'
+}
+async function appSetPassword() {
+  const pwd = document.getElementById('app-pwd-input').value.trim()
+  if (!pwd) return
+  const st = document.getElementById('app-pwd-status')
+  st.style.display = 'block'; st.textContent = 'Setting…'; st.style.color = '#6b7280'
+  const r = await fetch('/api/app/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ password: pwd }) })
+  const d = await r.json()
+  _appSettings = d
+  document.getElementById('app-pwd-input').value = ''
+  document.getElementById('app-no-pwd-warn').style.display = 'none'
+  st.textContent = 'Password set'; st.style.color = '#86efac'
+  setTimeout(() => { st.style.display = 'none' }, 3000)
+}
+function appCopyLink() {
+  const link = _appSettings.link || document.getElementById('app-link-url').textContent
+  navigator.clipboard?.writeText(link).then(() => {
+    const btn = event.target; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 2000)
+  })
+}
 async function cfgCheckForUpdate() {
   const btn = document.getElementById('cfg-update-check-btn')
   const status = document.getElementById('cfg-update-status')
@@ -1634,7 +1704,7 @@ function showTab(name,btn) {
   if(name==='eom') renderEomCards()
   if(name==='hue') renderHueCards()
   if(name==='community') initCommunity()
-  if(name==='config') { loadWifiStatus(); loadBtCurrent() }
+  if(name==='config') { loadWifiStatus(); loadBtCurrent(); loadAppSettings() }
   if(name==='waveforms') setTimeout(initBandSelector, 50)
   if(name==='macros') setTimeout(()=>window._macroTabActivated?.(), 50)
   if(name==='camera') { _cameraActive=true; cameraStart() }

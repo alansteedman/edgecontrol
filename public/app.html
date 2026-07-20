@@ -22,19 +22,26 @@ body{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFo
 .login-err{font-size:13px;color:#f87171;text-align:center;min-height:18px}
 
 /* App shell */
-#app{display:none;flex-direction:column;min-height:100dvh}
+#app{display:none;flex-direction:column;height:100dvh}
 #app.show{display:flex}
-header{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top,0));background:#111;border-bottom:1px solid #1e1e1e}
+
+/* Header */
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top,0));background:#111;border-bottom:1px solid #1e1e1e;flex-shrink:0;z-index:10}
 .app-title{font-size:16px;font-weight:700;color:#fff}
 .stop-all{padding:8px 14px;background:#2a0a0a;border:1px solid #6b1a1a;border-radius:8px;color:#f87171;font-size:13px;font-weight:700;cursor:pointer}
 .stop-all:active{background:#3a0a0a}
 
-main{flex:1;padding:12px 12px;padding-bottom:calc(12px + env(safe-area-inset-bottom,0));display:flex;flex-direction:column;gap:16px}
+/* Tabs */
+.tab-bar{display:flex;background:#0d0d0d;border-bottom:1px solid #1e1e1e;flex-shrink:0}
+.tab-btn{flex:1;padding:11px 0;font-size:13px;font-weight:600;color:#555;background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+.tab-btn.active{color:#4fc3f7;border-bottom-color:#4fc3f7}
 
-.section-title{font-size:11px;font-weight:700;color:#444;letter-spacing:.08em;text-transform:uppercase;padding:0 4px;margin-bottom:6px}
+/* Tab panes */
+.tab-pane{display:none;flex:1;overflow-y:auto;padding:12px 12px;padding-bottom:calc(12px + env(safe-area-inset-bottom,0));flex-direction:column;gap:10px}
+.tab-pane.active{display:flex}
 
 /* Device cards */
-.app-card{background:#141414;border:1px solid #222;border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.app-card{background:#141414;border:1px solid #222;border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px;flex-shrink:0}
 .card-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .card-name{font-size:15px;font-weight:600;color:#e0e0e0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .card-status{font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;flex-shrink:0}
@@ -91,16 +98,12 @@ input[type=range].app-slider.freq-slider::-moz-range-thumb{background:#fbbf24}
     <span class="app-title">EdgeController</span>
     <button class="stop-all" onclick="stopAll()">&#9632; Stop All</button>
   </header>
-  <main>
-    <div>
-      <div class="section-title">Groups</div>
-      <div id="group-cards" style="display:flex;flex-direction:column;gap:10px"><div class="app-empty">No groups</div></div>
-    </div>
-    <div>
-      <div class="section-title">Channels</div>
-      <div id="channel-cards" style="display:flex;flex-direction:column;gap:10px"><div class="app-empty">No devices</div></div>
-    </div>
-  </main>
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tab-btn-groups" onclick="showTab('groups')">Groups</button>
+    <button class="tab-btn" id="tab-btn-channels" onclick="showTab('channels')">Channels</button>
+  </div>
+  <div class="tab-pane active" id="tab-groups"></div>
+  <div class="tab-pane" id="tab-channels"></div>
 </div>
 <div id="disc-banner">Reconnecting&hellip;</div>
 
@@ -109,8 +112,16 @@ const _WF_PRESET_FREQ = {pulse:25,breathe:100,tidal:100,wave:100,thud:10,flutter
 function wfPresetFreq(id) { return _WF_PRESET_FREQ[id] || 25 }
 function isBuiltinWf(id) { return !!(S.waveforms?.builtin||[]).find(w=>w.id===id) }
 
-let ws, S = { devices:{}, groups:[], waveforms:{builtin:[]}, activities:[] }
+let ws, S = { devices:{}, groups:[], waveforms:{builtin:[],custom:[],live:[]}, activities:[] }
 const gState = {}, cState = {}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'))
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'))
+  document.getElementById('tab-btn-'+name).classList.add('active')
+  document.getElementById('tab-'+name).classList.add('active')
+}
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 async function login() {
@@ -142,9 +153,28 @@ function connect() {
     if (m.type==='state') {
       S.groups = m.groups || []
       S.activities = m.activities || []
-      S.waveforms = m.waveforms || {builtin:[]}
+      S.waveforms = m.waveforms || {builtin:[],custom:[],live:[]}
       if (m.devices) { S.devices={}; m.devices.forEach(d => S.devices[d.id]=d) }
       renderAll()
+    }
+    if (m.type==='waveforms:updated') {
+      S.waveforms = {...(m.waveforms||{}), live: m.waveforms?.live || S.waveforms.live || []}
+      // Rebuild all dropdowns in place
+      document.querySelectorAll('.wf-select[data-ctx]').forEach(sel => {
+        const [type, ...rest] = sel.dataset.ctx.split(':')
+        const st = type==='g' ? gState[rest[0]] : cState[rest[0]+':'+rest[1]]
+        if (!st) return
+        sel.innerHTML = buildWfOptions(st.waveform)
+      })
+    }
+    if (m.type==='live:audio:updated') {
+      S.waveforms.live = m.inputs || []
+      document.querySelectorAll('.wf-select[data-ctx]').forEach(sel => {
+        const [type, ...rest] = sel.dataset.ctx.split(':')
+        const st = type==='g' ? gState[rest[0]] : cState[rest[0]+':'+rest[1]]
+        if (!st) return
+        sel.innerHTML = buildWfOptions(st.waveform)
+      })
     }
     if (m.type==='device:state') {
       if (S.devices[m.id]) S.devices[m.id].channels = m.channels
@@ -158,8 +188,8 @@ function connect() {
     if (m.type==='group:added')   { S.groups=[...S.groups,m.group]; renderGroups() }
     if (m.type==='group:removed') { S.groups=S.groups.filter(g=>g.id!==m.id); renderGroups() }
     if (m.type==='groups:reordered') {
-      const map = Object.fromEntries(S.groups.map(g=>[g.id,g]))
-      S.groups = m.ids.map(id=>map[id]).filter(Boolean)
+      const map=Object.fromEntries(S.groups.map(g=>[g.id,g]))
+      S.groups=m.ids.map(id=>map[id]).filter(Boolean)
       renderGroups()
     }
   }
@@ -169,7 +199,7 @@ function connect() {
 function renderAll() { renderGroups(); renderChannels() }
 
 function renderGroups() {
-  const el = document.getElementById('group-cards')
+  const el = document.getElementById('tab-groups')
   const groups = S.groups || []
   if (!groups.length) { el.innerHTML='<div class="app-empty">No groups configured</div>'; return }
   el.innerHTML = ''
@@ -177,7 +207,7 @@ function renderGroups() {
 }
 
 function renderChannels() {
-  const el = document.getElementById('channel-cards')
+  const el = document.getElementById('tab-channels')
   const coyotes = Object.values(S.devices).filter(d=>d.type==='coyote')
   if (!coyotes.length) { el.innerHTML='<div class="app-empty">No Coyote devices connected</div>'; return }
   el.innerHTML = ''
@@ -192,12 +222,16 @@ function renderChannels() {
 // ── Waveform dropdown ─────────────────────────────────────────────────────────
 function buildWfOptions(activeWf) {
   let html = ''
-  const acts = S.activities || []
-  const builtins = (S.waveforms.builtin||[]).filter(w=>!w.group||w.group==='classic')
+  const acts    = S.activities || []
+  const builtins= (S.waveforms.builtin||[]).filter(w=>!w.group||w.group==='classic')
+  const customs = (S.waveforms.custom||[]).filter(w=>w.type!=='audio')
+  const audios  = (S.waveforms.custom||[]).filter(w=>w.type==='audio')
+  const lives   = S.waveforms.live || []
+
   if (acts.length) {
     html += '<optgroup label="Activities">'
     acts.forEach(a => {
-      const val = 'activity:'+a.id
+      const val='activity:'+a.id
       html += `<option value="${val}"${activeWf===val?' selected':''}>${a.icon?a.icon+' ':''}${a.name}</option>`
     })
     html += '</optgroup>'
@@ -206,6 +240,27 @@ function buildWfOptions(activeWf) {
     html += '<optgroup label="Waveforms">'
     builtins.forEach(w => {
       html += `<option value="${w.id}"${activeWf===w.id?' selected':''}>${w.icon?w.icon+' ':''}${w.name}</option>`
+    })
+    html += '</optgroup>'
+  }
+  if (customs.length) {
+    html += '<optgroup label="Custom">'
+    customs.forEach(w => {
+      html += `<option value="${w.id}"${activeWf===w.id?' selected':''}>&#127381; ${w.name}</option>`
+    })
+    html += '</optgroup>'
+  }
+  if (audios.length) {
+    html += '<optgroup label="Audio">'
+    audios.forEach(w => {
+      html += `<option value="${w.id}"${activeWf===w.id?' selected':''}>&#127925; ${w.name}</option>`
+    })
+    html += '</optgroup>'
+  }
+  if (lives.length) {
+    html += '<optgroup label="Live Input">'
+    lives.forEach(w => {
+      html += `<option value="${w.id}"${activeWf===w.id?' selected':''}>&#127908; ${w.name}${w.active?'':' (off)'}</option>`
     })
     html += '</optgroup>'
   }
@@ -219,16 +274,16 @@ function buildGroupCard(grp) {
   const anyConn = channels.some(c=>S.devices[c.deviceId]?.status==='connected')
   const sc = allConn?'st-on':anyConn?'st-part':'st-off'
   const stLabel = allConn?'connected':anyConn?'partial':'offline'
-  if (!gState[grp.id]) gState[grp.id] = {intensity:0, waveform:'pulse', baseFreq:wfPresetFreq('pulse'), isActivity:false}
+  if (!gState[grp.id]) gState[grp.id]={intensity:0,waveform:'pulse',baseFreq:wfPresetFreq('pulse'),isActivity:false,freqEnabled:true}
   const st = gState[grp.id]
   const el = document.createElement('div')
-  el.className = 'app-card'; el.id = 'gc-app-'+grp.id
-  el.innerHTML = `
+  el.className='app-card'; el.id='gc-app-'+grp.id
+  el.innerHTML=`
     <div class="card-header">
       <div class="card-name">${grp.name}</div>
       <span class="card-status ${sc}">${stLabel}</span>
     </div>
-    <select class="wf-select" onchange="onGrpWf('${grp.id}',this.value)">${buildWfOptions(st.waveform)}</select>
+    <select class="wf-select" data-ctx="g:${grp.id}" onchange="onGrpWf('${grp.id}',this.value)">${buildWfOptions(st.waveform)}</select>
     <div class="slider-row">
       <span class="slider-lbl">I</span>
       <input type="range" class="app-slider int-slider" min="0" max="200" value="${st.intensity}"
@@ -236,9 +291,9 @@ function buildGroupCard(grp) {
         onchange="sendGrpInt('${grp.id}',this.value)">
       <span class="slider-val int-val" id="giv-${grp.id}">${st.intensity}</span>
     </div>
-    <div class="slider-row freq-row${st.isActivity?' disabled':''}" id="gfrow-${grp.id}">
+    <div class="slider-row freq-row${st.freqEnabled?'':' disabled'}" id="gfrow-${grp.id}">
       <span class="slider-lbl">Hz</span>
-      <input type="range" class="app-slider freq-slider" min="10" max="200" value="${st.baseFreq}"${st.isActivity?' disabled':''}
+      <input type="range" class="app-slider freq-slider" min="10" max="200" value="${st.baseFreq}"${st.freqEnabled?'':' disabled'}
         oninput="document.getElementById('gfv-${grp.id}').textContent=this.value+'Hz'"
         onchange="sendGrpFreq('${grp.id}',this.value)">
       <span class="slider-val freq-val" id="gfv-${grp.id}">${st.baseFreq}Hz</span>
@@ -249,24 +304,24 @@ function buildGroupCard(grp) {
 
 // ── Channel card ──────────────────────────────────────────────────────────────
 function buildChannelCard(dev, ch) {
-  const chData = dev.channels?.[ch]
-  if (!chData) return null
+  const chData = dev.channels?.[ch]; if (!chData) return null
   const connected = dev.status==='connected'
   const key = dev.id+':'+ch
   if (!cState[key]) {
     const isAct = chData.mode==='activity' && !!chData.activityId
     const activeWf = isAct ? 'activity:'+chData.activityId : (chData.waveform||'pulse')
-    cState[key] = {intensity:chData.intensity||0, waveform:activeWf, baseFreq:chData.baseFreq||wfPresetFreq(chData.waveform||'pulse'), isActivity:isAct}
+    const freqEnabled = !isAct && isBuiltinWf(activeWf)
+    cState[key]={intensity:chData.intensity||0,waveform:activeWf,baseFreq:chData.baseFreq||wfPresetFreq(chData.waveform||'pulse'),isActivity:isAct,freqEnabled}
   }
   const st = cState[key]
   const el = document.createElement('div')
-  el.className = 'app-card'; el.id = 'cc-app-'+dev.id+ch
-  el.innerHTML = `
+  el.className='app-card'; el.id='cc-app-'+dev.id+ch
+  el.innerHTML=`
     <div class="card-header">
       <div class="card-name">${dev.name||dev.id} &middot; ${ch}</div>
       <span class="card-status ${connected?'st-on':'st-off'}">${connected?'connected':'offline'}</span>
     </div>
-    <select class="wf-select" onchange="onChWf('${dev.id}','${ch}',this.value)">${buildWfOptions(st.waveform)}</select>
+    <select class="wf-select" data-ctx="c:${dev.id}:${ch}" onchange="onChWf('${dev.id}','${ch}',this.value)">${buildWfOptions(st.waveform)}</select>
     <div class="slider-row">
       <span class="slider-lbl">I</span>
       <input type="range" class="app-slider int-slider" min="0" max="200" value="${st.intensity}"
@@ -274,9 +329,9 @@ function buildChannelCard(dev, ch) {
         onchange="sendChInt('${dev.id}','${ch}',this.value)">
       <span class="slider-val int-val" id="civ-${dev.id}${ch}">${st.intensity}</span>
     </div>
-    <div class="slider-row freq-row${st.isActivity?' disabled':''}" id="cfrow-${dev.id}${ch}">
+    <div class="slider-row freq-row${st.freqEnabled?'':' disabled'}" id="cfrow-${dev.id}${ch}">
       <span class="slider-lbl">Hz</span>
-      <input type="range" class="app-slider freq-slider" min="10" max="200" value="${st.baseFreq}"${st.isActivity?' disabled':''}
+      <input type="range" class="app-slider freq-slider" min="10" max="200" value="${st.baseFreq}"${st.freqEnabled?'':' disabled'}
         oninput="document.getElementById('cfv-${dev.id}${ch}').textContent=this.value+'Hz'"
         onchange="sendChFreq('${dev.id}','${ch}',this.value)">
       <span class="slider-val freq-val" id="cfv-${dev.id}${ch}">${st.baseFreq}Hz</span>
@@ -286,105 +341,106 @@ function buildChannelCard(dev, ch) {
 }
 
 // ── Waveform / activity selection ─────────────────────────────────────────────
-function _setFreqRow(rowEl, inputEl, valEl, disabled, freq) {
+function _applyFreqRow(rowEl, fslEl, fvEl, enabled, freq) {
   if (!rowEl) return
-  rowEl.classList.toggle('disabled', disabled)
-  inputEl.disabled = disabled
-  if (freq != null) { inputEl.value = freq; valEl.textContent = freq+'Hz' }
+  rowEl.classList.toggle('disabled', !enabled)
+  if (fslEl) fslEl.disabled = !enabled
+  if (enabled && freq != null) {
+    if (fslEl) fslEl.value = freq
+    if (fvEl) fvEl.textContent = freq+'Hz'
+  }
 }
 
 function onGrpWf(grpId, val) {
-  if (!gState[grpId]) gState[grpId] = {}
-  const st = gState[grpId]
-  const isAct = val.startsWith('activity:')
-  st.waveform = val; st.isActivity = isAct; st.intensity = 0
-  const iv = document.getElementById('giv-'+grpId); if (iv) iv.textContent = '0'
-  const isl = document.querySelector(`#gc-app-${grpId} .int-slider`); if (isl) isl.value = 0
-  const frow = document.getElementById('gfrow-'+grpId)
-  const fsl = frow?.querySelector('input')
-  const fv = document.getElementById('gfv-'+grpId)
-  if (!isAct) {
-    const preset = wfPresetFreq(val); st.baseFreq = preset
-    _setFreqRow(frow, fsl, fv, false, preset)
-    send({type:'group:set', groupId:grpId, params:{waveform:val, intensity:0, baseFreq:preset}})
+  if (!gState[grpId]) gState[grpId]={}
+  const st=gState[grpId]
+  const isAct=val.startsWith('activity:')
+  const freqEnabled=!isAct && isBuiltinWf(val)
+  st.waveform=val; st.isActivity=isAct; st.freqEnabled=freqEnabled; st.intensity=0
+  const iv=document.getElementById('giv-'+grpId); if(iv) iv.textContent='0'
+  const isl=document.querySelector(`#gc-app-${grpId} .int-slider`); if(isl) isl.value=0
+  const frow=document.getElementById('gfrow-'+grpId)
+  const fsl=frow?.querySelector('input'), fv=document.getElementById('gfv-'+grpId)
+  if (isAct) {
+    _applyFreqRow(frow,fsl,fv,false,null)
+    send({type:'group:set',groupId:grpId,params:{activityId:val.slice(9),intensity:0}})
   } else {
-    _setFreqRow(frow, fsl, fv, true, null)
-    send({type:'group:set', groupId:grpId, params:{activityId:val.slice(9), intensity:0}})
+    const params={waveform:val,intensity:0}
+    if (freqEnabled) { const p=wfPresetFreq(val); st.baseFreq=p; _applyFreqRow(frow,fsl,fv,true,p); params.baseFreq=p }
+    else { _applyFreqRow(frow,fsl,fv,false,null) }
+    send({type:'group:set',groupId:grpId,params})
   }
 }
 
 function onChWf(devId, ch, val) {
-  const key = devId+':'+ch
-  if (!cState[key]) cState[key] = {}
-  const st = cState[key]
-  const isAct = val.startsWith('activity:')
-  st.waveform = val; st.isActivity = isAct; st.intensity = 0
-  const iv = document.getElementById('civ-'+devId+ch); if (iv) iv.textContent = '0'
-  const isl = document.querySelector(`#cc-app-${devId}${ch} .int-slider`); if (isl) isl.value = 0
-  const frow = document.getElementById('cfrow-'+devId+ch)
-  const fsl = frow?.querySelector('input')
-  const fv = document.getElementById('cfv-'+devId+ch)
-  if (!isAct) {
-    const preset = wfPresetFreq(val); st.baseFreq = preset
-    _setFreqRow(frow, fsl, fv, false, preset)
-    send({type:'device:setChannel', deviceId:devId, channel:ch, params:{waveform:val, intensity:0, baseFreq:preset}})
+  const key=devId+':'+ch
+  if (!cState[key]) cState[key]={}
+  const st=cState[key]
+  const isAct=val.startsWith('activity:')
+  const freqEnabled=!isAct && isBuiltinWf(val)
+  st.waveform=val; st.isActivity=isAct; st.freqEnabled=freqEnabled; st.intensity=0
+  const iv=document.getElementById('civ-'+devId+ch); if(iv) iv.textContent='0'
+  const isl=document.querySelector(`#cc-app-${devId}${ch} .int-slider`); if(isl) isl.value=0
+  const frow=document.getElementById('cfrow-'+devId+ch)
+  const fsl=frow?.querySelector('input'), fv=document.getElementById('cfv-'+devId+ch)
+  if (isAct) {
+    _applyFreqRow(frow,fsl,fv,false,null)
+    send({type:'device:setChannel',deviceId:devId,channel:ch,params:{activityId:val.slice(9),intensity:0}})
   } else {
-    _setFreqRow(frow, fsl, fv, true, null)
-    send({type:'device:setChannel', deviceId:devId, channel:ch, params:{activityId:val.slice(9), intensity:0}})
+    const params={waveform:val,intensity:0}
+    if (freqEnabled) { const p=wfPresetFreq(val); st.baseFreq=p; _applyFreqRow(frow,fsl,fv,true,p); params.baseFreq=p }
+    else { _applyFreqRow(frow,fsl,fv,false,null) }
+    send({type:'device:setChannel',deviceId:devId,channel:ch,params})
   }
 }
 
 // ── Intensity ─────────────────────────────────────────────────────────────────
-function onGrpInt(grpId, val) {
-  val = parseInt(val); if (gState[grpId]) gState[grpId].intensity = val
-  const el = document.getElementById('giv-'+grpId); if (el) el.textContent = val
+function onGrpInt(grpId,val) {
+  val=parseInt(val); if(gState[grpId]) gState[grpId].intensity=val
+  const el=document.getElementById('giv-'+grpId); if(el) el.textContent=val
 }
-function sendGrpInt(grpId, val) {
-  send({type:'group:set', groupId:grpId, params:{intensity:parseInt(val)}})
+function sendGrpInt(grpId,val) { send({type:'group:set',groupId:grpId,params:{intensity:parseInt(val)}}) }
+function onChInt(devId,ch,val) {
+  val=parseInt(val); const key=devId+':'+ch; if(cState[key]) cState[key].intensity=val
+  const el=document.getElementById('civ-'+devId+ch); if(el) el.textContent=val
 }
-function onChInt(devId, ch, val) {
-  val = parseInt(val); const key=devId+':'+ch; if (cState[key]) cState[key].intensity=val
-  const el = document.getElementById('civ-'+devId+ch); if (el) el.textContent = val
-}
-function sendChInt(devId, ch, val) {
-  send({type:'device:setChannel', deviceId:devId, channel:ch, params:{intensity:parseInt(val)}})
-}
+function sendChInt(devId,ch,val) { send({type:'device:setChannel',deviceId:devId,channel:ch,params:{intensity:parseInt(val)}}) }
 
 // ── Frequency ─────────────────────────────────────────────────────────────────
-function sendGrpFreq(grpId, val) {
-  const hz = parseInt(val); if (gState[grpId]) gState[grpId].baseFreq = hz
-  send({type:'group:set', groupId:grpId, params:{baseFreq:hz}})
+function sendGrpFreq(grpId,val) {
+  const hz=parseInt(val); if(gState[grpId]) gState[grpId].baseFreq=hz
+  send({type:'group:set',groupId:grpId,params:{baseFreq:hz}})
 }
-function sendChFreq(devId, ch, val) {
-  const hz = parseInt(val); const key=devId+':'+ch; if (cState[key]) cState[key].baseFreq = hz
-  send({type:'device:setChannel', deviceId:devId, channel:ch, params:{baseFreq:hz}})
+function sendChFreq(devId,ch,val) {
+  const hz=parseInt(val); const key=devId+':'+ch; if(cState[key]) cState[key].baseFreq=hz
+  send({type:'device:setChannel',deviceId:devId,channel:ch,params:{baseFreq:hz}})
 }
 
 // ── Stop ──────────────────────────────────────────────────────────────────────
 function stopGroup(grpId) {
-  if (gState[grpId]) gState[grpId].intensity = 0
-  const sl = document.querySelector(`#gc-app-${grpId} .int-slider`); if (sl) sl.value = 0
-  const iv = document.getElementById('giv-'+grpId); if (iv) iv.textContent = '0'
-  send({type:'group:stop', groupId:grpId})
+  if(gState[grpId]) gState[grpId].intensity=0
+  const sl=document.querySelector(`#gc-app-${grpId} .int-slider`); if(sl) sl.value=0
+  const iv=document.getElementById('giv-'+grpId); if(iv) iv.textContent='0'
+  send({type:'group:stop',groupId:grpId})
 }
-function stopChannel(devId, ch) {
-  const key=devId+':'+ch; if (cState[key]) cState[key].intensity = 0
-  const sl = document.querySelector(`#cc-app-${devId}${ch} .int-slider`); if (sl) sl.value = 0
-  const iv = document.getElementById('civ-'+devId+ch); if (iv) iv.textContent = '0'
-  send({type:'device:setChannel', deviceId:devId, channel:ch, params:{intensity:0}})
+function stopChannel(devId,ch) {
+  const key=devId+':'+ch; if(cState[key]) cState[key].intensity=0
+  const sl=document.querySelector(`#cc-app-${devId}${ch} .int-slider`); if(sl) sl.value=0
+  const iv=document.getElementById('civ-'+devId+ch); if(iv) iv.textContent='0'
+  send({type:'device:setChannel',deviceId:devId,channel:ch,params:{intensity:0}})
 }
 function stopAll() {
-  ;(S.groups||[]).forEach(g => stopGroup(g.id))
-  Object.values(S.devices).filter(d=>d.type==='coyote').forEach(dev => {
-    ['A','B'].forEach(ch => { if (dev.channels?.[ch]) stopChannel(dev.id, ch) })
+  ;(S.groups||[]).forEach(g=>stopGroup(g.id))
+  Object.values(S.devices).filter(d=>d.type==='coyote').forEach(dev=>{
+    ['A','B'].forEach(ch=>{ if(dev.channels?.[ch]) stopChannel(dev.id,ch) })
   })
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   try {
-    const r = await fetch('/api/app/ping')
-    if (r.status===401) { document.getElementById('login-overlay').classList.add('show'); return }
+    const r=await fetch('/api/app/ping')
+    if(r.status===401){ document.getElementById('login-overlay').classList.add('show'); return }
     document.getElementById('app').classList.add('show')
     connect()
   } catch { document.getElementById('login-overlay').classList.add('show') }

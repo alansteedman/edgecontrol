@@ -2360,7 +2360,7 @@ function getAppLink() {
 }
 app.get('/app', (req, res) => res.sendFile(join(__dirname, 'public', 'app.html')))
 app.get('/app/manifest.json', (req, res) => res.json({
-  name: 'EdgeController', short_name: 'EdgeCtrl', start_url: '/app',
+  name: 'Kink Controller', short_name: 'KinkCtrl', start_url: '/app',
   display: 'standalone', background_color: '#0a0a0a', theme_color: '#0a0a0a',
   icons: []
 }))

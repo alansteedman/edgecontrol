@@ -1884,6 +1884,7 @@ export class StreamDeckController {
     this._lastSetWaveformId = null  // last explicitly selected waveform id
     this._groupMode = false        // true = encoders broadcast to all devices per group
     this._groupViewOffset = 0     // first group index shown (shown in pairs of 2)
+    this._channelViewOffset = 0   // first channel index shown in individual coyote mode
     this._encoderSpeedMode = [false, false, false, false]  // per-encoder: speed mode vs intensity mode
     this._estimModeOffset = 0  // first visible mode index on estim page
     // Per-encoder mode: each toggles between 'power' and its secondary ('feel' or 'rate')
@@ -2488,8 +2489,9 @@ export class StreamDeckController {
   // Return { dev, ch } for a knob index across up to 2 Coyotes (individual coyote page — by position)
   _coyoteChannelFor(idx) {
     const coyotes = Object.values(this.devices).filter(d => d.type === 'coyote')
-    const devIdx = Math.floor(idx / 2)
-    const ch = idx % 2 === 0 ? 'A' : 'B'
+    const absIdx = this._channelViewOffset + idx
+    const devIdx = Math.floor(absIdx / 2)
+    const ch = absIdx % 2 === 0 ? 'A' : 'B'
     return { dev: coyotes[devIdx] || null, ch }
   }
 
@@ -2744,11 +2746,28 @@ export class StreamDeckController {
       return
     }
 
-    // Individual mode: tap to select channel for waveform assignment
-    const chIdx = Math.floor((pos?.x ?? 0) / 200)  // 0-3
-    this._selectedChannel = this._selectedChannel === chIdx ? null : chIdx
-    this._renderKeys()
-    this._renderEncoders()
+    // Individual mode: scroll left/right or tap to select channel
+    {
+      const x = pos?.x ?? 0
+      const coyotes = Object.values(this.devices).filter(d => d.type === 'coyote')
+      const totalChannels = coyotes.length * 2
+      if (x < 30 && this._channelViewOffset > 0) {
+        this._channelViewOffset = Math.max(0, this._channelViewOffset - 4)
+        this._selectedChannel = null
+        this._renderKeys(); this._renderEncoders()
+        return
+      }
+      if (x > 770 && this._channelViewOffset + 4 < totalChannels) {
+        this._channelViewOffset += 4
+        this._selectedChannel = null
+        this._renderKeys(); this._renderEncoders()
+        return
+      }
+      const chIdx = Math.floor(x / 200)  // 0-3
+      this._selectedChannel = this._selectedChannel === chIdx ? null : chIdx
+      this._renderKeys()
+      this._renderEncoders()
+    }
   }
 
   _stopAll() {
@@ -3117,27 +3136,49 @@ export class StreamDeckController {
       return
     } else if (this.page === 'coyote') {
       if (this._groupMode) return  // group mode uses full-strip render via _refreshLcd
-      // Individual mode: custom per-channel LCD segments
-      const CH_LABELS = ['C1·A', 'C1·B', 'C2·A', 'C2·B']
-      const CH_COLORS  = ['#e74c3c', '#e67e22', '#9b59b6', '#3498db']
+      // Individual mode: paginated per-channel LCD segments
+      const CH_COLORS = ['#e74c3c', '#e67e22', '#9b59b6', '#3498db']
+      const coyotes = Object.values(this.devices).filter(d => d.type === 'coyote')
+      const totalChannels = coyotes.length * 2
+      // Clamp offset in case devices were removed
+      this._channelViewOffset = Math.min(this._channelViewOffset, Math.max(0, totalChannels - 1) & ~1)
+      const hasPrev = this._channelViewOffset > 0
+      const hasNext = this._channelViewOffset + 4 < totalChannels
       for (let i = 0; i < 4; i++) {
         const { dev, ch } = this._coyoteChannelFor(i)
-        // In group mode, both channels of a group highlight when that group is selected
-        const selected = this._groupMode
-          ? this._selectedChannel === Math.floor(i / 2)
-          : this._selectedChannel === i
-        const buf = renderCoyoteChannelLcd({
-          label:     CH_LABELS[i],
+        const absIdx = this._channelViewOffset + i
+        const devNum = Math.floor(absIdx / 2) + 1
+        const label = `C${devNum}·${ch}`
+        const selected = this._selectedChannel === i
+        const canvas = createCanvas(200, 100)
+        const ctx2 = canvas.getContext('2d')
+        const segBuf = renderCoyoteChannelLcd({
+          label,
           color:     CH_COLORS[i],
           intensity: dev?.channels?.[ch]?.intensity ?? 0,
           waveform:  this._resolveWfName(dev?.channels?.[ch]?.mode === 'activity' ? (dev.channels[ch].activityId ?? '—') : (dev?.channels?.[ch]?.waveform ?? '—')),
           connected: !!dev && dev.status === 'connected',
           selected,
-          grouped:   this._groupMode,
+          grouped:   false,
           speed:     dev?.channels?.[ch]?.speed ?? 1,
           speedMode: this._encoderSpeedMode[i],
         })
-        await this.deck.fillLcdRegion(0, i * 200, 0, buf, { format:'rgba', width:200, height:100 })
+        // Overlay ◀ / ▶ navigation arrows on the edge segments
+        if ((i === 0 && hasPrev) || (i === 3 && hasNext)) {
+          const img = createCanvas(200, 100)
+          const ictx = img.getContext('2d')
+          const id = ictx.createImageData(200, 100)
+          id.data.set(segBuf)
+          ictx.putImageData(id, 0, 0)
+          ictx.font = 'bold 18px monospace'
+          ictx.fillStyle = 'rgba(255,255,255,0.6)'
+          ictx.textBaseline = 'middle'
+          if (i === 0 && hasPrev) { ictx.textAlign = 'left';  ictx.fillText('◀', 4,  50) }
+          if (i === 3 && hasNext) { ictx.textAlign = 'right'; ictx.fillText('▶', 196, 50) }
+          await this.deck.fillLcdRegion(0, i * 200, 0, rgba(img), { format:'rgba', width:200, height:100 })
+        } else {
+          await this.deck.fillLcdRegion(0, i * 200, 0, segBuf, { format:'rgba', width:200, height:100 })
+        }
       }
       return
     } else if (this.page === 'estim') {

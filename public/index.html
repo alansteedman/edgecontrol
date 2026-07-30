@@ -409,6 +409,10 @@ select.mci{cursor:pointer}
       <span class="side-icon"><img src="/icons/shelly.svg" style="width:28px;height:28px;vertical-align:middle"></span>
       <span class="side-lbl">I/O</span>
     </button>
+    <button class="side-btn" id="nav-hdmi" style="display:none" onclick="showTab('hdmi',this)">
+      <span class="side-icon">📺</span>
+      <span class="side-lbl">TV</span>
+    </button>
   </div>
   <div class="sb-bottom">
     <button class="side-btn" id="nav-community" onclick="showTab('community',this)">
@@ -744,6 +748,13 @@ select.mci{cursor:pointer}
     </div>
   </div>
 
+  <!-- TV (HDMI) tab -->
+  <div id="tab-hdmi" class="tab-pane">
+    <div class="scroll" style="padding:24px">
+      <div id="hdmi-editor-root"></div>
+    </div>
+  </div>
+
   <!-- Hue tab -->
   <div id="tab-hue" class="tab-pane">
     <div class="scroll" style="padding:24px">
@@ -1012,6 +1023,18 @@ select.mci{cursor:pointer}
           </div>
         </details>
       </div>
+    </div>
+    <!-- Step: HDMI TV -->
+    <div id="step-hdmi" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <button class="btn btn-ghost btn-xs" onclick="showTypeStep()">← Back</button>
+        <span style="font-size:13px;font-weight:600">📺 HDMI Display</span>
+      </div>
+      <div style="margin-bottom:10px">
+        <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Display Name</label>
+        <input id="hdmi-name" type="text" placeholder="e.g. Main Screen" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+      </div>
+      <button class="btn btn-primary btn-sm" style="width:100%" onclick="addHdmiDevice()">Add TV</button>
     </div>
     <!-- Step: Tremblr -->
     <div id="step-tremblr" style="display:none">
@@ -1514,6 +1537,10 @@ function handle(m) {
       delete S.devices[m.id]; renderAll(); break
     case 'device:updated':
       S.devices[m.device.id]=m.device; renderDevList(); break
+    case 'hdmi:updated':
+      S.devices[m.device.id]=m.device
+      if(document.getElementById('tab-hdmi')?.classList.contains('active')) renderHdmiEditor()
+      break
     case 'nimble:feedback':
       if(S.devices[m.id]){ S.devices[m.id].feedback=m.feedback; nimbleUpdateFeedback(m.id,m.feedback) } break
     case 'audio:progress':
@@ -1707,6 +1734,7 @@ function showTab(name,btn) {
   if(name==='config') { loadWifiStatus(); loadBtCurrent(); loadAppSettings() }
   if(name==='waveforms') setTimeout(initBandSelector, 50)
   if(name==='macros') setTimeout(()=>window._macroTabActivated?.(), 50)
+  if(name==='hdmi') renderHdmiEditor()
   if(name==='camera') { _cameraActive=true; cameraStart() }
   else if(_cameraActive) cameraStop()
 }
@@ -2753,6 +2781,7 @@ function renderAll() {
   const hasHue     = Object.values(S.devices).some(d=>d.type==='hue')
   const hasShelly  = Object.values(S.devices).some(d=>d.type==='shelly')
   const hasTremblr = Object.values(S.devices).some(d=>d.type==='tremblr')
+  const hasHdmi    = Object.values(S.devices).some(d=>d.type==='hdmi')
   document.getElementById('nav-coyote').style.display  = hasCoyote  ? '' : 'none'
   document.getElementById('nav-eom').style.display    = hasEom    ? '' : 'none'
   document.getElementById('nav-nimble').style.display = hasNimble ? '' : 'none'
@@ -2762,6 +2791,7 @@ function renderAll() {
   document.getElementById('nav-hue').style.display    = hasHue    ? '' : 'none'
   document.getElementById('nav-shelly').style.display  = hasShelly  ? '' : 'none'
   document.getElementById('nav-tremblr').style.display = hasTremblr ? '' : 'none'
+  document.getElementById('nav-hdmi').style.display    = hasHdmi    ? '' : 'none'
   document.getElementById('nav-config').style.display  = S.role==='admin' ? '' : 'none'
   renderDevList()
   renderCoyoteCards()
@@ -2826,7 +2856,7 @@ function eomUpdateDenials(id, count) {
 }
 
 // ── Devices tab ───────────────────────────────────────────────────────────────
-const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾', camera:'📷', tremblr:'〜', hue:'<img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle">', shelly:'<img src="/shelly-logo.svg" style="width:44px;height:18px;vertical-align:middle">' }
+const typeIcon = { coyote:'⚡', eom:'〰', nimble:'◎', estim:'⚡', pawprints:'🐾', camera:'📷', tremblr:'〜', hdmi:'📺', hue:'<img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle">', shelly:'<img src="/shelly-logo.svg" style="width:44px;height:18px;vertical-align:middle">' }
 
 function batCol(pct) { return pct==null?'#555':pct>50?'#4ade80':pct>20?'#fbbf24':'#f87171' }
 function batIcon(pct) {
@@ -3291,6 +3321,19 @@ async function addTremblrDevice() {
     if(!r.ok) throw new Error(data.error)
     closeScan()
     showTab('tremblr', document.getElementById('nav-tremblr'))
+  } catch(e){ alert('Add failed: '+e.message) }
+}
+
+async function addHdmiDevice() {
+  const name=document.getElementById('hdmi-name').value.trim()||'Main Screen'
+  try {
+    const r=await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type:'hdmi',name})})
+    const data=await r.json()
+    if(!r.ok) throw new Error(data.error)
+    closeScan()
+    renderAll()
+    showTab('hdmi', document.getElementById('nav-hdmi'))
   } catch(e){ alert('Add failed: '+e.message) }
 }
 
@@ -7152,6 +7195,7 @@ const DEVICE_TYPES = [
   {type:'pawprints', icon:'🐾', label:'PawPrints',    sub:'BLE sensor',  step:'ble'},
   {type:'hue',       icon:'<img src="/hue-logo.svg" style="width:32px;height:18px;vertical-align:middle">', label:'Philips Hue',  sub:'WiFi bridge', step:'hue'},
   {type:'shelly',    icon:'🔌', label:'Shelly',       sub:'WiFi relay/dimmer', step:'shelly'},
+  {type:'hdmi',      icon:'📺', label:'HDMI Display', sub:'TV layout output',  step:'hdmi'},
 ]
 function openScan(){
   document.getElementById('scan-overlay').classList.add('open')
@@ -7170,8 +7214,11 @@ function openScan(){
   })
 }
 function selectDeviceType(dt){
-  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr').forEach(el=>el.style.display='none')
-  if(dt.step==='camera'){
+  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr,#step-hdmi').forEach(el=>el.style.display='none')
+  if(dt.step==='hdmi'){
+    document.getElementById('step-hdmi').style.display='block'
+    document.getElementById('hdmi-name').value=''
+  } else if(dt.step==='camera'){
     document.getElementById('step-camera').style.display='block'
     document.getElementById('cam-name').value=''
     document.getElementById('cam-ip').value=''
@@ -7213,7 +7260,7 @@ function selectDeviceType(dt){
   }
 }
 function showTypeStep(){
-  document.querySelectorAll('#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr,#step-hdmi').forEach(el=>el.style.display='none')
   document.getElementById('step-type').style.display='block'
 }
 function showNimbleStep(){
@@ -9001,6 +9048,300 @@ async function ppConnect(id) {
 
 async function ppDisconnect(id) {
   await fetch('/api/devices/' + id + '/disconnect', {method:'POST'}).catch(() => {})
+}
+
+// ── HDMI Layout Editor ────────────────────────────────────────────────────────
+
+const HDMI_GRIDS = ['2x2','2x3','3x2','3x3','4x2','4x3','4x4','6x4']
+
+let _hdmiDragPalette = null  // { type, deviceId, channel, groupId }
+let _hdmiDragCell    = null  // { widgetId, fromCol, fromRow } when dragging existing widget
+let _hdmiDev = null
+
+function renderHdmiEditor() {
+  const root = document.getElementById('hdmi-editor-root')
+  _hdmiDev = Object.values(S.devices).find(d => d.type === 'hdmi')
+  if (!_hdmiDev) { root.innerHTML = '<div class="empty">No TV device</div>'; return }
+
+  const layouts = _hdmiDev.layouts || []
+  const activeId = _hdmiDev.activeLayout
+  const active = layouts.find(l => l.id === activeId) || layouts[0]
+
+  root.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:16px;font-weight:600;color:#e0e0e0">📺 ${_hdmiDev.name}</div>
+      <div style="display:flex;gap:8px">
+        <a href="/hdmi" target="_blank" class="btn btn-ghost btn-xs" style="text-decoration:none">Open HDMI preview ↗</a>
+        <button class="btn btn-outline btn-xs" onclick="hdmiDeleteDevice('${_hdmiDev.id}')">Remove TV</button>
+      </div>
+    </div>
+
+    <!-- Layout tabs -->
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+      ${layouts.map(l => `
+        <button class="btn btn-xs ${l.id===activeId?'btn-primary':'btn-ghost'}" onclick="hdmiSwitchLayout('${_hdmiDev.id}','${l.id}')">${l.name}</button>
+      `).join('')}
+      <button class="btn btn-ghost btn-xs" onclick="hdmiNewLayout('${_hdmiDev.id}')">+ New layout</button>
+      ${active ? `<button class="btn btn-ghost btn-xs" style="color:#f87171" onclick="hdmiDeleteLayout('${_hdmiDev.id}','${active.id}')">✕ Delete layout</button>` : ''}
+    </div>
+
+    ${active ? hdmiLayoutEditor(active) : '<div class="empty">No layouts — create one above</div>'}
+  `
+
+  if (active) {
+    // grid size change
+    document.getElementById('hdmi-grid-sel').onchange = async function() {
+      active.grid = this.value
+      await fetch(`/api/devices/${_hdmiDev.id}/hdmi/layouts/${active.id}`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ grid: this.value })
+      })
+      renderHdmiEditor()
+    }
+    // rename layout
+    const nameEl = document.getElementById('hdmi-layout-name')
+    if (nameEl) {
+      nameEl.onblur = async function() {
+        const n = this.value.trim(); if (!n || n === active.name) return
+        await fetch(`/api/devices/${_hdmiDev.id}/hdmi/layouts/${active.id}`, {
+          method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:n})
+        })
+      }
+    }
+    bindHdmiDragDrop(active)
+  }
+}
+
+function hdmiLayoutEditor(layout) {
+  const [cols, rows] = (layout.grid||'4x2').split('x').map(Number)
+  const widgets = layout.widgets || []
+
+  // Build widget-by-cell map; a widget occupies all cells it spans
+  const cellMap = {}
+  const spanCells = new Set()
+  for (const w of widgets) {
+    const key = `${w.col},${w.row}`
+    cellMap[key] = w
+    // mark spanned cells (skip origin)
+    for (let r = w.row; r < w.row + (w.rowSpan||1); r++)
+      for (let c = w.col; c < w.col + (w.colSpan||1); c++)
+        if (!(c===w.col && r===w.row)) spanCells.add(`${c},${r}`)
+  }
+
+  // Palette sections
+  const coyotes = Object.values(S.devices).filter(d=>d.type==='coyote')
+  const cameras  = Object.values(S.devices).filter(d=>d.type==='camera')
+  const groups   = S.groups || []
+
+  const paletteHtml = `
+    <div style="width:180px;flex-shrink:0">
+      <div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Widgets</div>
+      ${coyotes.length ? `
+        <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Channels</div>
+        ${coyotes.flatMap(d => ['A','B'].map(ch => `
+          <div class="hdmi-pal-item" draggable="true"
+               data-wtype="channel" data-devid="${d.id}" data-ch="${ch}"
+               style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+            <span style="color:#3a7fff">⚡</span>${d.name} · ${ch}
+          </div>`)).join('')}
+      ` : ''}
+      ${groups.length ? `
+        <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Groups</div>
+        ${groups.map(g => `
+          <div class="hdmi-pal-item" draggable="true"
+               data-wtype="group" data-groupid="${g.id}"
+               style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+            <span style="color:#22c55e">▣</span>${g.name}
+          </div>`).join('')}
+      ` : ''}
+      ${cameras.length ? `
+        <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Cameras</div>
+        ${cameras.map(d => `
+          <div class="hdmi-pal-item" draggable="true"
+               data-wtype="camera" data-devid="${d.id}"
+               style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+            <span>📷</span>${d.name}
+          </div>`).join('')}
+      ` : ''}
+      <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Other</div>
+      <div class="hdmi-pal-item" draggable="true" data-wtype="clock"
+           style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+        <span>🕐</span>Clock
+      </div>
+      <div class="hdmi-pal-item" draggable="true" data-wtype="video"
+           style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#555;display:flex;align-items:center;gap:6px">
+        <span>▶</span>Video <span style="font-size:9px;background:#1a1a1a;border-radius:3px;padding:1px 4px">soon</span>
+      </div>
+    </div>`
+
+  // Grid cells
+  let gridCells = ''
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const key = `${c},${r}`
+      if (spanCells.has(key)) continue  // occupied by a spanning widget
+      const w = cellMap[key]
+      const cs = w?.colSpan||1, rs = w?.rowSpan||1
+      const occupied = !!w
+
+      if (occupied) {
+        const label = hdmiWidgetLabel(w)
+        gridCells += `
+          <div class="hdmi-cell hdmi-cell-filled"
+               data-col="${c}" data-row="${r}" data-widget-id="${w.id}"
+               style="grid-column:${c+1}/span ${cs};grid-row:${r+1}/span ${rs};background:#0d1a2a;border:1px solid #1e3050;border-radius:6px;padding:8px;position:relative;cursor:grab"
+               draggable="true">
+            <div style="font-size:11px;color:#5a8aaa;margin-bottom:3px">${label.icon}</div>
+            <div style="font-size:11px;color:#c0d0e0;font-weight:500;line-height:1.3">${label.text}</div>
+            <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
+              ${cs < cols-c ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiResizeWidget('${layout.id}','${w.id}',${cs+1},${rs},event)">→</button>` : ''}
+              ${cs > 1      ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiResizeWidget('${layout.id}','${w.id}',${cs-1},${rs},event)">←</button>` : ''}
+              ${rs < rows-r ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiResizeWidget('${layout.id}','${w.id}',${cs},${rs+1},event)">↓</button>` : ''}
+              ${rs > 1      ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiResizeWidget('${layout.id}','${w.id}',${cs},${rs-1},event)">↑</button>` : ''}
+              <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171" onclick="hdmiRemoveWidget('${layout.id}','${w.id}',event)">✕</button>
+            </div>
+          </div>`
+      } else {
+        gridCells += `
+          <div class="hdmi-cell hdmi-cell-empty"
+               data-col="${c}" data-row="${r}"
+               style="grid-column:${c+1};grid-row:${r+1};border:1px dashed #1e2a3a;border-radius:6px;min-height:80px;display:flex;align-items:center;justify-content:center;color:#1e2a3a;font-size:18px;transition:border-color .15s,background .15s">
+            +
+          </div>`
+      }
+    }
+  }
+
+  return `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <input id="hdmi-layout-name" type="text" value="${layout.name}"
+             style="background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:5px 9px;border-radius:6px;font-size:13px;width:160px"/>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:11px;color:#555">Grid</span>
+        <select id="hdmi-grid-sel" style="background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:5px 8px;border-radius:6px;font-size:12px">
+          ${HDMI_GRIDS.map(g=>`<option value="${g}" ${g===layout.grid?'selected':''}>${g}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:14px;align-items:flex-start">
+      ${paletteHtml}
+      <div style="flex:1;min-width:0;overflow-x:auto">
+        <div id="hdmi-grid-editor"
+             style="display:grid;grid-template-columns:repeat(${cols},minmax(90px,1fr));grid-template-rows:repeat(${rows},minmax(80px,auto));gap:6px;min-width:${cols*96}px">
+          ${gridCells}
+        </div>
+      </div>
+    </div>`
+}
+
+function hdmiWidgetLabel(w) {
+  if (w.type === 'channel') {
+    const d = S.devices[w.deviceId]
+    return { icon:'⚡', text: (d?.name||'?') + ' · ' + w.channel }
+  }
+  if (w.type === 'group') {
+    const g = (S.groups||[]).find(g=>g.id===w.groupId)
+    return { icon:'▣', text: g?.name || 'Group' }
+  }
+  if (w.type === 'camera') {
+    const d = S.devices[w.deviceId]
+    return { icon:'📷', text: d?.name || 'Camera' }
+  }
+  if (w.type === 'clock')  return { icon:'🕐', text:'Clock' }
+  if (w.type === 'video')  return { icon:'▶', text:'Video' }
+  return { icon:'?', text: w.type }
+}
+
+function bindHdmiDragDrop(layout) {
+  // Palette drag start
+  document.querySelectorAll('.hdmi-pal-item').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      _hdmiDragPalette = { type:el.dataset.wtype, deviceId:el.dataset.devid, channel:el.dataset.ch, groupId:el.dataset.groupid }
+      _hdmiDragCell = null
+      e.dataTransfer.effectAllowed = 'copy'
+    })
+  })
+
+  // Existing widget drag start
+  document.querySelectorAll('.hdmi-cell-filled').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      if (e.target.tagName === 'BUTTON') { e.preventDefault(); return }
+      _hdmiDragCell = { widgetId: el.dataset.widgetId }
+      _hdmiDragPalette = null
+      e.dataTransfer.effectAllowed = 'move'
+    })
+  })
+
+  // Drop zones
+  document.querySelectorAll('.hdmi-cell-empty').forEach(el => {
+    el.addEventListener('dragover', e => { e.preventDefault(); el.style.borderColor='#4da6ff'; el.style.background='#0d1a2a' })
+    el.addEventListener('dragleave', () => { el.style.borderColor=''; el.style.background='' })
+    el.addEventListener('drop', async e => {
+      e.preventDefault(); el.style.borderColor=''; el.style.background=''
+      const col = +el.dataset.col, row = +el.dataset.row
+      const widgets = layout.widgets ? [...layout.widgets] : []
+
+      if (_hdmiDragPalette) {
+        const w = { id:'w-'+Date.now(), type:_hdmiDragPalette.type, col, row, colSpan:1, rowSpan:1 }
+        if (_hdmiDragPalette.type==='channel') { w.deviceId=_hdmiDragPalette.deviceId; w.channel=_hdmiDragPalette.channel }
+        if (_hdmiDragPalette.type==='group')   { w.groupId=_hdmiDragPalette.groupId }
+        if (_hdmiDragPalette.type==='camera')  { w.deviceId=_hdmiDragPalette.deviceId }
+        widgets.push(w)
+      } else if (_hdmiDragCell) {
+        const w = widgets.find(w=>w.id===_hdmiDragCell.widgetId)
+        if (w) { w.col=col; w.row=row }
+      }
+      await hdmiSaveWidgets(layout.id, widgets)
+    })
+  })
+}
+
+async function hdmiSaveWidgets(layoutId, widgets) {
+  if (!_hdmiDev) return
+  await fetch(`/api/devices/${_hdmiDev.id}/hdmi/layouts/${layoutId}`, {
+    method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ widgets })
+  })
+}
+
+async function hdmiRemoveWidget(layoutId, widgetId, e) {
+  e.stopPropagation()
+  const layout = (_hdmiDev?.layouts||[]).find(l=>l.id===layoutId); if(!layout) return
+  const widgets = (layout.widgets||[]).filter(w=>w.id!==widgetId)
+  await hdmiSaveWidgets(layoutId, widgets)
+}
+
+async function hdmiResizeWidget(layoutId, widgetId, cs, rs, e) {
+  e.stopPropagation()
+  const layout = (_hdmiDev?.layouts||[]).find(l=>l.id===layoutId); if(!layout) return
+  const widgets = (layout.widgets||[]).map(w => w.id===widgetId ? {...w,colSpan:cs,rowSpan:rs} : w)
+  await hdmiSaveWidgets(layoutId, widgets)
+}
+
+async function hdmiSwitchLayout(devId, layoutId) {
+  await fetch(`/api/devices/${devId}/hdmi/active`, {
+    method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ layoutId })
+  })
+}
+
+async function hdmiNewLayout(devId) {
+  const name = prompt('Layout name:', 'Scene ' + ((_hdmiDev?.layouts?.length||0)+1))
+  if (!name) return
+  await fetch(`/api/devices/${devId}/hdmi/layouts`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name, grid:'4x2', widgets:[] })
+  })
+}
+
+async function hdmiDeleteLayout(devId, layoutId) {
+  if (!confirm('Delete this layout?')) return
+  await fetch(`/api/devices/${devId}/hdmi/layouts/${layoutId}`, { method:'DELETE' })
+}
+
+async function hdmiDeleteDevice(devId) {
+  if (!confirm('Remove this TV device?')) return
+  await fetch(`/api/devices/${devId}`, { method:'DELETE' })
+  renderAll()
+  showTab('devices', document.getElementById('nav-devices'))
 }
 </script>
 

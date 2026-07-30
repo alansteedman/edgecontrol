@@ -2246,7 +2246,19 @@ class TremblrDevice {
   toJSON() { return {id:this.id, type:'tremblr', name:this.name, status:this.status, speed:this.speed, running:this.running, paused:this.paused} }
 }
 
+class HdmiDevice {
+  constructor(id, name, layouts, activeLayout) {
+    this.id = id; this.name = name; this.type = 'hdmi'; this.status = 'connected'
+    this.layouts = Array.isArray(layouts) ? layouts : []
+    this.activeLayout = activeLayout || this.layouts[0]?.id || null
+  }
+  connect() {}
+  async disconnect() {}
+  toJSON() { return { id:this.id, type:'hdmi', name:this.name, status:'connected', layouts:this.layouts, activeLayout:this.activeLayout } }
+}
+
 function createDevice(cfg) {
+  if (cfg.type==='hdmi')       return new HdmiDevice(cfg.id,cfg.name,cfg.layouts,cfg.activeLayout)
   if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName,cfg.buttonControl)
   if (cfg.type==='pawprints') return new PawPrintsDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
   if (cfg.type==='eom')    return new EomDevice(cfg.id,cfg.name,cfg.ip,cfg.port)
@@ -2363,6 +2375,7 @@ function getAppLink() {
   }
   return `http://${config.boxId}.local:3000/app`
 }
+app.get('/hdmi', (req, res) => res.sendFile(join(__dirname, 'public', 'hdmi.html')))
 app.get('/app', (req, res) => res.sendFile(join(__dirname, 'public', 'app.html')))
 app.get('/app/manifest.json', (req, res) => res.json({
   name: 'Kink Controller', short_name: 'KinkCtrl', start_url: '/app',
@@ -2539,7 +2552,9 @@ const wss    = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (request, socket, head) => {
   sessionMW(request, {}, () => {
-    if (config.auth?.enabled && !request.session?.authed && !request.session?.appAuthed) {
+    const referer = request.headers.referer || ''
+    const isHdmiPage = referer.includes('/hdmi')
+    if (config.auth?.enabled && !request.session?.authed && !request.session?.appAuthed && !isHdmiPage) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
       socket.destroy()
       return
@@ -2581,7 +2596,8 @@ function waveformsMeta() {
 
 wss.on('connection', (ws, request) => {
   ws.role = request.session?.role || (config.auth?.enabled ? 'user' : 'admin')
-  ws.isApp = !!(request.session?.appAuthed && !request.session?.authed)
+  ws.isApp  = !!(request.session?.appAuthed && !request.session?.authed)
+  ws.isHdmi = !!(request.headers.referer || '').includes('/hdmi')
   clients.add(ws)
   ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
   if (_updateAvailable) ws.send(JSON.stringify({ type:'update:available', version:_updateAvailable.version, current:APP_VERSION }))
@@ -2847,6 +2863,7 @@ app.patch('/api/devices/:id', async (req,res) => {
     if (ptzServiceUrl)       dev.ptzServiceUrl=ptzServiceUrl
   }
   if (dev.type==='hue') { if (ip) dev.ip=ip }
+  // hdmi — name only (layouts updated via dedicated endpoints)
   const cfg=config.devices.find(d=>d.id===req.params.id)
   if (cfg) {
     if (name) cfg.name=name
@@ -2876,6 +2893,54 @@ app.delete('/api/devices/:id', async (req,res) => {
   delete devices[req.params.id]; config.devices=config.devices.filter(d=>d.id!==req.params.id); saveConfig(config)
   if (wasCamera) rebuildGo2rtcConfig()
   broadcast({type:'device:removed',id:req.params.id}); res.json({ok:true})
+})
+
+// ── HDMI layout CRUD ──────────────────────────────────────────────────────────
+app.get('/api/devices/:id/hdmi/layouts', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='hdmi') return res.status(404).json({error:'not found'})
+  res.json(dev.layouts)
+})
+app.post('/api/devices/:id/hdmi/layouts', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='hdmi') return res.status(404).json({error:'not found'})
+  const { name, grid, widgets } = req.body
+  const layout = { id:`l-${Date.now()}`, name:name||'Scene 1', grid:grid||'4x2', widgets:widgets||[] }
+  dev.layouts.push(layout)
+  if (!dev.activeLayout) dev.activeLayout = layout.id
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.layouts=dev.layouts; cfg.activeLayout=dev.activeLayout; saveConfig(config) }
+  broadcast({ type:'hdmi:updated', device:dev.toJSON() })
+  res.json(layout)
+})
+app.put('/api/devices/:id/hdmi/layouts/:lid', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='hdmi') return res.status(404).json({error:'not found'})
+  const layout=dev.layouts.find(l=>l.id===req.params.lid); if (!layout) return res.status(404).json({error:'layout not found'})
+  const { name, grid, widgets } = req.body
+  if (name!==undefined) layout.name=name
+  if (grid!==undefined) layout.grid=grid
+  if (widgets!==undefined) layout.widgets=widgets
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.layouts=dev.layouts; saveConfig(config) }
+  broadcast({ type:'hdmi:updated', device:dev.toJSON() })
+  res.json(layout)
+})
+app.delete('/api/devices/:id/hdmi/layouts/:lid', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='hdmi') return res.status(404).json({error:'not found'})
+  dev.layouts=dev.layouts.filter(l=>l.id!==req.params.lid)
+  if (dev.activeLayout===req.params.lid) dev.activeLayout=dev.layouts[0]?.id||null
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.layouts=dev.layouts; cfg.activeLayout=dev.activeLayout; saveConfig(config) }
+  broadcast({ type:'hdmi:updated', device:dev.toJSON() })
+  res.json({ok:true})
+})
+app.put('/api/devices/:id/hdmi/active', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='hdmi') return res.status(404).json({error:'not found'})
+  const { layoutId } = req.body
+  if (!dev.layouts.find(l=>l.id===layoutId)) return res.status(404).json({error:'layout not found'})
+  dev.activeLayout=layoutId
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.activeLayout=layoutId; saveConfig(config) }
+  broadcast({ type:'hdmi:updated', device:dev.toJSON() })
+  res.json({ok:true})
 })
 
 app.post('/api/devices/:id/connect', (req,res) => {

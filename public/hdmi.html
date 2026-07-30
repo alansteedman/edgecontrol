@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920">
+<title>EdgeController HDMI</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#06080f;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+#grid{display:grid;width:100vw;height:100vh;gap:10px;padding:10px}
+.w{background:#0d1120;border:0.5px solid #1a2235;border-radius:8px;padding:10px;display:flex;flex-direction:column;overflow:hidden;min-width:0;min-height:0}
+.w-title{font-size:12px;color:#5a6a8a;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+.w-badge{font-size:10px;color:#3a7fff;background:#0d2040;border-radius:3px;padding:1px 5px;flex-shrink:0;margin-left:6px}
+.w-idle .w-badge{color:#2a3555;background:#0a0f1a}
+.wfc{flex:1;min-height:0;width:100%;display:block;border-radius:3px}
+.dials{display:flex;justify-content:space-around;margin-top:6px;gap:4px;flex-shrink:0}
+.dial-wrap{display:flex;flex-direction:column;align-items:center;gap:2px}
+.w-cam-inner{flex:1;background:#06080f;border-radius:4px;display:flex;align-items:center;justify-content:center;border:0.5px solid #131925;min-height:0}
+.w-cam-label{font-size:10px;color:#1e2a40;margin-top:3px;letter-spacing:.05em}
+.w-center{align-items:center;justify-content:center;gap:6px}
+.no-layout{display:flex;align-items:center;justify-content:center;height:100vh;color:#2a3555;font-size:16px;letter-spacing:.1em}
+video{width:100%;height:100%;object-fit:cover;border-radius:4px;display:block}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const WS_URL = location.origin.replace(/^http/,'ws')
+let S = { devices:{}, groups:[], waveforms:{ builtin:[], custom:[], live:[] } }
+let _ws, _wfAnimId, _wfCanvases = [], _t = 0
+let _cams = {} // streamKey → { video, pc, src }
+
+function connect() {
+  _ws = new WebSocket(WS_URL)
+  _ws.onmessage = e => { try { handle(JSON.parse(e.data)) } catch {} }
+  _ws.onclose = () => setTimeout(connect, 2000)
+}
+
+function handle(m) {
+  if (m.type === 'state') {
+    S.waveforms = m.waveforms
+    S.groups = m.groups || []
+    S.devices = {}
+    for (const d of m.devices) S.devices[d.id] = d
+    renderHdmi()
+  }
+  if (m.type === 'device:state') {
+    if (S.devices[m.id]) Object.assign(S.devices[m.id], m)
+    updateLiveWidgets(m.id)
+  }
+  if (m.type === 'device:added')   { S.devices[m.device.id] = m.device; renderHdmi() }
+  if (m.type === 'device:removed') { delete S.devices[m.id]; renderHdmi() }
+  if (m.type === 'device:updated') { S.devices[m.device.id] = m.device; renderHdmi() }
+  if (m.type === 'hdmi:updated')   { Object.assign(S.devices[m.device.id] || {}, m.device); S.devices[m.device.id] = m.device; renderHdmi() }
+  if (m.type === 'group:updated' || m.type === 'group:added' || m.type === 'group:removed' || m.type === 'groups:reordered') {
+    if (m.type === 'group:updated') { const i = S.groups.findIndex(g=>g.id===m.group.id); if(i>=0) S.groups[i]=m.group; else S.groups.push(m.group) }
+    if (m.type === 'group:added')   S.groups.push(m.group)
+    if (m.type === 'group:removed') S.groups = S.groups.filter(g=>g.id!==m.id)
+    if (m.type === 'groups:reordered') S.groups = m.groups
+    renderHdmi()
+  }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+
+function hdmiDevice() {
+  return Object.values(S.devices).find(d => d.type === 'hdmi')
+}
+
+function activeLayout(dev) {
+  return dev?.layouts?.find(l => l.id === dev.activeLayout) || dev?.layouts?.[0]
+}
+
+function parseGrid(g) {
+  const [cols, rows] = (g || '4x2').split('x').map(Number)
+  return { cols: cols || 4, rows: rows || 2 }
+}
+
+function renderHdmi() {
+  const root = document.getElementById('root')
+  const dev = hdmiDevice()
+  const layout = activeLayout(dev)
+
+  if (!layout) {
+    root.innerHTML = '<div class="no-layout">No layout configured</div>'
+    return
+  }
+
+  const { cols, rows } = parseGrid(layout.grid)
+  root.innerHTML = `<div id="grid" style="grid-template-columns:repeat(${cols},minmax(0,1fr));grid-template-rows:repeat(${rows},minmax(0,1fr));gap:10px;padding:10px;display:grid;width:100vw;height:100vh;"></div>`
+  const grid = document.getElementById('grid')
+
+  if (!layout.widgets || !layout.widgets.length) {
+    for (let i = 0; i < cols * rows; i++) {
+      const ph = document.createElement('div')
+      ph.className = 'w w-center'
+      ph.style.cssText = 'border:1px dashed #1a2235;background:transparent'
+      grid.appendChild(ph)
+    }
+    return
+  }
+
+  for (const w of layout.widgets) {
+    const el = buildWidget(w)
+    el.style.gridColumn = `${w.col + 1} / span ${w.colSpan || 1}`
+    el.style.gridRow    = `${w.row + 1} / span ${w.rowSpan || 1}`
+    grid.appendChild(el)
+  }
+
+  // Start waveform animation
+  if (_wfAnimId) cancelAnimationFrame(_wfAnimId)
+  _wfCanvases = Array.from(grid.querySelectorAll('.wfc'))
+  animateWaves()
+
+  // Start cameras
+  for (const w of layout.widgets) {
+    if (w.type === 'camera') {
+      const camDev = S.devices[w.deviceId]
+      if (camDev?.streamKey) startCam(w.id, camDev.streamKey)
+    }
+  }
+}
+
+function buildWidget(w) {
+  if (w.type === 'channel') return buildChannelWidget(w)
+  if (w.type === 'group')   return buildGroupWidget(w)
+  if (w.type === 'camera')  return buildCameraWidget(w)
+  if (w.type === 'clock')   return buildClockWidget(w)
+  if (w.type === 'video')   return buildVideoWidget(w)
+  const el = document.createElement('div')
+  el.className = 'w'
+  return el
+}
+
+function buildChannelWidget(w) {
+  const dev = S.devices[w.deviceId]
+  const ch  = dev?.channels?.[w.channel] || {}
+  const active = (ch.intensity || 0) > 0
+  const wfName = resolveWfName(ch.waveform)
+  const el = document.createElement('div')
+  el.className = 'w' + (active ? '' : ' w-idle')
+  el.dataset.widgetId = w.id
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;margin-bottom:5px;flex-shrink:0">
+      <span class="w-title">${dev?.name || 'Unknown'} · ${w.channel}</span>
+      <span class="w-badge">${wfName}</span>
+    </div>
+    <canvas class="wfc" data-phase="${hashPhase(w.deviceId + w.channel)}" data-active="${active?1:0}"></canvas>
+    <div class="dials">
+      <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
+      <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.frequency||0)}" data-max="200" data-color="#ffc832" data-label="HZ"></canvas>
+      <canvas class="dc" width="64" height="64" data-v="${Math.round((ch.intensity||0)/2)}" data-max="100" data-color="#32e88c" data-label="SPD"></canvas>
+    </div>`
+  setTimeout(() => el.querySelectorAll('.dc').forEach(c => drawDial(c)), 0)
+  return el
+}
+
+function buildGroupWidget(w) {
+  const grp = S.groups.find(g => g.id === w.groupId) || {}
+  const channels = grp.channels || []
+  const active = grp.enabled && channels.length > 0
+  const el = document.createElement('div')
+  el.className = 'w' + (active ? '' : ' w-idle')
+  el.dataset.widgetId = w.id
+  const memberStr = channels.slice(0,4).map(c => {
+    const d = S.devices[c.deviceId]; return d ? d.name.replace('Coyote ','C') + '·' + c.channel : ''
+  }).filter(Boolean).join('  ')
+  el.innerHTML = `
+    <div style="margin-bottom:5px;flex-shrink:0">
+      <div style="font-size:14px;color:#e0e8ff;font-weight:500">${grp.name || 'Group'}</div>
+      <div style="font-size:10px;color:#3a5090;margin-top:2px;font-family:monospace">${memberStr || 'no channels'}</div>
+    </div>
+    <div class="dials" style="flex:1;align-items:center">
+      <canvas class="dc" width="72" height="72" data-v="${Math.round(grp.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
+      <canvas class="dc" width="72" height="72" data-v="${Math.round(grp.frequency||0)}" data-max="200" data-color="#ffc832" data-label="HZ"></canvas>
+    </div>`
+  setTimeout(() => el.querySelectorAll('.dc').forEach(c => drawDial(c)), 0)
+  return el
+}
+
+function buildCameraWidget(w) {
+  const dev = S.devices[w.deviceId]
+  const el = document.createElement('div')
+  el.className = 'w'
+  el.dataset.widgetId = w.id
+  el.dataset.camDevId = w.deviceId
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-shrink:0">
+      <span class="w-title">${dev?.name || 'Camera'}</span>
+      <span style="font-size:10px;color:#cc3030;background:#200808;border-radius:3px;padding:1px 6px">● LIVE</span>
+    </div>
+    <div class="w-cam-inner" id="cam-inner-${w.id}">
+      <div class="w-cam-label">connecting…</div>
+    </div>`
+  return el
+}
+
+function buildClockWidget(w) {
+  const el = document.createElement('div')
+  el.className = 'w w-center'
+  const uid = 'clk-' + Math.random().toString(36).slice(2)
+  el.innerHTML = `
+    <div id="${uid}" style="font-size:clamp(20px,4vw,48px);color:#d0d8f0;font-weight:300;font-family:monospace;letter-spacing:.08em">--:--:--</div>
+    <div id="${uid}-d" style="font-size:12px;color:#2e3e5e;margin-top:4px"></div>`
+  function tick() {
+    const now = new Date()
+    const te = document.getElementById(uid), de = document.getElementById(uid+'-d')
+    if (te) te.textContent = now.toLocaleTimeString('en-GB',{hour12:false})
+    if (de) de.textContent = now.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})
+  }
+  tick(); setInterval(tick, 1000)
+  return el
+}
+
+function buildVideoWidget(w) {
+  const el = document.createElement('div')
+  el.className = 'w w-center'
+  el.innerHTML = `
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" fill="#131a28"/>
+      <path d="M9.5 7.5l7 4.5-7 4.5V7.5z" fill="#263050"/>
+    </svg>
+    <div style="font-size:11px;color:#2a3555">video player</div>`
+  return el
+}
+
+// ── Live updates (no full re-render) ─────────────────────────────────────────
+
+function updateLiveWidgets(devId) {
+  const dev = hdmiDevice()
+  const layout = activeLayout(dev)
+  if (!layout) return
+  for (const w of layout.widgets || []) {
+    const el = document.querySelector(`[data-widget-id="${w.id}"]`)
+    if (!el) continue
+    if (w.type === 'channel' && w.deviceId === devId) refreshChannelWidget(el, w)
+    if (w.type === 'group') {
+      const grp = S.groups.find(g => g.id === w.groupId)
+      if (grp?.channels?.some(c => c.deviceId === devId)) refreshGroupWidget(el, w)
+    }
+  }
+}
+
+function refreshChannelWidget(el, w) {
+  const dev = S.devices[w.deviceId]
+  const ch  = dev?.channels?.[w.channel] || {}
+  const active = (ch.intensity || 0) > 0
+  el.classList.toggle('w-idle', !active)
+  const badge = el.querySelector('.w-badge')
+  if (badge) badge.textContent = resolveWfName(ch.waveform)
+  const wfc = el.querySelector('.wfc')
+  if (wfc) wfc.dataset.active = active ? '1' : '0'
+  const dcs = el.querySelectorAll('.dc')
+  const vals = [Math.round(ch.intensity||0), Math.round(ch.frequency||0), Math.round((ch.intensity||0)/2)]
+  dcs.forEach((c, i) => { c.dataset.v = vals[i]; drawDial(c) })
+}
+
+function refreshGroupWidget(el, w) {
+  const grp = S.groups.find(g => g.id === w.groupId) || {}
+  const dcs = el.querySelectorAll('.dc')
+  const vals = [Math.round(grp.intensity||0), Math.round(grp.frequency||0)]
+  dcs.forEach((c, i) => { if (vals[i] !== undefined) { c.dataset.v = vals[i]; drawDial(c) } })
+}
+
+// ── Waveform animation ────────────────────────────────────────────────────────
+
+function animateWaves() {
+  _t += 0.035
+  for (const c of _wfCanvases) {
+    const w = c.offsetWidth, h = c.offsetHeight
+    if (!w || !h) continue
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h }
+    const ctx = c.getContext('2d')
+    ctx.clearRect(0, 0, w, h)
+    if (c.dataset.active !== '1') {
+      ctx.fillStyle = '#0e1525'; ctx.fillRect(0, 0, w, h)
+      ctx.fillStyle = '#1e2840'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'
+      ctx.fillText('idle', w/2, h/2 + 4)
+      continue
+    }
+    const ph = parseFloat(c.dataset.phase) || 0
+    ctx.beginPath()
+    for (let i = 0; i <= 100; i++) {
+      const x = (i/100) * w
+      const y = h/2 + Math.sin(i/100 * Math.PI * 5 + _t * 1.8 + ph) * h * 0.28
+                    + Math.sin(i/100 * Math.PI * 11 + _t * 2.3 + ph * 1.4) * h * 0.07
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+    }
+    ctx.strokeStyle = '#3a7fff'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke()
+
+    const grad = ctx.createLinearGradient(0, h/2 - h * 0.35, 0, h)
+    grad.addColorStop(0, 'rgba(58,127,255,0.1)'); grad.addColorStop(1, 'rgba(58,127,255,0)')
+    ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath()
+    ctx.fillStyle = grad; ctx.fill()
+  }
+  _wfAnimId = requestAnimationFrame(animateWaves)
+}
+
+// ── Dial drawing ─────────────────────────────────────────────────────────────
+
+function drawDial(canvas) {
+  const v = +canvas.dataset.v, max = +canvas.dataset.max
+  const color = canvas.dataset.color, label = canvas.dataset.label
+  const sz = canvas.width, ctx = canvas.getContext('2d')
+  const cx = sz/2, cy = sz/2, r = sz/2 - 5, lw = 5
+  const start = Math.PI * 0.75, sweep = Math.PI * 1.5
+  ctx.clearRect(0, 0, sz, sz)
+  ctx.beginPath(); ctx.arc(cx, cy, r, start, start + sweep)
+  ctx.strokeStyle = '#1a2235'; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke()
+  if (v > 0) {
+    ctx.beginPath(); ctx.arc(cx, cy, r, start, start + sweep * (v/max))
+    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke()
+  }
+  ctx.fillStyle = '#c8d4f0'; ctx.font = `500 ${Math.floor(r*0.46)}px monospace`
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(v, cx, cy - 1)
+  ctx.fillStyle = '#3a4a6a'; ctx.font = `${Math.floor(r*0.28)}px sans-serif`
+  ctx.fillText(label, cx, cy + r * 0.55)
+}
+
+// ── Camera streaming ─────────────────────────────────────────────────────────
+
+function startCam(widgetId, streamKey) {
+  const inner = document.getElementById('cam-inner-' + widgetId)
+  if (!inner) return
+  if (_cams[widgetId]?.streamKey === streamKey) return
+
+  const vid = document.createElement('video')
+  vid.autoplay = true; vid.muted = false; vid.playsInline = true
+  vid.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:4px'
+
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] })
+  pc.addTransceiver('video', { direction: 'recvonly' })
+  pc.addTransceiver('audio', { direction: 'recvonly' })
+  pc.ontrack = e => { if (!vid.srcObject) { vid.srcObject = e.streams[0]; inner.innerHTML = ''; inner.appendChild(vid) } }
+
+  _cams[widgetId] = { streamKey, pc, vid }
+
+  pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => {
+    return fetch(`/api/go2rtc/api/webrtc?src=${encodeURIComponent(streamKey)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp
+    })
+  }).then(r => r.text()).then(sdp => {
+    pc.setRemoteDescription({ type: 'answer', sdp })
+  }).catch(() => {
+    // WebRTC failed — fall back to MSE over WebSocket
+    inner.innerHTML = '<div class="w-cam-label">connecting (ws)…</div>'
+    _mseFallback(widgetId, streamKey, inner)
+  })
+}
+
+function _mseFallback(widgetId, streamKey, inner) {
+  const vid = document.createElement('video')
+  vid.autoplay = true; vid.muted = false; vid.playsInline = true
+  vid.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:4px'
+  const ms = new MediaSource()
+  vid.src = URL.createObjectURL(ms)
+  ms.addEventListener('sourceopen', () => {
+    const sb = ms.addSourceBuffer('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')
+    const ws = new WebSocket(`${location.origin.replace(/^http/,'ws')}/api/go2rtc/api/ws?src=${encodeURIComponent(streamKey)}&media=video+audio`)
+    ws.binaryType = 'arraybuffer'
+    ws.onmessage = e => { if (sb && !sb.updating) try { sb.appendBuffer(e.data) } catch {} }
+    ws.onopen = () => { inner.innerHTML = ''; inner.appendChild(vid) }
+    if (_cams[widgetId]) _cams[widgetId].wsConn = ws
+  })
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function resolveWfName(wf) {
+  if (!wf) return 'idle'
+  for (const w of S.waveforms?.builtin || []) if (w.id === wf) return w.name
+  for (const w of S.waveforms?.custom || []) if (w.id === wf) return w.name
+  return wf
+}
+
+function hashPhase(str) {
+  let h = 0
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) & 0xffffffff
+  return (h & 0xffff) / 0xffff * Math.PI * 6
+}
+
+connect()
+</script>
+</body>
+</html>

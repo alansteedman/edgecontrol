@@ -2553,7 +2553,8 @@ const wss    = new WebSocketServer({ noServer: true })
 server.on('upgrade', (request, socket, head) => {
   sessionMW(request, {}, () => {
     const referer = request.headers.referer || ''
-    const isHdmiPage = referer.includes('/hdmi')
+    const origin  = request.headers.origin  || ''
+    const isHdmiPage = referer.includes('/hdmi') || origin === `http://localhost:${config.tcpPort || 3000}`
     if (config.auth?.enabled && !request.session?.authed && !request.session?.appAuthed && !isHdmiPage) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
       socket.destroy()
@@ -2597,7 +2598,7 @@ function waveformsMeta() {
 wss.on('connection', (ws, request) => {
   ws.role = request.session?.role || (config.auth?.enabled ? 'user' : 'admin')
   ws.isApp  = !!(request.session?.appAuthed && !request.session?.authed)
-  ws.isHdmi = !!(request.headers.referer || '').includes('/hdmi')
+  ws.isHdmi = !!(request.headers.referer || '').includes('/hdmi') || (request.headers.origin || '').includes('localhost')
   clients.add(ws)
   ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
   if (_updateAvailable) ws.send(JSON.stringify({ type:'update:available', version:_updateAvailable.version, current:APP_VERSION }))

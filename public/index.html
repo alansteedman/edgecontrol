@@ -7747,172 +7747,18 @@ function estimGroupSetRate(value)      { send({type:'estim:group:setRate',      
 function estimGroupSetPowerMode(mode)  { send({type:'estim:group:setPowerMode', mode}) }
 function estimGroupStop()              { send({type:'estim:group:stop'}) }
 
-// ── Camera (WebRTC → HTTP MP4 fallback) ──────────────────────────────────────
-// WebRTC: ~1s,  LAN only — UDP media can't flow through Cloudflare tunnel
-const _cameraPCs     = {}   // streamKey → RTCPeerConnection
-const _cameraMseWs   = {}   // streamKey → MSE WebSocket
-const _cameraBlobUrl = {}   // streamKey → MediaSource blob URL
-let   _cameraActive  = false
-
-function _cleanupMse(streamKey) {
-  if (_cameraMseWs[streamKey])   { try { _cameraMseWs[streamKey].close() } catch {} ; delete _cameraMseWs[streamKey] }
-  if (_cameraBlobUrl[streamKey]) { URL.revokeObjectURL(_cameraBlobUrl[streamKey]); delete _cameraBlobUrl[streamKey] }
-}
-
-// ── WebSocket MSE fallback (go2rtc /api/ws) — works through Cloudflare (WSS) ─
-// go2rtc protocol: client connects → sends {type:'mse', value:'<codecs>'} →
-// server replies {type:'mse', value:'video/mp4; codecs="..."'} → binary MP4 fragments
-async function _startMSE(streamKey, video, setStatus) {
-  setStatus('CONNECTING (MSE)…', '#f59e0b')
-  _cleanupMse(streamKey)
-  video.srcObject = null; video.src = ''
-
-  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${wsProto}//${location.host}/api/go2rtc/api/ws?src=${streamKey}`
-
-  return new Promise((resolve, reject) => {
-    const ms = new MediaSource()
-    const blobUrl = URL.createObjectURL(ms)
-    _cameraBlobUrl[streamKey] = blobUrl
-    video.src = blobUrl
-
-    let sb = null, queue = [], done = false
-
-    ms.addEventListener('sourceopen', () => {
-      if (!_cameraActive) return
-      const ws = new WebSocket(wsUrl)
-      _cameraMseWs[streamKey] = ws
-      ws.binaryType = 'arraybuffer'
-      ws.onopen = () => ws.send(JSON.stringify({type:'mse', value:'avc1.640029,avc1.64002A,avc1.640033,mp4a.40.2'}))
-      ws.onmessage = e => {
-        if (typeof e.data === 'string') {
-          const msg = JSON.parse(e.data)
-          if (msg.type === 'mse' && !sb) {
-            try {
-              sb = ms.addSourceBuffer(msg.value)
-              sb.mode = 'segments'
-              sb.addEventListener('updateend', drain)
-              drain()
-            } catch(err) { if (!done) { done = true; reject(err) } }
-          }
-        } else {
-          queue.push(new Uint8Array(e.data))
-          if (sb && !sb.updating) drain()
-        }
-      }
-      ws.onerror = () => { if (!done) { done = true; reject(new Error('MSE ws error')) } }
-      ws.onclose = () => {
-        if (!done) { done = true; reject(new Error('MSE ws closed')) }
-        else if (_cameraActive) setTimeout(()=>_cameraConnect(streamKey), 3000)
-      }
-    })
-
-    function drain() {
-      if (!sb || sb.updating || queue.length === 0) return
-      try { sb.appendBuffer(queue.shift()) } catch { queue = [] }
-      if (!done) { done = true; setStatus('● LIVE', '#4ade80'); video.play().catch(()=>{}); resolve() }
-    }
-
-    setTimeout(() => { if (!done) { done = true; reject(new Error('MSE timeout')) } }, 10000)
-  })
-}
-
-// ── WebRTC attempt, fall back to WebSocket MSE on ICE failure ────────────────
-async function _cameraConnect(streamKey) {
-  if (_cameraPCs[streamKey]) { _cameraPCs[streamKey].close(); delete _cameraPCs[streamKey] }
-  _cleanupMse(streamKey)
-  const video  = document.getElementById(`cam-video-${streamKey}`)
-  const status = document.getElementById(`cam-status-${streamKey}`)
-  if (!video || !status) return
-  const setStatus = (t,c) => { if(status){ status.textContent=t; status.style.color=c } }
-  setStatus('CONNECTING…', '#4fc3f7')
-  video.srcObject = null; video.src = ''
-
-  // Remote access (Cloudflare tunnel, no STUN/TURN) — WebRTC ICE can never
-  // succeed, so skip straight to MSE instead of blanking the video and
-  // leaking an orphaned go2rtc WHEP consumer on every reconnect.
-  if (location.protocol === 'https:') {
-    try { await _startMSE(streamKey, video, setStatus) }
-    catch(e) { console.error('[camera]', streamKey, e); if (_cameraActive) { setStatus('RECONNECTING…', '#f59e0b'); setTimeout(()=>_cameraConnect(streamKey), 5000) } }
-    return
-  }
-
-  try {
-    // No STUN needed — browser and go2rtc are on the same LAN, local candidates work directly
-    const pc = new RTCPeerConnection({ iceServers:[], bundlePolicy:'max-bundle', iceCandidatePoolSize:4 })
-    _cameraPCs[streamKey] = pc
-    pc.addTransceiver('video', {direction:'recvonly'})
-    pc.addTransceiver('audio', {direction:'recvonly'})
-    pc.ontrack = e => {
-      if (!video.srcObject) video.srcObject = new MediaStream()
-      video.srcObject.addTrack(e.track)
-      video.play().catch(()=>{})
-    }
-    // 1. Exchange offer/answer first — ICE can't start before remote description is set
-    const offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
-    await new Promise(r => {
-      if (pc.iceGatheringState==='complete') return r()
-      pc.onicegatheringstatechange = ()=>{ if(pc.iceGatheringState==='complete') r() }
-      setTimeout(r, 400)  // short timeout — LAN candidates gather in <100ms without STUN
-    })
-    const res = await fetch(`/api/go2rtc/api/webrtc?src=${streamKey}`, {
-      method:'POST', headers:{'Content-Type':'application/sdp'}, body:pc.localDescription.sdp
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    await pc.setRemoteDescription({type:'answer', sdp: await res.text()})
-    // 2. NOW wait for ICE connectivity (after offer/answer, candidates are exchanged)
-    const iceResult = await Promise.race([
-      new Promise(r => {
-        const check = () => {
-          const s = pc.iceConnectionState
-          if (s==='connected'||s==='completed') r('ok')
-          else if (s==='failed') r('failed')
-        }
-        pc.oniceconnectionstatechange = check
-        check() // check current state immediately in case already connected
-      }),
-      new Promise(r => setTimeout(()=>r('timeout'), 3000))
-    ])
-    if (iceResult !== 'ok') {
-      pc.close(); delete _cameraPCs[streamKey]; video.srcObject = null
-      console.log('[camera] WebRTC', iceResult, '— falling back to MSE')
-      await _startMSE(streamKey, video, setStatus)
-      return
-    }
-    setStatus('● LIVE', '#4ade80')
-    // 3. Watch for future disconnects
-    pc.oniceconnectionstatechange = () => {
-      const s = pc.iceConnectionState
-      if (s==='failed'||s==='disconnected') {
-        setStatus('RECONNECTING…', '#f59e0b')
-        pc.close(); delete _cameraPCs[streamKey]; video.srcObject = null
-        if (_cameraActive) setTimeout(()=>_cameraConnect(streamKey), 3000)
-      }
-    }
-  } catch(e) {
-    console.error('[camera]', streamKey, e)
-    if (!_cameraActive) return
-    // If MSE failed, schedule full reconnect; otherwise try MSE first
-    if (e.message?.includes('MSE')) {
-      setStatus('RECONNECTING…', '#f59e0b')
-      setTimeout(()=>_cameraConnect(streamKey), 5000)
-    } else {
-      if (_cameraPCs[streamKey]) { _cameraPCs[streamKey].close(); delete _cameraPCs[streamKey] }
-      try { await _startMSE(streamKey, video, setStatus) }
-      catch { setStatus('RECONNECTING…', '#f59e0b'); setTimeout(()=>_cameraConnect(streamKey), 5000) }
-    }
-  }
-}
+// ── Camera ────────────────────────────────────────────────────────────────────
+// Live video only ever plays in the popup window (camera-popup.html). The
+// embedded card is a static preview — no WebRTC/MSE connection is opened on
+// the main page, avoiding the reconnect churn of running a live stream
+// alongside everything else the main UI is doing.
+let _cameraActive = false
 
 let _lastCamKeys = null
 function renderCameraCards() {
   const container = document.getElementById('camera-cards')
   if (!container) return
   const cams = Object.values(S.devices).filter(d=>d.type==='camera')
-  // Full re-renders (e.g. after the main WS reconnects and resends state) would
-  // otherwise tear down and reconnect every camera's live video stream even
-  // though the camera list itself hasn't changed — skip when it's unchanged.
   const camKeys = cams.map(c=>c.streamKey).sort().join(',')
   if (camKeys === _lastCamKeys) return
   _lastCamKeys = camKeys
@@ -7924,41 +7770,15 @@ function renderCameraCards() {
     card.style.cssText = 'display:flex;flex-direction:column;gap:10px'
     card.innerHTML = `
       <div style="font-size:13px;font-weight:700;color:#e0e0e0;letter-spacing:.3px">${cam.name}</div>
-      <div style="position:relative;width:500px;height:360px;background:#0a0a0a;border-radius:10px;overflow:hidden;border:1px solid #222;cursor:pointer" onclick="cameraPopout('${cam.streamKey}','${cam.name.replace(/'/g,"\\'")}','${cam.id}',${!!cam.hasPTZ})">
-        <video id="cam-video-${cam.streamKey}" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover"></video>
-        <div id="cam-status-${cam.streamKey}" style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,.65);color:#4fc3f7;font-size:10px;font-weight:700;padding:3px 9px;border-radius:4px;letter-spacing:.5px">CONNECTING…</div>
-        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0">
-          <div style="background:rgba(0,0,0,.7);color:#fff;font-size:12px;font-weight:700;padding:8px 18px;border-radius:6px;letter-spacing:.5px;pointer-events:none">⛶ POP OUT</div>
+      <div style="position:relative;width:500px;height:360px;background:#0a0a0a;border-radius:10px;overflow:hidden;border:1px solid #222;cursor:pointer;display:flex;align-items:center;justify-content:center" onclick="cameraPopout('${cam.streamKey}','${cam.name.replace(/'/g,"\\'")}','${cam.id}',${!!cam.hasPTZ})">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:10px;color:#444">
+          <span style="font-size:48px">📷</span>
+          <span style="font-size:12px;font-weight:700;letter-spacing:.5px">CLICK TO VIEW LIVE</span>
         </div>
         <div style="position:absolute;bottom:10px;right:10px;font-size:10px;color:#555">${cam.ip}</div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn btn-ghost btn-xs" id="cam-mute-${cam.id}" onclick="toggleCamAudio('${cam.streamKey}','${cam.id}')">🔇 Muted</button>
-        ${hasPTZ ? `<div style="margin-left:auto">
-          <div style="display:grid;grid-template-columns:repeat(3,30px);grid-template-rows:repeat(3,30px);gap:2px">
-            <div></div>
-            <button class="btn btn-ghost btn-xs" style="padding:0;font-size:16px" onmousedown="camPtz('${cam.id}',0,0.5)" onmouseup="camPtzStop('${cam.id}')" onmouseleave="camPtzStop('${cam.id}')">▲</button>
-            <div></div>
-            <button class="btn btn-ghost btn-xs" style="padding:0;font-size:16px" onmousedown="camPtz('${cam.id}',-0.5,0)" onmouseup="camPtzStop('${cam.id}')" onmouseleave="camPtzStop('${cam.id}')">◄</button>
-            <div style="display:flex;align-items:center;justify-content:center;font-size:9px;color:#444">PTZ</div>
-            <button class="btn btn-ghost btn-xs" style="padding:0;font-size:16px" onmousedown="camPtz('${cam.id}',0.5,0)" onmouseup="camPtzStop('${cam.id}')" onmouseleave="camPtzStop('${cam.id}')">►</button>
-            <div></div>
-            <button class="btn btn-ghost btn-xs" style="padding:0;font-size:16px" onmousedown="camPtz('${cam.id}',0,-0.5)" onmouseup="camPtzStop('${cam.id}')" onmouseleave="camPtzStop('${cam.id}')">▼</button>
-            <div></div>
-          </div>
-        </div>` : ''}
       </div>`
     container.appendChild(card)
-    if (_cameraActive) _cameraConnect(cam.streamKey)
   }
-}
-
-function toggleCamAudio(streamKey, camId) {
-  const v = document.getElementById(`cam-video-${streamKey}`)
-  if (!v) return
-  v.muted = !v.muted
-  const btn = document.getElementById(`cam-mute-${camId}`)
-  if (btn) btn.textContent = v.muted ? '🔇 Muted' : '🔊 Audio ON'
 }
 
 async function camPtz(camId, pan, tilt) {
@@ -7974,32 +7794,14 @@ async function camPtzStop(camId) {
 
 function cameraStart() { _cameraActive = true; renderCameraCards() }
 
-function cameraStop() {
-  _cameraActive = false
-  _lastCamKeys = null
-  for (const [k,pc] of Object.entries(_cameraPCs)) { pc.close(); delete _cameraPCs[k] }
-  Object.values(S.devices).filter(d=>d.type==='camera').forEach(cam => {
-    _cleanupMse(cam.streamKey)
-    const v = document.getElementById(`cam-video-${cam.streamKey}`)
-    if (v) { v.srcObject = null; v.src = '' }
-  })
-}
+function cameraStop() { _cameraActive = false; _lastCamKeys = null }
 
 function cameraPopout(streamKey, name, camId, hasPTZ) {
-  if (_cameraPCs[streamKey]) { _cameraPCs[streamKey].close(); delete _cameraPCs[streamKey] }
-  _cleanupMse(streamKey)
-  const video = document.getElementById(`cam-video-${streamKey}`)
-  if (video) { video.srcObject = null; video.src = '' }
-  const status = document.getElementById(`cam-status-${streamKey}`)
-  if (status) { status.textContent = '⛶ IN POPUP'; status.style.color = '#a78bfa' }
   const w = Math.round(screen.availWidth / 2), h = Math.round(screen.availHeight / 2)
   const left = Math.round((screen.availWidth-w)/2), top = Math.round((screen.availHeight-h)/2)
   const qs = `stream=${streamKey}&name=${encodeURIComponent(name)}${camId?`&camId=${camId}`:''}${hasPTZ?'&ptz=1':''}`
-  const win = window.open(`/camera-popup.html?${qs}`,
+  window.open(`/camera-popup.html?${qs}`,
     `cam_${streamKey}`, `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no`)
-  const poll = setInterval(() => {
-    if (win && win.closed) { clearInterval(poll); if (_cameraActive) _cameraConnect(streamKey) }
-  }, 1000)
 }
 
 

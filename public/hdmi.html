@@ -27,8 +27,8 @@ video{width:100%;height:100%;object-fit:cover;border-radius:4px;display:block}
 <script>
 const WS_URL = location.origin.replace(/^http/,'ws')
 let S = { devices:{}, groups:[], waveforms:{ builtin:[], custom:[], live:[] } }
-let _ws, _wfAnimId, _wfCanvases = [], _t = 0
-let _cams = {} // streamKey → { video, pc, src }
+let _ws
+let _cams = {}
 
 function connect() {
   _ws = new WebSocket(WS_URL)
@@ -41,14 +41,17 @@ function handle(m) {
     S.waveforms = m.waveforms
     S.groups = m.groups || []
     S.devices = {}
-    for (const d of m.devices) S.devices[d.id] = d
+    for (const d of m.devices) { d.tickAt = performance.now(); S.devices[d.id] = d }
     renderHdmi()
   }
   if (m.type === 'device:state') {
-    if (S.devices[m.id]) Object.assign(S.devices[m.id], m)
+    if (S.devices[m.id]) { Object.assign(S.devices[m.id], m); S.devices[m.id].tickAt = performance.now() }
     updateLiveWidgets(m.id)
   }
-  if (m.type === 'device:added')   { S.devices[m.device.id] = m.device; renderHdmi() }
+  if (m.type === 'device:tick') {
+    if (S.devices[m.id]) { S.devices[m.id].ticks = m.ticks; S.devices[m.id].paused = m.paused; S.devices[m.id].tickAt = performance.now() }
+  }
+  if (m.type === 'device:added')   { m.device.tickAt = performance.now(); S.devices[m.device.id] = m.device; renderHdmi() }
   if (m.type === 'device:removed') { delete S.devices[m.id]; renderHdmi() }
   if (m.type === 'device:updated') { S.devices[m.device.id] = m.device; renderHdmi() }
   if (m.type === 'hdmi:updated')   { Object.assign(S.devices[m.device.id] || {}, m.device); S.devices[m.device.id] = m.device; renderHdmi() }
@@ -107,10 +110,17 @@ function renderHdmi() {
     grid.appendChild(el)
   }
 
-  // Start waveform animation
-  if (_wfAnimId) cancelAnimationFrame(_wfAnimId)
-  _wfCanvases = Array.from(grid.querySelectorAll('.wfc'))
-  animateWaves()
+  // Start waveform viz loops
+  for (const w of layout.widgets) {
+    if (w.type === 'channel') {
+      const cv = document.getElementById('wfc-' + w.deviceId + '-' + w.channel)
+      if (cv) startChWfViz(cv, w.deviceId, w.channel)
+    }
+    if (w.type === 'group') {
+      const cv = document.getElementById('wfc-grp-' + w.groupId)
+      if (cv) startGrpWfViz(cv, w.groupId)
+    }
+  }
 
   // Start cameras
   for (const w of layout.widgets) {
@@ -145,7 +155,7 @@ function buildChannelWidget(w) {
       <span class="w-title">${dev?.name || 'Unknown'} · ${w.channel}</span>
       <span class="w-badge">${wfName}</span>
     </div>
-    <canvas class="wfc" data-wfid="${ch.waveform||''}" data-active="${active?1:0}" data-int="${ch.intensity||0}" data-freq="${ch.baseFreq||25}"></canvas>
+    <canvas class="wfc" id="wfc-${w.deviceId}-${w.channel}"></canvas>
     <div class="dials">
       <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
       <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.baseFreq||0)}" data-max="100" data-color="#ffc832" data-label="HZ"></canvas>
@@ -179,7 +189,8 @@ function buildGroupWidget(w) {
       <div style="font-size:14px;color:#e0e8ff;font-weight:500">${grp.name || 'Group'}</div>
       <div style="font-size:10px;color:#3a5090;margin-top:2px;font-family:monospace">${memberStr || 'no channels'}</div>
     </div>
-    <div class="dials" style="flex:1;align-items:center">
+    <canvas class="wfc" id="wfc-grp-${w.groupId}"></canvas>
+    <div class="dials" style="flex-shrink:0;align-items:center">
       <canvas class="dc" width="72" height="72" data-v="${Math.round(ch.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
       <canvas class="dc" width="72" height="72" data-v="${Math.round(ch.baseFreq||0)}" data-max="100" data-color="#ffc832" data-label="HZ"></canvas>
     </div>`
@@ -257,8 +268,6 @@ function refreshChannelWidget(el, w) {
   el.classList.toggle('w-idle', !active)
   const badge = el.querySelector('.w-badge')
   if (badge) badge.textContent = resolveWfName(ch.waveform)
-  const wfc = el.querySelector('.wfc')
-  if (wfc) { wfc.dataset.active = active ? '1' : '0'; wfc.dataset.wfid = ch.waveform || ''; wfc.dataset.int = ch.intensity || 0; wfc.dataset.freq = ch.baseFreq || 25 }
   const dcs = el.querySelectorAll('.dc')
   const vals = [Math.round(ch.intensity||0), Math.round(ch.baseFreq||0), Math.round((ch.intensity||0)/2)]
   dcs.forEach((c, i) => { c.dataset.v = vals[i]; drawDial(c) })
@@ -274,80 +283,157 @@ function refreshGroupWidget(el, w) {
   dcs.forEach((c, i) => { if (vals[i] !== undefined) { c.dataset.v = vals[i]; drawDial(c) } })
 }
 
-// ── Waveform animation ────────────────────────────────────────────────────────
+// ── Waveform visualization (exact port of startChViz / startGrpViz from index.html) ──
 
-function simAmps(wfId, n) {
-  const r = [], A = 100
-  for (let t = 0; t < n; t++) {
-    let a = 0
-    switch (wfId) {
-      case 'pulse':          a = t%10<5 ? A : 0; break
-      case 'breathe':        a = ((Math.sin(t*.1)+1)/2)*A; break
-      case 'tidal':          a = ((Math.sin(t*.05)+1)/2)*A; break
-      case 'wave':           a = ((Math.sin(t*.1)+1)/2)*A; break
-      case 'thud':           a = t%10===0 ? A : 0; break
-      case 'flutter':        a = t%2===0 ? A : 0; break
-      case 'ramp':           a = (t%20)/19*A; break
-      case 'heartbeat':      { const f=t%8; a=f===0?A:f===1?50:f===2?70:f===3?30:0; break }
-      case 'steps':          { const s=Math.floor((t%20)/5); a=[25,50,75,100][s]; break }
-      case 'buzz':           a = A; break
-      case 'ws-sawtooth':    a = (t%40)/40*A; break
-      case 'ws-triangle':    { const ph=t%40; a=(ph<20?ph/20:(40-ph)/20)*A; break }
-      case 'ws-fangs':       { const ph=t%40; const sp=n=>Math.max(0,1-Math.abs(ph-n)/6); a=Math.max(sp(8),sp(28))*A; break }
-      case 'ws-trapezoid':   { const ph=t%40; a=(ph<6?ph/6:ph<28?1:ph<34?(34-ph)/6:0)*A; break }
-      case 'ws-gentle':      { const ph=t%80; a=(ph<60?ph/60:(80-ph)/20)*A; break }
-      case 'ws-fast-attack': { const ph=t%40; a=Math.exp(-ph*0.12)*A; break }
-      case 'ws-tapslide':    { const ph=t%40; const tap=ph<5?(1-ph/5):0; const slide=ph>=10?(ph-10)/30:0; a=Math.max(tap,slide)*A; break }
-      case 'ws-jelly':       { const v=t*0.05; a=Math.max(0,(Math.sin(v)*0.7+Math.sin(v*0.3+1)*0.3+1)/2)*A; break }
-      case 'ws-double':      { const ph=t%20; a=Math.max(0,Math.sin(ph/20*Math.PI))*A; break }
-      case 'ws-triple':      { const ph=t%40; const sp=ph%(40/3); a=Math.max(0,Math.sin(sp/(40/3)*Math.PI))*A; break }
-      case 'ws-flourish':    { const ph=t%40; const sm=ph<10?Math.sin(ph/10*Math.PI)*0.4:0; const bg=ph>=15&&ph<35?Math.sin((ph-15)/20*Math.PI):0; a=Math.max(sm,bg)*A; break }
-      case 'ws-rising':      { const ph=t%80; const base=ph/80; const wave=(Math.sin(ph*0.25)+1)/2*0.4; a=Math.min(1,base+wave*base)*A; break }
-      default:               a = ((Math.sin(t*.1)+1)/2)*A; break
-    }
-    r.push(a)
+function builtinFrameAmp(wfId, tick, speed=1) {
+  const p = i => (tick*4 + i) * speed
+  switch(wfId) {
+    case 'pulse': { const ph=p(0)%40; const e=ph<8?(1-Math.cos(ph/8*Math.PI))/2:ph<24?1:ph<32?(1+Math.cos((ph-24)/8*Math.PI))/2:0; return Math.round(e*100) }
+    case 'breathe': return Math.round(((Math.sin(p(0)*0.025)+1)/2)*100)
+    case 'tidal': return Math.round((Math.abs(Math.sin(p(0)*0.0125))*0.9+0.05)*100)
+    case 'wave': return Math.round(((Math.sin(p(0)*0.025)+1)/2)*100)
+    case 'thud': { const ph=p(0)%40; const e=ph<12?(1-Math.cos(ph/12*Math.PI))/2:ph<20?1-(ph-12)/8:0; return Math.max(0,Math.round(e*100)) }
+    case 'flutter': return p(0)%8<4?100:0
+    case 'ramp': { const ph=p(0)%80; const e=ph<72?ph/72:(80-ph)/8*Math.cos((ph-72)/8*Math.PI*0.5); return Math.max(0,Math.round(e*100)) }
+    case 'heartbeat': { const f=p(0)%32; return f===0?100:f===4?50:f===8?70:f===12?30:0 }
+    case 'steps': return [25,50,75,100][Math.floor((p(0)%80)/20)]
+    case 'buzz': return 100
+    case 'ws-sawtooth':    { const ph=p(0)%40; return Math.round((ph/40)*100) }
+    case 'ws-triangle':    { const ph=p(0)%40; return Math.round((ph<20?ph/20:(40-ph)/20)*100) }
+    case 'ws-fangs':       { const ph=p(0)%40; const sp=n=>Math.max(0,1-Math.abs(ph-n)/6); return Math.round(Math.max(sp(8),sp(28))*100) }
+    case 'ws-trapezoid':   { const ph=p(0)%40; return Math.round((ph<6?ph/6:ph<28?1:ph<34?(34-ph)/6:0)*100) }
+    case 'ws-gentle':      { const ph=p(0)%80; return Math.round((ph<60?ph/60:(80-ph)/20)*100) }
+    case 'ws-fast-attack': { const ph=p(0)%40; return Math.round(Math.exp(-ph*0.12)*100) }
+    case 'ws-tapslide':    { const ph=p(0)%40; const tap=ph<5?(1-ph/5):0; const slide=ph>=10?(ph-10)/30:0; return Math.round(Math.max(tap,slide)*100) }
+    case 'ws-jelly':       { const t2=p(0)*0.05; return Math.round(Math.max(0,(Math.sin(t2)*0.7+Math.sin(t2*0.3+1)*0.3+1)/2)*100) }
+    case 'ws-double':      { const ph=p(0)%20; return Math.round(Math.max(0,Math.sin(ph/20*Math.PI))*100) }
+    case 'ws-triple':      { const ph=p(0)%40; const sp=ph%(40/3); return Math.round(Math.max(0,Math.sin(sp/(40/3)*Math.PI))*100) }
+    case 'ws-flourish':    { const ph=p(0)%40; const sm=ph<10?Math.sin(ph/10*Math.PI)*0.4:0; const bg=ph>=15&&ph<35?Math.sin((ph-15)/20*Math.PI):0; return Math.round(Math.max(sm,bg)*100) }
+    case 'ws-rising':      { const ph=p(0)%80; const base=ph/80; const wave=(Math.sin(ph*0.25)+1)/2*0.4; return Math.round(Math.min(1,base+wave*base)*100) }
+    default: return 0
   }
-  return r
 }
 
-function getWfAmps(wfId) {
-  if (!wfId) return null
-  const custom = (S.waveforms.custom || []).find(w => w.id === wfId)
-  if (custom?.frames?.length) return custom.frames.map(f => f.segs.reduce((s, sg) => s + sg.a, 0) / 4)
-  return simAmps(wfId, 40)
+function startChWfViz(cv, devId, ch) {
+  const state = { phase: 0 }
+  const dpr = window.devicePixelRatio || 1
+  const W = cv.clientWidth || cv.offsetWidth || 400
+  const H = cv.clientHeight || cv.offsetHeight || 80
+  cv.width = W * dpr; cv.height = H * dpr
+  const ctx = cv.getContext('2d')
+  ctx.scale(dpr, dpr)
+  const colorTop = ch === 'A' ? '#a5f3fc' : '#fde68a'
+  const colorBot = ch === 'A' ? 'rgba(79,195,247,.7)' : 'rgba(251,191,36,.7)'
+  const actColorTop = '#fde68a', actColorBot = 'rgba(251,191,36,.7)'
+
+  function draw(ts) {
+    if (!cv.isConnected) return
+    ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
+    const dev = S.devices?.[devId]
+    if (!dev || dev.status !== 'connected') {
+      ctx.fillStyle = '#1c1c1c'; ctx.fillRect(0, H-1, W, 1)
+      requestAnimationFrame(draw); return
+    }
+    const chData = dev.channels?.[ch] || {}
+    const intensity = Math.min(chData.intensity || 0, 100)
+    const wfId = chData.waveform || 'pulse'
+    const speed = chData.speed || 1
+    const actMode = chData.mode === 'activity'
+    const actDef = actMode ? (S.activities || []).find(a => a.id === chData.activityId) : null
+    const vizWfId = actDef ? actDef.ampWave : wfId
+    const wf = [...(S.waveforms?.builtin || []), ...(S.waveforms?.custom || [])].find(w => w.id === vizWfId)
+    if (!wf) { requestAnimationFrame(draw); return }
+    const isBuiltin = !Array.isArray(wf.frames)
+    const fLen = isBuiltin ? 480 : wf.frames.length
+    const chTick = dev.ticks?.[ch] || 0
+    if (dev.paused?.[ch]) state.phase = chTick
+    else state.phase = dev.tickAt != null ? chTick + (ts - dev.tickAt) / 100 : state.phase + 1/60
+    const PLAY_X = Math.floor(W * 0.3)
+    const curFrame = Math.floor(state.phase)
+    const g = ctx.createLinearGradient(0, 0, 0, H)
+    g.addColorStop(0, actMode ? actColorTop : colorTop)
+    g.addColorStop(1, actMode ? actColorBot : colorBot)
+    for (let px = 0; px < W; px++) {
+      const rawTick = curFrame + (px - PLAY_X)
+      let amp
+      if (isBuiltin) {
+        amp = builtinFrameAmp(vizWfId, rawTick, speed)
+      } else {
+        const fi = ((Math.floor(rawTick * speed) % fLen) + fLen) % fLen
+        const f = wf.frames[fi]
+        amp = typeof f === 'number' ? f : (f?.segs?.[0]?.a ?? 0)
+      }
+      const bh = Math.max(1, Math.round(amp * intensity / 100 / 100 * (H - 2)))
+      ctx.fillStyle = px < PLAY_X ? colorBot : g
+      ctx.fillRect(px, H - bh, 1, bh)
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5
+    ctx.beginPath(); ctx.moveTo(PLAY_X, 0); ctx.lineTo(PLAY_X, H); ctx.stroke()
+    requestAnimationFrame(draw)
+  }
+  requestAnimationFrame(draw)
 }
 
-function animateWaves() {
-  _t += 1
-  for (const c of _wfCanvases) {
-    const w = c.offsetWidth, h = c.offsetHeight
-    if (!w || !h) continue
-    if (c.width !== w || c.height !== h) { c.width = w; c.height = h }
-    const ctx = c.getContext('2d')
-    ctx.clearRect(0, 0, w, h)
-    ctx.fillStyle = '#0b1020'; ctx.fillRect(0, 0, w, h)
-    if (c.dataset.active !== '1') {
-      ctx.fillStyle = '#1a2540'; ctx.font = '11px monospace'; ctx.textAlign = 'center'
-      ctx.fillText('idle', w/2, h/2 + 4)
-      continue
+function startGrpWfViz(cv, groupId) {
+  const state = { phase: 0 }
+  const dpr = window.devicePixelRatio || 1
+  const W = cv.clientWidth || cv.offsetWidth || 400
+  const H = cv.clientHeight || cv.offsetHeight || 80
+  cv.width = W * dpr; cv.height = H * dpr
+  const ctx = cv.getContext('2d')
+  ctx.scale(dpr, dpr)
+  const colorTop = '#e9d5ff'
+  const colorBot = 'rgba(167,139,250,.7)'
+
+  function draw(ts) {
+    if (!cv.isConnected) return
+    ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
+    const grp = S.groups?.find(g => g.id === groupId)
+    const firstCh = grp?.channels?.find(({ deviceId }) => S.devices?.[deviceId]?.status === 'connected')
+    let intensity, wfId, speed, actMode = false, actDef = null
+    if (firstCh) {
+      const chData = S.devices[firstCh.deviceId]?.channels?.[firstCh.channel] || {}
+      intensity = Math.min(chData.intensity || 0, 100)
+      speed = chData.speed || 1
+      actMode = chData.mode === 'activity'
+      actDef = actMode ? (S.activities || []).find(a => a.id === chData.activityId) : null
+      wfId = actDef ? actDef.ampWave : (chData.waveform || 'pulse')
+    } else {
+      intensity = 0; wfId = 'pulse'; speed = 1
     }
-    const amps = getWfAmps(c.dataset.wfid)
-    if (!amps) continue
-    const intensity = Math.min(200, parseFloat(c.dataset.int) || 0)
-    const freq = Math.max(1, parseFloat(c.dataset.freq) || 25)
-    const n = amps.length
-    // scroll at freq/40 bars per frame so 1 full cycle takes 40*(60/freq) frames
-    const offset = Math.floor(_t * freq / 40) % n
-    const bw = w / n
-    const scale = intensity / 200
-    ctx.fillStyle = `rgba(79,195,247,${0.4 + scale * 0.5})`
-    for (let i = 0; i < n; i++) {
-      const a = amps[(i + offset) % n]
-      const barH = (a / 100) * scale * (h - 2)
-      if (barH > 0) ctx.fillRect(i * bw, h - barH, Math.max(1, bw - 1), barH)
+    const grpColorTop = actMode ? '#fde68a' : colorTop
+    const grpColorBot = actMode ? 'rgba(251,191,36,.7)' : colorBot
+    const wf = [...(S.waveforms?.builtin || []), ...(S.waveforms?.custom || [])].find(w => w.id === wfId)
+    if (!wf) { requestAnimationFrame(draw); return }
+    const isBuiltin = !Array.isArray(wf.frames)
+    const fLen = isBuiltin ? 480 : wf.frames.length
+    const tickDev = firstCh ? S.devices[firstCh.deviceId] : null
+    const grpChTick = tickDev?.ticks?.[firstCh?.channel] || 0
+    if (tickDev?.paused?.[firstCh?.channel]) state.phase = grpChTick
+    else state.phase = tickDev?.tickAt != null ? grpChTick + (ts - tickDev.tickAt) / 100 : state.phase + 1/60
+    const PLAY_X = Math.floor(W * 0.3)
+    const curFrame = Math.floor(state.phase)
+    const g = ctx.createLinearGradient(0, 0, 0, H)
+    g.addColorStop(0, grpColorTop); g.addColorStop(1, grpColorBot)
+    for (let px = 0; px < W; px++) {
+      const rawTick = curFrame + (px - PLAY_X)
+      let amp
+      if (isBuiltin) {
+        amp = builtinFrameAmp(wfId, rawTick, speed)
+      } else {
+        const fi = ((Math.floor(rawTick * speed) % fLen) + fLen) % fLen
+        const f = wf.frames[fi]
+        amp = typeof f === 'number' ? f : (f?.segs?.[0]?.a ?? 0)
+      }
+      const bh = Math.max(1, Math.round(amp * intensity / 100 / 100 * (H - 2)))
+      ctx.fillStyle = px < PLAY_X ? grpColorBot : g
+      ctx.fillRect(px, H - bh, 1, bh)
     }
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5
+    ctx.beginPath(); ctx.moveTo(PLAY_X, 0); ctx.lineTo(PLAY_X, H); ctx.stroke()
+    requestAnimationFrame(draw)
   }
-  _wfAnimId = requestAnimationFrame(animateWaves)
+  requestAnimationFrame(draw)
 }
 
 // ── Dial drawing ─────────────────────────────────────────────────────────────

@@ -145,7 +145,7 @@ function buildChannelWidget(w) {
       <span class="w-title">${dev?.name || 'Unknown'} · ${w.channel}</span>
       <span class="w-badge">${wfName}</span>
     </div>
-    <canvas class="wfc" data-phase="${hashPhase(w.deviceId + w.channel)}" data-active="${active?1:0}"></canvas>
+    <canvas class="wfc" data-wfid="${ch.waveform||''}" data-active="${active?1:0}"></canvas>
     <div class="dials">
       <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
       <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.frequency||0)}" data-max="200" data-color="#ffc832" data-label="HZ"></canvas>
@@ -155,10 +155,19 @@ function buildChannelWidget(w) {
   return el
 }
 
+function grpChannelState(grp) {
+  for (const { deviceId, channel } of grp.channels || []) {
+    const ch = S.devices[deviceId]?.channels?.[channel]
+    if (ch) return ch
+  }
+  return {}
+}
+
 function buildGroupWidget(w) {
   const grp = S.groups.find(g => g.id === w.groupId) || {}
   const channels = grp.channels || []
-  const active = grp.enabled && channels.length > 0
+  const ch = grpChannelState(grp)
+  const active = grp.enabled !== false && channels.length > 0 && (ch.intensity || 0) > 0
   const el = document.createElement('div')
   el.className = 'w' + (active ? '' : ' w-idle')
   el.dataset.widgetId = w.id
@@ -171,8 +180,8 @@ function buildGroupWidget(w) {
       <div style="font-size:10px;color:#3a5090;margin-top:2px;font-family:monospace">${memberStr || 'no channels'}</div>
     </div>
     <div class="dials" style="flex:1;align-items:center">
-      <canvas class="dc" width="72" height="72" data-v="${Math.round(grp.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
-      <canvas class="dc" width="72" height="72" data-v="${Math.round(grp.frequency||0)}" data-max="200" data-color="#ffc832" data-label="HZ"></canvas>
+      <canvas class="dc" width="72" height="72" data-v="${Math.round(ch.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
+      <canvas class="dc" width="72" height="72" data-v="${Math.round(ch.frequency||0)}" data-max="200" data-color="#ffc832" data-label="HZ"></canvas>
     </div>`
   setTimeout(() => el.querySelectorAll('.dc').forEach(c => drawDial(c)), 0)
   return el
@@ -249,7 +258,7 @@ function refreshChannelWidget(el, w) {
   const badge = el.querySelector('.w-badge')
   if (badge) badge.textContent = resolveWfName(ch.waveform)
   const wfc = el.querySelector('.wfc')
-  if (wfc) wfc.dataset.active = active ? '1' : '0'
+  if (wfc) { wfc.dataset.active = active ? '1' : '0'; wfc.dataset.wfid = ch.waveform || '' }
   const dcs = el.querySelectorAll('.dc')
   const vals = [Math.round(ch.intensity||0), Math.round(ch.frequency||0), Math.round((ch.intensity||0)/2)]
   dcs.forEach((c, i) => { c.dataset.v = vals[i]; drawDial(c) })
@@ -257,41 +266,81 @@ function refreshChannelWidget(el, w) {
 
 function refreshGroupWidget(el, w) {
   const grp = S.groups.find(g => g.id === w.groupId) || {}
+  const ch = grpChannelState(grp)
+  const active = grp.enabled !== false && (grp.channels||[]).length > 0 && (ch.intensity || 0) > 0
+  el.classList.toggle('w-idle', !active)
   const dcs = el.querySelectorAll('.dc')
-  const vals = [Math.round(grp.intensity||0), Math.round(grp.frequency||0)]
+  const vals = [Math.round(ch.intensity||0), Math.round(ch.frequency||0)]
   dcs.forEach((c, i) => { if (vals[i] !== undefined) { c.dataset.v = vals[i]; drawDial(c) } })
 }
 
 // ── Waveform animation ────────────────────────────────────────────────────────
 
+function simAmps(wfId, n) {
+  const r = [], A = 100
+  for (let t = 0; t < n; t++) {
+    let a = 0
+    switch (wfId) {
+      case 'pulse':          a = t%10<5 ? A : 0; break
+      case 'breathe':        a = ((Math.sin(t*.1)+1)/2)*A; break
+      case 'tidal':          a = ((Math.sin(t*.05)+1)/2)*A; break
+      case 'wave':           a = ((Math.sin(t*.1)+1)/2)*A; break
+      case 'thud':           a = t%10===0 ? A : 0; break
+      case 'flutter':        a = t%2===0 ? A : 0; break
+      case 'ramp':           a = (t%20)/19*A; break
+      case 'heartbeat':      { const f=t%8; a=f===0?A:f===1?50:f===2?70:f===3?30:0; break }
+      case 'steps':          { const s=Math.floor((t%20)/5); a=[25,50,75,100][s]; break }
+      case 'buzz':           a = A; break
+      case 'ws-sawtooth':    a = (t%40)/40*A; break
+      case 'ws-triangle':    { const ph=t%40; a=(ph<20?ph/20:(40-ph)/20)*A; break }
+      case 'ws-fangs':       { const ph=t%40; const sp=n=>Math.max(0,1-Math.abs(ph-n)/6); a=Math.max(sp(8),sp(28))*A; break }
+      case 'ws-trapezoid':   { const ph=t%40; a=(ph<6?ph/6:ph<28?1:ph<34?(34-ph)/6:0)*A; break }
+      case 'ws-gentle':      { const ph=t%80; a=(ph<60?ph/60:(80-ph)/20)*A; break }
+      case 'ws-fast-attack': { const ph=t%40; a=Math.exp(-ph*0.12)*A; break }
+      case 'ws-tapslide':    { const ph=t%40; const tap=ph<5?(1-ph/5):0; const slide=ph>=10?(ph-10)/30:0; a=Math.max(tap,slide)*A; break }
+      case 'ws-jelly':       { const v=t*0.05; a=Math.max(0,(Math.sin(v)*0.7+Math.sin(v*0.3+1)*0.3+1)/2)*A; break }
+      case 'ws-double':      { const ph=t%20; a=Math.max(0,Math.sin(ph/20*Math.PI))*A; break }
+      case 'ws-triple':      { const ph=t%40; const sp=ph%(40/3); a=Math.max(0,Math.sin(sp/(40/3)*Math.PI))*A; break }
+      case 'ws-flourish':    { const ph=t%40; const sm=ph<10?Math.sin(ph/10*Math.PI)*0.4:0; const bg=ph>=15&&ph<35?Math.sin((ph-15)/20*Math.PI):0; a=Math.max(sm,bg)*A; break }
+      case 'ws-rising':      { const ph=t%80; const base=ph/80; const wave=(Math.sin(ph*0.25)+1)/2*0.4; a=Math.min(1,base+wave*base)*A; break }
+      default:               a = ((Math.sin(t*.1)+1)/2)*A; break
+    }
+    r.push(a)
+  }
+  return r
+}
+
+function getWfAmps(wfId) {
+  if (!wfId) return null
+  const custom = (S.waveforms.custom || []).find(w => w.id === wfId)
+  if (custom?.frames?.length) return custom.frames.map(f => f.segs.reduce((s, sg) => s + sg.a, 0) / 4)
+  return simAmps(wfId, 40)
+}
+
 function animateWaves() {
-  _t += 0.035
+  _t += 1
   for (const c of _wfCanvases) {
     const w = c.offsetWidth, h = c.offsetHeight
     if (!w || !h) continue
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h }
     const ctx = c.getContext('2d')
     ctx.clearRect(0, 0, w, h)
+    ctx.fillStyle = '#0b1020'; ctx.fillRect(0, 0, w, h)
     if (c.dataset.active !== '1') {
-      ctx.fillStyle = '#0e1525'; ctx.fillRect(0, 0, w, h)
-      ctx.fillStyle = '#1e2840'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'
+      ctx.fillStyle = '#1a2540'; ctx.font = '11px monospace'; ctx.textAlign = 'center'
       ctx.fillText('idle', w/2, h/2 + 4)
       continue
     }
-    const ph = parseFloat(c.dataset.phase) || 0
-    ctx.beginPath()
-    for (let i = 0; i <= 100; i++) {
-      const x = (i/100) * w
-      const y = h/2 + Math.sin(i/100 * Math.PI * 5 + _t * 1.8 + ph) * h * 0.28
-                    + Math.sin(i/100 * Math.PI * 11 + _t * 2.3 + ph * 1.4) * h * 0.07
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+    const amps = getWfAmps(c.dataset.wfid)
+    if (!amps) continue
+    const n = amps.length, bw = w / n
+    const offset = Math.floor(_t / 2) % n
+    ctx.fillStyle = 'rgba(79,195,247,0.65)'
+    for (let i = 0; i < n; i++) {
+      const a = amps[(i + offset) % n]
+      const barH = (a / 100) * (h - 2)
+      if (barH > 0) ctx.fillRect(i * bw, h - barH, Math.max(1, bw - 1), barH)
     }
-    ctx.strokeStyle = '#3a7fff'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke()
-
-    const grad = ctx.createLinearGradient(0, h/2 - h * 0.35, 0, h)
-    grad.addColorStop(0, 'rgba(58,127,255,0.1)'); grad.addColorStop(1, 'rgba(58,127,255,0)')
-    ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath()
-    ctx.fillStyle = grad; ctx.fill()
   }
   _wfAnimId = requestAnimationFrame(animateWaves)
 }
@@ -372,12 +421,6 @@ function resolveWfName(wf) {
   for (const w of S.waveforms?.builtin || []) if (w.id === wf) return w.name
   for (const w of S.waveforms?.custom || []) if (w.id === wf) return w.name
   return wf
-}
-
-function hashPhase(str) {
-  let h = 0
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) & 0xffffffff
-  return (h & 0xffff) / 0xffff * Math.PI * 6
 }
 
 connect()

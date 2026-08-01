@@ -13,6 +13,7 @@ import multer from 'multer'
 import { exec, execSync, spawn } from 'child_process'
 import net from 'net'
 import dgram from 'dgram'
+import { createGzip } from 'zlib'
 import { EventEmitter } from 'events'
 EventEmitter.defaultMaxListeners = 100
 import { SerialPort } from 'serialport'
@@ -2430,6 +2431,16 @@ const go2rtcProxy = createProxyMiddleware({
 })
 app.use('/api/go2rtc', go2rtcProxy)
 
+// Serve index.html with gzip to cut 525KB → ~80KB over the network
+app.get('/', (req, res) => {
+  if ((req.headers['accept-encoding'] || '').includes('gzip')) {
+    res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Content-Encoding': 'gzip', 'Cache-Control': 'no-store' })
+    createReadStream(join(__dirname, 'public', 'index.html')).pipe(createGzip()).pipe(res)
+  } else {
+    res.set('Cache-Control', 'no-store')
+    res.sendFile(join(__dirname, 'public', 'index.html'))
+  }
+})
 app.use(express.static(join(__dirname, 'public'), { etag:false, lastModified:false, setHeaders: res => res.set('Cache-Control','no-store') }))
 app.use('/icons', express.static(join(__dirname, 'icons'), { etag:false, lastModified:false, setHeaders: res => res.set('Cache-Control','no-store') }))
 

@@ -7905,10 +7905,17 @@ async function _cameraConnect(streamKey) {
   }
 }
 
+let _lastCamKeys = null
 function renderCameraCards() {
   const container = document.getElementById('camera-cards')
   if (!container) return
   const cams = Object.values(S.devices).filter(d=>d.type==='camera')
+  // Full re-renders (e.g. after the main WS reconnects and resends state) would
+  // otherwise tear down and reconnect every camera's live video stream even
+  // though the camera list itself hasn't changed — skip when it's unchanged.
+  const camKeys = cams.map(c=>c.streamKey).sort().join(',')
+  if (camKeys === _lastCamKeys) return
+  _lastCamKeys = camKeys
   container.innerHTML = ''
   if (!cams.length) { container.innerHTML = '<div style="color:#444;font-size:13px">No cameras configured — add one from Devices</div>'; return }
   for (const cam of cams) {
@@ -7969,6 +7976,7 @@ function cameraStart() { _cameraActive = true; renderCameraCards() }
 
 function cameraStop() {
   _cameraActive = false
+  _lastCamKeys = null
   for (const [k,pc] of Object.entries(_cameraPCs)) { pc.close(); delete _cameraPCs[k] }
   Object.values(S.devices).filter(d=>d.type==='camera').forEach(cam => {
     _cleanupMse(cam.streamKey)

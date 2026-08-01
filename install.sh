@@ -255,11 +255,25 @@ log "Enabling avahi mDNS"
 systemctl enable avahi-daemon
 systemctl start avahi-daemon
 
+# ── go2rtc ───────────────────────────────────────────────────────────────────
+log "Installing go2rtc v1.9.14"
+GO2RTC_BIN="/home/$APP_USER/go2rtc"
+if [ ! -f "$GO2RTC_BIN" ]; then
+  curl -fsSL https://github.com/AlexxIT/go2rtc/releases/download/v1.9.14/go2rtc_linux_arm64 -o "$GO2RTC_BIN"
+  chmod +x "$GO2RTC_BIN"
+  chown "$APP_USER:$APP_USER" "$GO2RTC_BIN"
+  ok "go2rtc downloaded"
+else
+  ok "go2rtc already present — skipping"
+fi
+
 # ── pm2 ───────────────────────────────────────────────────────────────────────
 log "Starting edgecontroller with pm2"
 cd "$APP_DIR"
 sudo -u "$APP_USER" pm2 delete edgecontroller 2>/dev/null || true
 sudo -u "$APP_USER" pm2 start ecosystem.config.cjs
+sudo -u "$APP_USER" pm2 delete go2rtc 2>/dev/null || true
+sudo -u "$APP_USER" pm2 start "/home/$APP_USER/go2rtc" --name go2rtc -- --config go2rtc.yaml
 sudo -u "$APP_USER" pm2 save
 
 log "Enabling pm2 on boot"

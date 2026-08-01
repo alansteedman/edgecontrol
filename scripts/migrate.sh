@@ -52,6 +52,20 @@ else
   log "~/.bash_profile already has kiosk config — skipping"
 fi
 
+# ── go2rtc ───────────────────────────────────────────────────────────────────
+GO2RTC_BIN="/home/$APP_USER/go2rtc"
+if [ ! -f "$GO2RTC_BIN" ]; then
+  log "Downloading go2rtc v1.9.14"
+  curl -fsSL https://github.com/AlexxIT/go2rtc/releases/download/v1.9.14/go2rtc_linux_arm64 -o "$GO2RTC_BIN"
+  chmod +x "$GO2RTC_BIN"
+  chown "$APP_USER:$APP_USER" "$GO2RTC_BIN"
+  sudo -u "$APP_USER" pm2 delete go2rtc 2>/dev/null || true
+  sudo -u "$APP_USER" pm2 start "$GO2RTC_BIN" --name go2rtc -- --config go2rtc.yaml
+  sudo -u "$APP_USER" pm2 save
+else
+  log "go2rtc already installed — skipping"
+fi
+
 # ── ecosystem.config.cjs — ensure UV_THREADPOOL_SIZE is set ──────────────────
 ECO="$APP_DIR/ecosystem.config.cjs"
 if ! grep -q 'UV_THREADPOOL_SIZE' "$ECO" 2>/dev/null; then

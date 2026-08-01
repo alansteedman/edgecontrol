@@ -163,6 +163,15 @@
     video.srcObject = null; video.src = ''
     setStatus('CONNECTING…', '#4fc3f7')
 
+    // Remote access (Cloudflare tunnel, no STUN/TURN) — WebRTC ICE can never
+    // succeed, so skip straight to MSE instead of blanking the video and
+    // leaking an orphaned go2rtc WHEP consumer on every reconnect.
+    if (location.protocol === 'https:') {
+      try { await startMSE() }
+      catch(e) { console.error('[cam-popup] MSE error', e); setStatus('RECONNECTING…', '#f59e0b'); if (active) setTimeout(connect, 5000) }
+      return
+    }
+
     // ── 1. Try WebRTC (low latency on LAN, ~200ms) ──────────────────────────
     try {
       // No STUN — LAN, local candidates are sufficient. Will fail/timeout over Cloudflare.

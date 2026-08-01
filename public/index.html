@@ -7828,6 +7828,15 @@ async function _cameraConnect(streamKey) {
   setStatus('CONNECTING…', '#4fc3f7')
   video.srcObject = null; video.src = ''
 
+  // Remote access (Cloudflare tunnel, no STUN/TURN) — WebRTC ICE can never
+  // succeed, so skip straight to MSE instead of blanking the video and
+  // leaking an orphaned go2rtc WHEP consumer on every reconnect.
+  if (location.protocol === 'https:') {
+    try { await _startMSE(streamKey, video, setStatus) }
+    catch(e) { console.error('[camera]', streamKey, e); if (_cameraActive) { setStatus('RECONNECTING…', '#f59e0b'); setTimeout(()=>_cameraConnect(streamKey), 5000) } }
+    return
+  }
+
   try {
     // No STUN needed — browser and go2rtc are on the same LAN, local candidates work directly
     const pc = new RTCPeerConnection({ iceServers:[], bundlePolicy:'max-bundle', iceCandidatePoolSize:4 })

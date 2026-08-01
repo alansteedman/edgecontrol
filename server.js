@@ -2064,7 +2064,7 @@ class HueBridge {
 function rebuildGo2rtcConfig() {
   const cameras = Object.values(devices).filter(d=>d.type==='camera')
   const streams = {}
-  for (const cam of cameras) { streams[cam.streamKey] = [`exec:ffmpeg -rtsp_transport tcp -i ${cam.rtspUrl} -c:v copy -an -f mpegts -`]; cam.status='connecting'; broadcast({type:'device:status',id:cam.id,status:'connecting'}) }
+  for (const cam of cameras) { streams[cam.streamKey] = [`exec:ffmpeg -rtsp_transport tcp -i ${cam.rtspUrl} -c:v copy -c:a aac -ar 48000 -ac 1 -b:a 64k -f mpegts -`]; cam.status='connecting'; broadcast({type:'device:status',id:cam.id,status:'connecting'}) }
   const streamLines = Object.entries(streams).map(([k,v]) => Array.isArray(v)
     ? `  ${k}:\n${v.map(s=>`    - ${s}`).join('\n')}`
     : `  ${k}: ${v}`).join('\n') || '  # no cameras configured'

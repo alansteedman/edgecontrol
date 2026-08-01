@@ -145,10 +145,10 @@ function buildChannelWidget(w) {
       <span class="w-title">${dev?.name || 'Unknown'} · ${w.channel}</span>
       <span class="w-badge">${wfName}</span>
     </div>
-    <canvas class="wfc" data-wfid="${ch.waveform||''}" data-active="${active?1:0}"></canvas>
+    <canvas class="wfc" data-wfid="${ch.waveform||''}" data-active="${active?1:0}" data-int="${ch.intensity||0}" data-freq="${ch.baseFreq||25}"></canvas>
     <div class="dials">
       <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
-      <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.frequency||0)}" data-max="200" data-color="#ffc832" data-label="HZ"></canvas>
+      <canvas class="dc" width="64" height="64" data-v="${Math.round(ch.baseFreq||0)}" data-max="100" data-color="#ffc832" data-label="HZ"></canvas>
       <canvas class="dc" width="64" height="64" data-v="${Math.round((ch.intensity||0)/2)}" data-max="100" data-color="#32e88c" data-label="SPD"></canvas>
     </div>`
   setTimeout(() => el.querySelectorAll('.dc').forEach(c => drawDial(c)), 0)
@@ -181,7 +181,7 @@ function buildGroupWidget(w) {
     </div>
     <div class="dials" style="flex:1;align-items:center">
       <canvas class="dc" width="72" height="72" data-v="${Math.round(ch.intensity||0)}" data-max="200" data-color="#4da6ff" data-label="INT"></canvas>
-      <canvas class="dc" width="72" height="72" data-v="${Math.round(ch.frequency||0)}" data-max="200" data-color="#ffc832" data-label="HZ"></canvas>
+      <canvas class="dc" width="72" height="72" data-v="${Math.round(ch.baseFreq||0)}" data-max="100" data-color="#ffc832" data-label="HZ"></canvas>
     </div>`
   setTimeout(() => el.querySelectorAll('.dc').forEach(c => drawDial(c)), 0)
   return el
@@ -258,9 +258,9 @@ function refreshChannelWidget(el, w) {
   const badge = el.querySelector('.w-badge')
   if (badge) badge.textContent = resolveWfName(ch.waveform)
   const wfc = el.querySelector('.wfc')
-  if (wfc) { wfc.dataset.active = active ? '1' : '0'; wfc.dataset.wfid = ch.waveform || '' }
+  if (wfc) { wfc.dataset.active = active ? '1' : '0'; wfc.dataset.wfid = ch.waveform || ''; wfc.dataset.int = ch.intensity || 0; wfc.dataset.freq = ch.baseFreq || 25 }
   const dcs = el.querySelectorAll('.dc')
-  const vals = [Math.round(ch.intensity||0), Math.round(ch.frequency||0), Math.round((ch.intensity||0)/2)]
+  const vals = [Math.round(ch.intensity||0), Math.round(ch.baseFreq||0), Math.round((ch.intensity||0)/2)]
   dcs.forEach((c, i) => { c.dataset.v = vals[i]; drawDial(c) })
 }
 
@@ -270,7 +270,7 @@ function refreshGroupWidget(el, w) {
   const active = grp.enabled !== false && (grp.channels||[]).length > 0 && (ch.intensity || 0) > 0
   el.classList.toggle('w-idle', !active)
   const dcs = el.querySelectorAll('.dc')
-  const vals = [Math.round(ch.intensity||0), Math.round(ch.frequency||0)]
+  const vals = [Math.round(ch.intensity||0), Math.round(ch.baseFreq||0)]
   dcs.forEach((c, i) => { if (vals[i] !== undefined) { c.dataset.v = vals[i]; drawDial(c) } })
 }
 
@@ -333,12 +333,17 @@ function animateWaves() {
     }
     const amps = getWfAmps(c.dataset.wfid)
     if (!amps) continue
-    const n = amps.length, bw = w / n
-    const offset = Math.floor(_t / 2) % n
-    ctx.fillStyle = 'rgba(79,195,247,0.65)'
+    const intensity = Math.min(200, parseFloat(c.dataset.int) || 0)
+    const freq = Math.max(1, parseFloat(c.dataset.freq) || 25)
+    const n = amps.length
+    // scroll at freq/40 bars per frame so 1 full cycle takes 40*(60/freq) frames
+    const offset = Math.floor(_t * freq / 40) % n
+    const bw = w / n
+    const scale = intensity / 200
+    ctx.fillStyle = `rgba(79,195,247,${0.4 + scale * 0.5})`
     for (let i = 0; i < n; i++) {
       const a = amps[(i + offset) % n]
-      const barH = (a / 100) * (h - 2)
+      const barH = (a / 100) * scale * (h - 2)
       if (barH > 0) ctx.fillRect(i * bw, h - barH, Math.max(1, bw - 1), barH)
     }
   }

@@ -1253,13 +1253,6 @@ function connect() {
     fetch('/api/deck-wf-hidden').then(r=>r.json()).then(d=>{ S.deckHidden=d.hidden||[]; renderWfTab() }).catch(()=>{})
     setTimeout(initBandSelector, 100)
     clearInterval(_wsPingTimer)
-    _wsPingTimer = setInterval(() => {
-      if (ws.readyState === 1) {
-        _wsAlive = false
-        ws.send(JSON.stringify({type:'ping'}))
-        setTimeout(() => { if (!_wsAlive) { ws.close(); } }, 15000)
-      }
-    }, 25000)
   }
   ws.onclose = () => { clearInterval(_wsPingTimer); _wsSetBanner(false); lg('Disconnected — retrying…'); setTimeout(connect, 2000) }
   ws.onerror = () => { ws.close() }

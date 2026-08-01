@@ -4544,7 +4544,7 @@ function applyWifiBand(onlyFiveGhz) {
 }
 
 function applyBtAdapter(deviceId) {
-  const usingDongle = deviceId != null && deviceId > 0
+  const usingDongle = deviceId != null
   applyWifiBand(!usingDongle)
   if (deviceId == null) return
   exec('hciconfig -a', (err, stdout) => {
@@ -4556,6 +4556,24 @@ function applyBtAdapter(deviceId) {
         if (iface.up) exec(`sudo hciconfig hci${iface.index} down`, () => {})
       }
     }
+  })
+}
+
+// Auto-detect USB Bluetooth dongle and prefer it over built-in
+function autoSelectUsbAdapter(cb) {
+  exec('hciconfig -a', (err, stdout) => {
+    if (err && !stdout) return cb && cb()
+    const ifaces = parseHciConfig(stdout || '')
+    const usb = ifaces.find(i => i.bus === 'USB')
+    if (!usb) return cb && cb()
+    if (config.hciDeviceId !== usb.index) {
+      console.log(`[bt] USB dongle detected at hci${usb.index} — switching from hci${config.hciDeviceId ?? 'default'}`)
+      config.hciDeviceId = usb.index
+      saveConfig(config)
+      process.env.NOBLE_HCI_DEVICE_ID = String(usb.index)
+    }
+    applyBtAdapter(usb.index)
+    cb && cb()
   })
 }
 
@@ -4838,7 +4856,7 @@ exec('sudo systemctl restart bluetooth', err => {
   if (err) console.error('BT restart error:', err.message)
   else {
     console.log('Bluetooth restarted')
-    // Wait 3s for BlueZ to finish initialising all adapters before bringing unwanted ones down
-    if (config.hciDeviceId != null) setTimeout(() => applyBtAdapter(config.hciDeviceId), 3000)
+    // Wait 3s for BlueZ to finish initialising all adapters, then auto-select USB dongle if present
+    setTimeout(autoSelectUsbAdapter, 3000)
   }
 })

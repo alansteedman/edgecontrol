@@ -39,7 +39,10 @@ apt-get install -y -qq \
   libusb-1.0-0-dev libudev-dev \
   libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
   iptables \
-  ffmpeg
+  ffmpeg \
+  cage \
+  chromium-browser \
+  xwayland
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
 log "Installing Node.js $NODE_VERSION"
@@ -133,7 +136,8 @@ module.exports = {
     name: 'edgecontroller',
     script: './server.js',
     env: {
-      PROVISION_KEY: '$PROVISION_KEY'
+      PROVISION_KEY: '$PROVISION_KEY',
+      UV_THREADPOOL_SIZE: '16'
     }
   }]
 }
@@ -209,6 +213,42 @@ chown "$APP_USER:$APP_USER" "$APP_DIR/icons"
 # ── Runtime directory ─────────────────────────────────────────────────────────
 log "Creating runtime directory"
 mkdir -p /run/edgecontroller
+
+# ── HDMI kiosk ───────────────────────────────────────────────────────────────
+log "Configuring HDMI kiosk (cage + Chromium on tty7)"
+
+# Drop-in for getty@tty7: autologin as APP_USER
+GETTY_DROP_IN="/etc/systemd/system/getty@tty7.service.d"
+mkdir -p "$GETTY_DROP_IN"
+cp "$APP_DIR/systemd/getty-tty7-autologin.conf" "$GETTY_DROP_IN/autologin.conf"
+systemctl daemon-reload
+systemctl enable getty@tty7.service
+
+# .bash_profile: launch cage+chromium when logged in on tty7
+BASH_PROFILE="/home/$APP_USER/.bash_profile"
+if ! grep -q 'cage' "$BASH_PROFILE" 2>/dev/null; then
+  cat > "$BASH_PROFILE" << 'BPEOF'
+# Start HDMI kiosk on tty7
+if [ "$(tty)" = '/dev/tty7' ]; then
+  sleep 3
+  exec cage -- /usr/bin/chromium-browser \
+    --kiosk \
+    --noerrdialogs \
+    --disable-infobars \
+    --no-first-run \
+    --disable-translate \
+    --disable-features=TranslateUI \
+    --autoplay-policy=no-user-gesture-required \
+    --disable-session-crashed-bubble \
+    --force-device-scale-factor=1 \
+    http://localhost:3000/hdmi
+fi
+BPEOF
+  chown "$APP_USER:$APP_USER" "$BASH_PROFILE"
+  ok "Created ~/.bash_profile with kiosk launch"
+else
+  ok "~/.bash_profile already has kiosk config — skipping"
+fi
 
 # ── Avahi ─────────────────────────────────────────────────────────────────────
 log "Enabling avahi mDNS"

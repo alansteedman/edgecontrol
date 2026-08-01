@@ -42,7 +42,8 @@ apt-get install -y -qq \
   ffmpeg \
   cage \
   chromium-browser \
-  xwayland
+  xwayland \
+  cifs-utils
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
 log "Installing Node.js $NODE_VERSION"

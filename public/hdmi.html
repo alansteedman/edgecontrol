@@ -62,6 +62,11 @@ function handle(m) {
   if (m.type === 'device:updated') { S.devices[m.device.id] = m.device; renderHdmi() }
   if (m.type === 'hdmi:updated')   { Object.assign(S.devices[m.device.id] || {}, m.device); S.devices[m.device.id] = m.device; renderHdmi() }
   if (m.type === 'hdmi:reload')    { location.reload() }
+  if (m.type === 'media:updated')  { S.devices[m.device.id] = m.device; renderHdmi() }
+  if (m.type === 'media:state') {
+    if (S.devices[m.id]) S.devices[m.id].playback = m.playback
+    document.querySelectorAll(`[data-media-dev-id="${m.id}"]`).forEach(el => el._mediaSync?.())
+  }
   if (m.type === 'live:audio:level') {
     if (!_liveSpectra[m.id]) _liveSpectra[m.id] = { levelBuf: [] }
     const sp = _liveSpectra[m.id]
@@ -152,8 +157,39 @@ function buildWidget(w) {
   if (w.type === 'camera')  return buildCameraWidget(w)
   if (w.type === 'clock')   return buildClockWidget(w)
   if (w.type === 'video')   return buildVideoWidget(w)
+  if (w.type === 'text')    return buildTextWidget(w)
+  if (w.type === 'bodymap') return buildBodyMapWidget(w)
+  if (w.type === 'media')   return buildMediaWidget(w)
   const el = document.createElement('div')
   el.className = 'w'
+  return el
+}
+
+function buildTextWidget(w) {
+  const el = document.createElement('div')
+  el.className = 'w'
+  el.style.cssText = 'display:flex;align-items:center;justify-content:center'
+  const t = document.createElement('div')
+  t.style.cssText = 'color:#d0d8f0;font-weight:400;text-align:center;white-space:pre-wrap;word-break:break-word;width:100%;max-width:100%'
+  el.appendChild(t)
+
+  // Scale font size to the widget's actual box (not viewport width) — binary
+  // search the largest size that still fits, re-run whenever the box resizes
+  // (grid size change, layout switch, window resize).
+  function fit() {
+    const hasText = !!(w.text||'').trim()
+    t.textContent = hasText ? w.text : '(no text)'
+    t.style.color = hasText ? '#d0d8f0' : '#2a3555'
+    let lo = 8, hi = 200, best = lo
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      t.style.fontSize = mid + 'px'
+      if (t.scrollHeight <= el.clientHeight && t.scrollWidth <= el.clientWidth) { best = mid; lo = mid + 1 }
+      else hi = mid - 1
+    }
+    t.style.fontSize = best + 'px'
+  }
+  new ResizeObserver(fit).observe(el)
   return el
 }
 
@@ -186,6 +222,162 @@ function grpChannelState(grp) {
     if (ch) return ch
   }
   return {}
+}
+
+// ── Body map (read-only mirror of the Coyote tab's body map) ────────────────
+const _BM_COLORS = ['#a78bfa','#f472b6','#4ade80','#fb923c','#38bdf8','#fbbf24','#e879f9','#34d399']
+function _bmColor(groupId) {
+  const idx = (S.groups||[]).findIndex(g=>g.id===groupId)
+  return _BM_COLORS[Math.max(0,idx) % _BM_COLORS.length]
+}
+const _BODY_SVG = `<svg viewBox="0 0 60 150" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:100%">
+  <ellipse cx="30" cy="9" rx="9" ry="9.5" stroke="#aaaaaa" stroke-width="1.2"/>
+  <path d="M26,18 C20,22 10,28 6,40 L4,70 C3,74 3,79 6,81 L13,81 L15,56 L18,43
+           L18,90 L16,98 L16,148 L25,148 L25,110 C27,106 33,106 35,110
+           L35,148 L44,148 L44,98 L42,90 L42,43 L45,56 L47,81 L54,81
+           C57,79 57,74 56,70 L54,40 C50,28 40,22 34,18 Z"
+    stroke="#aaaaaa" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>`
+
+function buildBodyMapWidget(w) {
+  const el = document.createElement('div')
+  el.className = 'w'
+  el.style.cssText = 'display:flex;flex-direction:row;align-items:center;justify-content:center;gap:16px'
+  el.dataset.widgetId = w.id
+
+  const front = document.createElement('div')
+  const back  = document.createElement('div')
+  // Pure-CSS fit: height:100% of the flex box, aspect-ratio derives width,
+  // max-width clamps (and the ratio then re-derives a smaller height) so
+  // both panels always fit side by side — no JS measurement/race needed.
+  front.style.cssText = back.style.cssText = 'position:relative;height:100%;max-height:100%;aspect-ratio:2/5;max-width:45%'
+  el.appendChild(front); el.appendChild(back)
+
+  function renderSide(container, side) {
+    container.innerHTML = _BODY_SVG
+    for (const g of S.groups || []) {
+      if (g.bodyPos?.side !== side) continue
+      const x = g.bodyPos.x * 100, y = g.bodyPos.y * 100
+      const col = _bmColor(g.id)
+      const pct = grpChannelState(g).intensity || 0
+      const deg = pct * 3.6
+      const initials = (g.name||'?').split(' ').map(s=>s[0]).join('').toUpperCase().slice(0,2)
+      const hs = document.createElement('div')
+      hs.dataset.groupId = g.id
+      hs.style.cssText = `position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);
+        width:11%;aspect-ratio:1;border-radius:50%;
+        background:conic-gradient(${col} ${deg}deg,${col}22 ${deg}deg);
+        display:flex;align-items:center;justify-content:center`
+      hs.innerHTML = `<div style="width:78%;height:78%;border-radius:50%;background:#0d1120;
+        display:flex;align-items:center;justify-content:center;font-size:8px;color:${col};font-weight:700">${initials}</div>`
+      container.appendChild(hs)
+    }
+  }
+  renderSide(front, 'front'); renderSide(back, 'back')
+  el._bmRenderSide = renderSide
+  return el
+}
+
+function refreshBodyMapWidget(el) {
+  if (!el._bmRenderSide) return
+  el._bmRenderSide(el.children[0], 'front')
+  el._bmRenderSide(el.children[1], 'back')
+}
+
+// ── Media player widget — reads straight from the source's stream endpoint,
+// no local caching. Control lives on the device's own page; this widget only
+// mirrors the broadcast playback state and reports position/ended back.
+function mediaReportProgress(deviceId, position, duration) {
+  fetch(`/api/devices/${deviceId}/media/control`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'progress', value:{ position, duration } })
+  }).catch(()=>{})
+}
+function mediaSendControl(deviceId, action, value) {
+  fetch(`/api/devices/${deviceId}/media/control`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action, value })
+  }).catch(()=>{})
+}
+
+function buildMediaWidget(w) {
+  const el = document.createElement('div')
+  el.className = 'w'
+  el.style.cssText = 'padding:0;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;background:#000'
+  el.dataset.widgetId = w.id
+  el.dataset.mediaDevId = w.deviceId
+
+  const label = document.createElement('div')
+  label.style.cssText = 'position:absolute;top:8px;left:8px;font-size:10px;color:#8ab0d0;background:#00000090;padding:2px 8px;border-radius:4px;z-index:2;pointer-events:none;max-width:calc(100% - 16px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
+  label.textContent = 'No media'
+  el.appendChild(label)
+
+  let mediaEl = null, currentIdx = -1, imgTimer = null, progressTimer = null
+
+  function stopTimers() {
+    if (imgTimer) { clearTimeout(imgTimer); imgTimer = null }
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
+  }
+
+  function advanceOnEnd() {
+    const pb = S.devices[w.deviceId]?.playback
+    if (pb?.repeat === 'one') { if (mediaEl) { mediaEl.currentTime = 0; mediaEl.play().catch(()=>{}) } else loadItem(currentIdx, true) }
+    else mediaSendControl(w.deviceId, 'next')
+  }
+
+  function loadItem(idx) {
+    const dev = S.devices[w.deviceId]
+    stopTimers()
+    if (mediaEl) { mediaEl.remove(); mediaEl = null }
+    const item = dev?.playlist?.[idx]
+    currentIdx = idx
+    if (!item) { label.textContent = 'No media'; return }
+    label.textContent = item.name
+    const src = `/api/media/stream/${w.deviceId}/${idx}`
+    const pb = dev.playback || {}
+    if (item.kind === 'video' || item.kind === 'audio') {
+      mediaEl = document.createElement(item.kind==='video' ? 'video' : 'audio')
+      mediaEl.src = src
+      mediaEl.autoplay = pb.status === 'playing'
+      mediaEl.style.cssText = item.kind==='video' ? 'width:100%;height:100%;object-fit:contain' : 'width:80%'
+      mediaEl.volume = (pb.volume ?? 100) / 100
+      mediaEl.addEventListener('ended', advanceOnEnd)
+      mediaEl.addEventListener('loadedmetadata', () => { if (pb.position) mediaEl.currentTime = pb.position })
+      el.appendChild(mediaEl)
+      progressTimer = setInterval(() => {
+        if (mediaEl && !mediaEl.paused) mediaReportProgress(w.deviceId, mediaEl.currentTime, mediaEl.duration||0)
+      }, 3000)
+    } else if (item.kind === 'image') {
+      mediaEl = document.createElement('img')
+      mediaEl.src = src
+      mediaEl.style.cssText = 'width:100%;height:100%;object-fit:contain'
+      el.appendChild(mediaEl)
+      if (pb.status === 'playing') imgTimer = setTimeout(advanceOnEnd, 8000)
+    }
+  }
+
+  function sync() {
+    const dev = S.devices[w.deviceId]
+    if (!dev) return
+    const pb = dev.playback || {}
+    if (pb.index !== currentIdx) { loadItem(pb.index); return }
+    if (mediaEl && (mediaEl.tagName==='VIDEO' || mediaEl.tagName==='AUDIO')) {
+      if (pb.status==='playing' && mediaEl.paused) mediaEl.play().catch(()=>{})
+      if (pb.status!=='playing' && !mediaEl.paused) mediaEl.pause()
+      mediaEl.volume = (pb.volume ?? 100) / 100
+      // Only snap to a reported position on real drift — this widget is
+      // itself the source of most position reports, so ignore its own echo.
+      if (typeof pb.position === 'number' && Math.abs(mediaEl.currentTime - pb.position) > 1.5) mediaEl.currentTime = pb.position
+    }
+    if (mediaEl && mediaEl.tagName==='IMG') {
+      if (pb.status==='playing' && !imgTimer) imgTimer = setTimeout(advanceOnEnd, 8000)
+      if (pb.status!=='playing' && imgTimer) { clearTimeout(imgTimer); imgTimer=null }
+    }
+  }
+
+  loadItem(S.devices[w.deviceId]?.playback?.index ?? -1)
+  el._mediaSync = sync
+  return el
 }
 
 function buildGroupWidget(w) {
@@ -233,17 +425,37 @@ function buildCameraWidget(w) {
 function buildClockWidget(w) {
   const el = document.createElement('div')
   el.className = 'w w-center'
-  const uid = 'clk-' + Math.random().toString(36).slice(2)
-  el.innerHTML = `
-    <div id="${uid}" style="font-size:clamp(20px,4vw,48px);color:#d0d8f0;font-weight:300;font-family:monospace;letter-spacing:.08em">--:--:--</div>
-    <div id="${uid}-d" style="font-size:12px;color:#2e3e5e;margin-top:4px"></div>`
+  const wrap = document.createElement('div')
+  wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center'
+  const timeEl = document.createElement('div')
+  timeEl.style.cssText = 'color:#d0d8f0;font-weight:300;font-family:monospace;letter-spacing:.08em;white-space:nowrap'
+  const dateEl = document.createElement('div')
+  dateEl.style.cssText = 'color:#2e3e5e;white-space:nowrap;margin-top:4px'
+  wrap.appendChild(timeEl); wrap.appendChild(dateEl)
+  el.appendChild(wrap)
+
   function tick() {
     const now = new Date()
-    const te = document.getElementById(uid), de = document.getElementById(uid+'-d')
-    if (te) te.textContent = now.toLocaleTimeString('en-GB',{hour12:false})
-    if (de) de.textContent = now.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})
+    timeEl.textContent = now.toLocaleTimeString('en-GB',{hour12:false})
+    dateEl.textContent = now.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})
   }
   tick(); setInterval(tick, 1000)
+
+  // Fit both lines to the widget's box — same binary-search approach as the
+  // text widget, keeping the date proportionally smaller than the time.
+  function fit() {
+    let lo = 8, hi = 200, best = lo
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      timeEl.style.fontSize = mid + 'px'
+      dateEl.style.fontSize = Math.round(mid*0.28) + 'px'
+      if (wrap.scrollWidth <= el.clientWidth && wrap.scrollHeight <= el.clientHeight) { best = mid; lo = mid + 1 }
+      else hi = mid - 1
+    }
+    timeEl.style.fontSize = best + 'px'
+    dateEl.style.fontSize = Math.round(best*0.28) + 'px'
+  }
+  new ResizeObserver(fit).observe(el)
   return el
 }
 
@@ -272,6 +484,10 @@ function updateLiveWidgets(devId) {
     if (w.type === 'group') {
       const grp = S.groups.find(g => g.id === w.groupId)
       if (grp?.channels?.some(c => c.deviceId === devId)) refreshGroupWidget(el, w)
+    }
+    if (w.type === 'bodymap') {
+      const relevant = (S.groups||[]).some(g => g.bodyPos && g.channels?.some(c => c.deviceId === devId))
+      if (relevant) refreshBodyMapWidget(el)
     }
   }
 }

@@ -6,11 +6,11 @@ import { createServer } from 'http'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, open as fsOpen, read as fsRead, write as fsWrite, close as fsClose, createReadStream, statSync } from 'fs'
 import { Readable } from 'stream'
 import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
-import { networkInterfaces } from 'os'
+import { dirname, join, resolve, extname } from 'path'
+import { networkInterfaces, userInfo } from 'os'
 import { createBluetooth } from 'node-ble'
 import multer from 'multer'
-import { exec, execSync, spawn } from 'child_process'
+import { exec, execSync, execFileSync, spawn } from 'child_process'
 import net from 'net'
 import dgram from 'dgram'
 import { createGzip } from 'zlib'
@@ -2258,8 +2258,130 @@ class HdmiDevice {
   toJSON() { return { id:this.id, type:'hdmi', name:this.name, status:'connected', layouts:this.layouts, activeLayout:this.activeLayout } }
 }
 
+// ── Media player device (USB/SMB sources, playlist, playback state) ─────────
+const MEDIA_EXT_KIND = {
+  mp4:'video', mkv:'video', webm:'video', mov:'video', avi:'video', m4v:'video',
+  mp3:'audio', wav:'audio', flac:'audio', ogg:'audio', m4a:'audio', aac:'audio',
+  jpg:'image', jpeg:'image', png:'image', gif:'image', webp:'image', bmp:'image',
+}
+function mediaKindForExt(name) {
+  return MEDIA_EXT_KIND[extname(name).slice(1).toLowerCase()] || null
+}
+
+class MediaPlayerDevice {
+  constructor(id, name, sources, playlist, playback) {
+    this.id = id; this.name = name; this.type = 'media'; this.status = 'connected'
+    this.sources = Array.isArray(sources) ? sources : []
+    this.playlist = Array.isArray(playlist) ? playlist : []
+    this.playback = { index:-1, status:'stopped', position:0, duration:0, volume:100, shuffle:false, repeat:'off', ...(playback||{}) }
+  }
+  connect() {}
+  async disconnect() {}
+  toJSON() {
+    return {
+      id:this.id, type:'media', name:this.name, status:'connected',
+      sources: this.sources.map(s => ({ id:s.id, type:s.type, label:s.label, mountPath:s.mountPath, host:s.host, share:s.share, username:s.username, connected:s.connected!==false })),
+      playlist: this.playlist,
+      playback: this.playback,
+    }
+  }
+}
+
+const MEDIA_MIME = {
+  mp4:'video/mp4', mkv:'video/x-matroska', webm:'video/webm', mov:'video/quicktime', avi:'video/x-msvideo', m4v:'video/mp4',
+  mp3:'audio/mpeg', wav:'audio/wav', flac:'audio/flac', ogg:'audio/ogg', m4a:'audio/mp4', aac:'audio/aac',
+  jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp', bmp:'image/bmp',
+}
+
+// Resolve a playlist/browse path against a source's mount point, rejecting
+// any attempt to escape it (../, absolute paths, symlink tricks aside).
+function resolveMediaPath(source, relPath) {
+  const base = resolve(source.mountPath)
+  const target = resolve(base, '.', relPath || '')
+  if (target !== base && !target.startsWith(base + '/')) throw new Error('path escapes source')
+  return target
+}
+
+// Scan for removable USB partitions not yet mounted and mount each read-only.
+// Deliberately excludes the boot device — only /dev/sd* (USB mass storage on
+// a Pi, which boots from mmcblk0/nvme) is considered, on top of lsblk's own
+// "removable" flag as a second safety net.
+function scanUsbDrives(dev) {
+  const tree = JSON.parse(execFileSync('lsblk', ['-J','-o','NAME,PATH,FSTYPE,MOUNTPOINT,RM,TYPE,LABEL'], { encoding:'utf8' }))
+  const found = []
+  ;(function walk(list) {
+    for (const d of list || []) {
+      if (d.type==='part' && d.rm && d.fstype && !d.mountpoint && d.path?.startsWith('/dev/sd')) found.push(d)
+      if (d.children) walk(d.children)
+    }
+  })(tree.blockdevices)
+
+  const { uid, gid } = userInfo()
+  const added = []
+  for (const part of found) {
+    if (dev.sources.some(s => s.type==='usb' && s.devPath===part.path)) continue
+    const label = (part.label || part.name).replace(/[^a-zA-Z0-9_-]/g,'_')
+    const mountPath = `/media/edgecontroller-${label}`
+    try {
+      execFileSync('sudo', ['mkdir','-p', mountPath])
+      const opts = ['vfat','exfat'].includes(part.fstype) ? `ro,uid=${uid},gid=${gid}` : 'ro'
+      execFileSync('sudo', ['mount','-o',opts, part.path, mountPath])
+      const source = { id:`usb-${Date.now()}-${part.name}`, type:'usb', label: part.label||part.name, devPath:part.path, mountPath, connected:true }
+      dev.sources.push(source)
+      added.push(source)
+    } catch (e) {
+      console.error('[media] mount failed for', part.path, e.message)
+    }
+  }
+  return added
+}
+
+function unmountMediaSource(source) {
+  try { execFileSync('sudo', ['umount', source.mountPath]) } catch (e) { console.error('[media] umount failed', e.message) }
+  try { execFileSync('sudo', ['rmdir', source.mountPath]) } catch {}
+}
+
+// Mount a CIFS/SMB share. Credentials go through a root-only-readable
+// credentials file (never on the command line, so they never show up in
+// `ps`), written just for the mount call and removed immediately after.
+// Protocol version negotiation varies a lot across NAS/router SMB servers —
+// no vers= (kernel default), then explicit versions oldest→newest as a
+// fallback ladder. mount error(95) "Operation not supported" is the classic
+// symptom of a version mismatch.
+const CIFS_VERS_FALLBACKS = [null, '3.0', '2.1', '2.0', '1.0']
+function mountCifs(source) {
+  const { uid, gid } = userInfo()
+  const credsPath = `/tmp/.ecsmb-${source.id}`
+  execFileSync('sudo', ['mkdir','-p', source.mountPath])
+  writeFileSync(credsPath, `username=${source.username||''}\npassword=${source.password||''}\n${source.domain?`domain=${source.domain}\n`:''}`, { mode:0o600 })
+  try {
+    let lastErr
+    for (const vers of CIFS_VERS_FALLBACKS) {
+      const opts = `credentials=${credsPath},uid=${uid},gid=${gid},ro` + (vers ? `,vers=${vers}` : '')
+      try {
+        execFileSync('sudo', ['mount','-t','cifs', `//${source.host}/${source.share}`, source.mountPath, '-o', opts])
+        return
+      } catch (e) { lastErr = e }
+    }
+    throw lastErr
+  } finally {
+    try { unlinkSync(credsPath) } catch {}
+  }
+}
+
+function mediaNextIndex(dev, dir) {
+  const n = dev.playlist.length
+  if (!n) return -1
+  if (dev.playback.shuffle) return Math.floor(Math.random()*n)
+  let i = dev.playback.index + dir
+  if (i < 0)  i = dev.playback.repeat==='all' ? n-1 : 0
+  if (i >= n) i = dev.playback.repeat==='all' ? 0 : n-1
+  return i
+}
+
 function createDevice(cfg) {
   if (cfg.type==='hdmi')       return new HdmiDevice(cfg.id,cfg.name,cfg.layouts,cfg.activeLayout)
+  if (cfg.type==='media')      return new MediaPlayerDevice(cfg.id,cfg.name,cfg.sources,cfg.playlist,cfg.playback)
   if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName,cfg.buttonControl)
   if (cfg.type==='pawprints') return new PawPrintsDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
   if (cfg.type==='eom')    return new EomDevice(cfg.id,cfg.name,cfg.ip,cfg.port)
@@ -2278,6 +2400,20 @@ for (const d of config.devices) {
     if (dev.type === 'coyote') setTimeout(() => dev.connect().catch(() => {}), 3000)
     if (dev.type === 'hue' && dev.token) setTimeout(() => dev.connect().catch(() => {}), 3000)
     if (dev.type === 'shelly') setTimeout(() => dev.connect(), 3000)
+    if (dev.type === 'media') {
+      // USB drives may not be plugged in on this boot — mark sources whose
+      // mount point isn't actually mounted anymore so the UI knows to rescan.
+      let mounts = ''
+      try { mounts = readFileSync('/proc/mounts', 'utf8') } catch {}
+      for (const s of dev.sources) {
+        if (s.type==='usb') { s.connected = mounts.includes(` ${s.mountPath} `); continue }
+        if (s.type==='smb') {
+          if (mounts.includes(` ${s.mountPath} `)) { s.connected = true; continue }
+          try { mountCifs(s); s.connected = true }
+          catch (e) { console.error('[media] smb remount failed for', s.label, e.message); s.connected = false }
+        }
+      }
+    }
   } catch {}
 }
 // Always rebuild go2rtc config on startup so it stays in sync with saved cameras
@@ -2344,6 +2480,8 @@ function requireAuth(req, res, next) {
   if (req.method === 'GET' && req.path.endsWith('/stream') && req.path.startsWith('/api/live-audio/')) return next()
   // go2rtc proxy (WebRTC signaling + MSE) — allow app sessions and HDMI kiosk (localhost)
   if (req.path.startsWith('/api/go2rtc') && (req.session?.appAuthed || req.hostname === 'localhost')) return next()
+  // Media player file stream — <video>/<audio>/<img> tags on the HDMI kiosk don't carry a session cookie
+  if (req.method === 'GET' && req.path.startsWith('/api/media/stream/') && (req.session?.appAuthed || req.hostname === 'localhost')) return next()
   if (req.headers.accept?.includes('application/json')) return res.status(401).json({ error: 'Unauthorized' })
   res.redirect('/login')
 }
@@ -2902,6 +3040,7 @@ app.delete('/api/devices/:id', async (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
   try{await dev.disconnect()}catch{}
   const wasCamera = dev.type==='camera'
+  if (dev.type==='media') for (const s of dev.sources) unmountMediaSource(s)
   delete devices[req.params.id]; config.devices=config.devices.filter(d=>d.id!==req.params.id); saveConfig(config)
   if (wasCamera) rebuildGo2rtcConfig()
   broadcast({type:'device:removed',id:req.params.id}); res.json({ok:true})
@@ -2953,6 +3092,164 @@ app.put('/api/devices/:id/hdmi/active', (req,res) => {
   if (cfg) { cfg.activeLayout=layoutId; saveConfig(config) }
   broadcast({ type:'hdmi:updated', device:dev.toJSON() })
   res.json({ok:true})
+})
+
+// ── Media player routes ──────────────────────────────────────────────────────
+app.post('/api/devices/:id/media/scan-usb', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
+  let added
+  try { added = scanUsbDrives(dev) } catch (e) { return res.status(500).json({error:e.message}) }
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.sources=dev.sources; saveConfig(config) }
+  broadcast({ type:'media:updated', device:dev.toJSON() })
+  res.json({ added, sources: dev.toJSON().sources })
+})
+
+app.post('/api/devices/:id/media/sources/smb', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
+  const { label, host, share, username, password, domain } = req.body
+  if (!host || !share) return res.status(400).json({error:'host and share are required'})
+  const dirLabel = (label||`${host}_${share}`).replace(/[^a-zA-Z0-9_-]/g,'_')
+  const source = {
+    id:`smb-${Date.now()}`, type:'smb', label: label||`${host}/${share}`,
+    host, share, username:username||'', password:password||'', domain:domain||'',
+    mountPath:`/mnt/edgecontroller-smb-${dirLabel}`, connected:true,
+  }
+  try { mountCifs(source) } catch (e) { return res.status(500).json({error:e.message}) }
+  dev.sources.push(source)
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.sources=dev.sources; saveConfig(config) }
+  broadcast({ type:'media:updated', device:dev.toJSON() })
+  res.json({ source: { id:source.id, type:'smb', label:source.label, host, share, username, mountPath:source.mountPath, connected:true } })
+})
+
+app.delete('/api/devices/:id/media/sources/:sourceId', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
+  const source = dev.sources.find(s=>s.id===req.params.sourceId)
+  if (!source) return res.status(404).json({error:'source not found'})
+  unmountMediaSource(source)
+  dev.sources = dev.sources.filter(s=>s.id!==req.params.sourceId)
+  dev.playlist = dev.playlist.filter(p=>p.sourceId!==req.params.sourceId)
+  if (dev.playback.index >= dev.playlist.length) { dev.playback.index=-1; dev.playback.status='stopped' }
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.sources=dev.sources; cfg.playlist=dev.playlist; cfg.playback=dev.playback; saveConfig(config) }
+  broadcast({ type:'media:updated', device:dev.toJSON() })
+  res.json({ok:true})
+})
+
+app.get('/api/devices/:id/media/browse', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
+  const source = dev.sources.find(s=>s.id===req.query.sourceId)
+  if (!source) return res.status(404).json({error:'source not found'})
+  if (source.connected===false) return res.status(409).json({error:'source not connected — rescan'})
+  let target
+  try { target = resolveMediaPath(source, req.query.path||'') } catch { return res.status(400).json({error:'invalid path'}) }
+  let entries
+  try { entries = readdirSync(target, {withFileTypes:true}) } catch { return res.status(404).json({error:'not found'}) }
+  const result = entries
+    .filter(e => !e.name.startsWith('.'))
+    .map(e => {
+      if (e.isDirectory()) return { name:e.name, type:'dir' }
+      const kind = mediaKindForExt(e.name)
+      if (!kind) return null
+      let size = 0
+      try { size = statSync(join(target,e.name)).size } catch {}
+      return { name:e.name, type:'file', kind, size }
+    })
+    .filter(Boolean)
+    .sort((a,b) => a.type===b.type ? a.name.localeCompare(b.name) : (a.type==='dir'?-1:1))
+  res.json({ path:req.query.path||'', entries:result })
+})
+
+app.put('/api/devices/:id/media/playlist', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
+  const items = Array.isArray(req.body.items) ? req.body.items : []
+  dev.playlist = items.map(it => ({ sourceId:it.sourceId, path:it.path, name:it.name, kind:it.kind }))
+  if (dev.playback.index >= dev.playlist.length) { dev.playback.index=-1; dev.playback.status='stopped' }
+  const cfg=config.devices.find(d=>d.id===dev.id)
+  if (cfg) { cfg.playlist=dev.playlist; cfg.playback=dev.playback; saveConfig(config) }
+  broadcast({ type:'media:updated', device:dev.toJSON() })
+  res.json({ok:true, playlist:dev.playlist})
+})
+
+app.post('/api/devices/:id/media/control', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
+  const { action, value } = req.body
+  const pb = dev.playback
+  switch (action) {
+    case 'play':  pb.status='playing'; break
+    case 'pause': pb.status='paused'; break
+    case 'stop':  pb.status='stopped'; pb.position=0; break
+    case 'setIndex':
+      if (typeof value==='number' && value>=0 && value<dev.playlist.length) { pb.index=value; pb.position=0; pb.status='playing' }
+      break
+    case 'next':
+      if (dev.playlist.length) { pb.index=mediaNextIndex(dev,1); pb.position=0; pb.status='playing' }
+      break
+    case 'prev':
+      if (dev.playlist.length) { pb.index=mediaNextIndex(dev,-1); pb.position=0; pb.status='playing' }
+      break
+    case 'seek':
+      if (typeof value==='number') pb.position=value
+      break
+    case 'progress':
+      // Periodic position/duration echo from whichever widget is actually
+      // playing — not a user-initiated jump, so the client applies this with
+      // a drift threshold rather than snapping playback to it.
+      if (typeof value?.position==='number') pb.position=value.position
+      if (typeof value?.duration==='number') pb.duration=value.duration
+      break
+    case 'volume':
+      if (typeof value==='number') pb.volume=Math.max(0,Math.min(100,value))
+      break
+    case 'shuffle':
+      pb.shuffle=!!value
+      break
+    case 'repeat':
+      if (['off','one','all'].includes(value)) pb.repeat=value
+      break
+    default:
+      return res.status(400).json({error:'unknown action'})
+  }
+  // Position/duration ticks are frequent and ephemeral — don't write them to
+  // disk on every call (SD card wear). Only persist actual state changes.
+  if (action !== 'progress' && action !== 'seek') {
+    const cfg=config.devices.find(d=>d.id===dev.id)
+    if (cfg) { cfg.playback=pb; saveConfig(config) }
+  }
+  broadcast({ type:'media:state', id:dev.id, playback:pb })
+  res.json({ok:true, playback:pb})
+})
+
+app.get('/api/media/stream/:deviceId/:index', (req,res) => {
+  const dev=devices[req.params.deviceId]; if (!dev||dev.type!=='media') return res.status(404).end()
+  const item = dev.playlist[parseInt(req.params.index)]; if (!item) return res.status(404).end()
+  const source = dev.sources.find(s=>s.id===item.sourceId)
+  if (!source || source.connected===false) return res.status(404).end()
+  let filePath
+  try { filePath = resolveMediaPath(source, item.path) } catch { return res.status(400).end() }
+  let stat
+  try { stat = statSync(filePath) } catch { return res.status(404).end() }
+  const mime = MEDIA_MIME[extname(filePath).slice(1).toLowerCase()] || 'application/octet-stream'
+  const range = req.headers.range
+  if (!range) {
+    res.writeHead(200, { 'Content-Length':stat.size, 'Content-Type':mime, 'Accept-Ranges':'bytes' })
+    return createReadStream(filePath).pipe(res)
+  }
+  const m = /bytes=(\d*)-(\d*)/.exec(range)
+  const start = m[1] ? parseInt(m[1]) : 0
+  const end = m[2] ? parseInt(m[2]) : stat.size-1
+  if (!m || isNaN(start) || isNaN(end) || start>end || end>=stat.size) {
+    res.writeHead(416, { 'Content-Range':`bytes */${stat.size}` })
+    return res.end()
+  }
+  res.writeHead(206, {
+    'Content-Range':`bytes ${start}-${end}/${stat.size}`,
+    'Accept-Ranges':'bytes',
+    'Content-Length': end-start+1,
+    'Content-Type': mime,
+  })
+  createReadStream(filePath, {start,end}).pipe(res)
 })
 
 app.post('/api/hdmi/reload', requireAuth, (req,res) => {
@@ -4562,7 +4859,12 @@ function applyWifiBand(onlyFiveGhz) {
 
 function applyBtAdapter(deviceId) {
   const usingDongle = deviceId != null
-  applyWifiBand(!usingDongle)
+  // Only actively manage the WiFi band when the internal combo BT/WiFi radio
+  // is in use — that's the actual coexistence conflict this avoids. With a
+  // USB BT dongle there's no such conflict, so leave whatever band the user
+  // has configured (including a manual 5GHz-only preference) alone instead
+  // of silently resetting it to "both" on every reconnect.
+  if (!usingDongle) applyWifiBand(true)
   if (deviceId == null) return
   exec('hciconfig -a', (err, stdout) => {
     if (err && !stdout) return

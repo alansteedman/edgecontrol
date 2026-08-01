@@ -401,6 +401,10 @@ select.mci{cursor:pointer}
       <span class="side-icon">📷</span>
       <span class="side-lbl">Camera</span>
     </button>
+    <button class="side-btn" id="nav-media" style="display:none" onclick="showTab('media',this)">
+      <span class="side-icon">🎬</span>
+      <span class="side-lbl">Media</span>
+    </button>
     <button class="side-btn" id="nav-hue" style="display:none" onclick="showTab('hue',this)">
       <span class="side-icon"><img src="/hue-logo.svg" style="width:28px;height:16px;vertical-align:middle"></span>
       <span class="side-lbl">Lights</span>
@@ -755,6 +759,13 @@ select.mci{cursor:pointer}
     </div>
   </div>
 
+  <!-- Media Player tab -->
+  <div id="tab-media" class="tab-pane">
+    <div class="scroll" style="padding:24px">
+      <div id="media-editor-root"></div>
+    </div>
+  </div>
+
   <!-- Hue tab -->
   <div id="tab-hue" class="tab-pane">
     <div class="scroll" style="padding:24px">
@@ -1035,6 +1046,19 @@ select.mci{cursor:pointer}
         <input id="hdmi-name" type="text" placeholder="e.g. Main Screen" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
       </div>
       <button class="btn btn-primary btn-sm" style="width:100%" onclick="addHdmiDevice()">Add TV</button>
+    </div>
+    <!-- Step: Media Player -->
+    <div id="step-media" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <button class="btn btn-ghost btn-xs" onclick="showTypeStep()">← Back</button>
+        <span style="font-size:13px;font-weight:600">🎬 Media Player</span>
+      </div>
+      <div style="font-size:11px;color:#555;margin-bottom:12px">USB drives and network shares are added from the device's own page after creation.</div>
+      <div style="margin-bottom:10px">
+        <label style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Display Name</label>
+        <input id="media-name" type="text" placeholder="e.g. Media Player" style="width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:7px;font-size:13px"/>
+      </div>
+      <button class="btn btn-primary btn-sm" style="width:100%" onclick="addMediaDevice()">Add Media Player</button>
     </div>
     <!-- Step: Tremblr -->
     <div id="step-tremblr" style="display:none">
@@ -1534,6 +1558,14 @@ function handle(m) {
       S.devices[m.device.id]=m.device
       if(document.getElementById('tab-hdmi')?.classList.contains('active')) renderHdmiEditor()
       break
+    case 'media:updated':
+      S.devices[m.device.id]=m.device
+      if(document.getElementById('tab-media')?.classList.contains('active')) renderMediaEditor()
+      break
+    case 'media:state':
+      if(S.devices[m.id]){ S.devices[m.id].playback=m.playback }
+      if(document.getElementById('tab-media')?.classList.contains('active')) renderMediaTransport()
+      break
     case 'nimble:feedback':
       if(S.devices[m.id]){ S.devices[m.id].feedback=m.feedback; nimbleUpdateFeedback(m.id,m.feedback) } break
     case 'audio:progress':
@@ -1728,6 +1760,7 @@ function showTab(name,btn) {
   if(name==='waveforms') setTimeout(initBandSelector, 50)
   if(name==='macros') setTimeout(()=>window._macroTabActivated?.(), 50)
   if(name==='hdmi') renderHdmiEditor()
+  if(name==='media') renderMediaEditor()
   if(name==='camera') { _cameraActive=true; cameraStart() }
   else if(_cameraActive) cameraStop()
 }
@@ -2775,6 +2808,7 @@ function renderAll() {
   const hasShelly  = Object.values(S.devices).some(d=>d.type==='shelly')
   const hasTremblr = Object.values(S.devices).some(d=>d.type==='tremblr')
   const hasHdmi    = Object.values(S.devices).some(d=>d.type==='hdmi')
+  const hasMedia   = Object.values(S.devices).some(d=>d.type==='media')
   document.getElementById('nav-coyote').style.display  = hasCoyote  ? '' : 'none'
   document.getElementById('nav-eom').style.display    = hasEom    ? '' : 'none'
   document.getElementById('nav-nimble').style.display = hasNimble ? '' : 'none'
@@ -2785,6 +2819,7 @@ function renderAll() {
   document.getElementById('nav-shelly').style.display  = hasShelly  ? '' : 'none'
   document.getElementById('nav-tremblr').style.display = hasTremblr ? '' : 'none'
   document.getElementById('nav-hdmi').style.display    = hasHdmi    ? '' : 'none'
+  document.getElementById('nav-media').style.display   = hasMedia   ? '' : 'none'
   document.getElementById('nav-config').style.display  = S.role==='admin' ? '' : 'none'
   renderDevList()
   renderCoyoteCards()
@@ -3314,6 +3349,19 @@ async function addTremblrDevice() {
     if(!r.ok) throw new Error(data.error)
     closeScan()
     showTab('tremblr', document.getElementById('nav-tremblr'))
+  } catch(e){ alert('Add failed: '+e.message) }
+}
+
+async function addMediaDevice() {
+  const name=document.getElementById('media-name').value.trim()||'Media Player'
+  try {
+    const r=await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type:'media',name})})
+    const data=await r.json()
+    if(!r.ok) throw new Error(data.error)
+    closeScan()
+    renderAll()
+    showTab('media', document.getElementById('nav-media'))
   } catch(e){ alert('Add failed: '+e.message) }
 }
 
@@ -7189,6 +7237,7 @@ const DEVICE_TYPES = [
   {type:'hue',       icon:'<img src="/hue-logo.svg" style="width:32px;height:18px;vertical-align:middle">', label:'Philips Hue',  sub:'WiFi bridge', step:'hue'},
   {type:'shelly',    icon:'🔌', label:'Shelly',       sub:'WiFi relay/dimmer', step:'shelly'},
   {type:'hdmi',      icon:'📺', label:'HDMI Display', sub:'TV layout output',  step:'hdmi'},
+  {type:'media',     icon:'🎬', label:'Media Player', sub:'USB / SMB playlist', step:'media'},
 ]
 function openScan(){
   document.getElementById('scan-overlay').classList.add('open')
@@ -7207,8 +7256,11 @@ function openScan(){
   })
 }
 function selectDeviceType(dt){
-  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr,#step-hdmi').forEach(el=>el.style.display='none')
-  if(dt.step==='hdmi'){
+  document.querySelectorAll('#step-type,#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr,#step-hdmi,#step-media').forEach(el=>el.style.display='none')
+  if(dt.step==='media'){
+    document.getElementById('step-media').style.display='block'
+    document.getElementById('media-name').value=''
+  } else if(dt.step==='hdmi'){
     document.getElementById('step-hdmi').style.display='block'
     document.getElementById('hdmi-name').value=''
   } else if(dt.step==='camera'){
@@ -7253,7 +7305,7 @@ function selectDeviceType(dt){
   }
 }
 function showTypeStep(){
-  document.querySelectorAll('#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr,#step-hdmi').forEach(el=>el.style.display='none')
+  document.querySelectorAll('#step-ble,#step-wifi,#step-nimble,#step-nimble-bridge,#step-usb,#step-camera,#step-hue,#step-shelly,#step-tremblr,#step-hdmi,#step-media').forEach(el=>el.style.display='none')
   document.getElementById('step-type').style.display='block'
 }
 function showNimbleStep(){
@@ -7804,6 +7856,289 @@ function cameraPopout(streamKey, name, camId, hasPTZ) {
     `cam_${streamKey}`, `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no`)
 }
 
+
+// ── Media Player Editor ─────────────────────────────────────────────────────
+let _mediaDev = null
+let _mediaBrowseSourceId = null
+let _mediaBrowsePath = ''
+let _mediaBrowseEntries = []
+let _mediaDragItem = null
+let _mediaDragPlaylistIdx = null
+let _mediaShowSmbForm = false
+
+function jsEsc(s) { return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'") }
+
+function renderMediaEditor() {
+  const root = document.getElementById('media-editor-root')
+  _mediaDev = Object.values(S.devices).find(d => d.type === 'media')
+  if (!_mediaDev) { root.innerHTML = '<div class="empty">No media player</div>'; return }
+
+  root.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:16px;font-weight:600;color:#e0e0e0">🎬 ${escHtml(_mediaDev.name)}</div>
+      <button class="btn btn-outline btn-xs" onclick="mediaDeleteDevice('${_mediaDev.id}')">Remove Media Player</button>
+    </div>
+    <div style="display:grid;grid-template-columns:260px 1fr 280px;gap:16px;align-items:start">
+      <div>${mediaSourcesPanelHtml()}</div>
+      <div>${mediaBrowserPanelHtml()}</div>
+      <div>${mediaPlaylistPanelHtml()}</div>
+    </div>
+    <div id="media-transport" style="margin-top:16px">${mediaTransportHtml()}</div>
+  `
+  mediaBindDragDrop()
+}
+
+function renderMediaTransport() {
+  const el = document.getElementById('media-transport')
+  if (!el || !_mediaDev) return
+  const fresh = S.devices[_mediaDev.id]
+  if (fresh) _mediaDev = fresh
+  el.innerHTML = mediaTransportHtml()
+}
+
+function mediaSourcesPanelHtml() {
+  const sources = _mediaDev.sources || []
+  return `
+    <div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px">
+      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Sources</div>
+      ${sources.map(s => `
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;margin-bottom:5px;cursor:pointer;
+                    background:${_mediaBrowseSourceId===s.id?'#0d1a2a':'#181818'};border:1px solid ${_mediaBrowseSourceId===s.id?'#1e3050':'#2a2a2a'}"
+             onclick="mediaBrowseTo('${s.id}','')">
+          <span>${s.type==='usb'?'🔌':'🌐'}</span>
+          <span style="flex:1;font-size:12px;color:#c0c0c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(s.label)}</span>
+          ${s.connected===false?'<span style="font-size:9px;color:#f87171">offline</span>':''}
+          <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171" onclick="event.stopPropagation();mediaRemoveSource('${s.id}')">✕</button>
+        </div>`).join('') || '<div style="font-size:11px;color:#333;margin-bottom:10px">No sources yet</div>'}
+      <button class="btn btn-ghost btn-xs" style="width:100%;margin-top:6px" onclick="mediaScanUsb()">🔌 Scan for USB drives</button>
+      <button class="btn btn-ghost btn-xs" style="width:100%;margin-top:6px" onclick="mediaToggleSmbForm()">🌐 Add network share</button>
+      ${_mediaShowSmbForm ? mediaSmbFormHtml() : ''}
+    </div>`
+}
+
+function mediaSmbFormHtml() {
+  const inp = 'width:100%;background:#0a0a0a;border:1px solid #2a2a2a;color:#e0e0e0;padding:6px 8px;border-radius:5px;font-size:12px;margin-bottom:6px'
+  return `
+    <div style="margin-top:8px;padding:10px;background:#0a0a0a;border:1px solid #222;border-radius:8px">
+      <input id="smb-label" type="text" placeholder="Name (optional)" style="${inp}"/>
+      <input id="smb-host" type="text" placeholder="Host or IP" style="${inp}"/>
+      <input id="smb-share" type="text" placeholder="Share name" style="${inp}"/>
+      <input id="smb-username" type="text" placeholder="Username" style="${inp}"/>
+      <input id="smb-password" type="password" placeholder="Password" style="${inp}"/>
+      <input id="smb-domain" type="text" placeholder="Domain (optional)" style="${inp};margin-bottom:8px"/>
+      <div id="smb-error" style="font-size:11px;color:#f87171;margin-bottom:6px;display:none"></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-xs" style="flex:1" onclick="mediaToggleSmbForm()">Cancel</button>
+        <button class="btn btn-primary btn-xs" style="flex:1" onclick="mediaAddSmbShare()">Connect</button>
+      </div>
+    </div>`
+}
+
+function mediaToggleSmbForm() {
+  _mediaShowSmbForm = !_mediaShowSmbForm
+  renderMediaEditor()
+}
+
+async function mediaAddSmbShare() {
+  const label = document.getElementById('smb-label').value.trim()
+  const host = document.getElementById('smb-host').value.trim()
+  const share = document.getElementById('smb-share').value.trim()
+  const username = document.getElementById('smb-username').value
+  const password = document.getElementById('smb-password').value
+  const domain = document.getElementById('smb-domain').value.trim()
+  const errEl = document.getElementById('smb-error')
+  if (!host || !share) { errEl.textContent='Host and share are required'; errEl.style.display='block'; return }
+  try {
+    const r = await fetch(`/api/devices/${_mediaDev.id}/media/sources/smb`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ label, host, share, username, password, domain })
+    })
+    const data = await r.json()
+    if (!r.ok) throw new Error(data.error||'mount failed')
+    _mediaShowSmbForm = false
+  } catch(e) {
+    errEl.textContent = e.message
+    errEl.style.display = 'block'
+  }
+}
+
+function mediaBrowserPanelHtml() {
+  const source = (_mediaDev.sources||[]).find(s=>s.id===_mediaBrowseSourceId)
+  const crumbs = _mediaBrowsePath ? _mediaBrowsePath.split('/').filter(Boolean) : []
+  return `
+    <div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px;min-height:420px">
+      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Files</div>
+      ${!source ? '<div style="font-size:12px;color:#444">Select a source to browse</div>' : `
+        <div style="font-size:11px;color:#4a6a8a;margin-bottom:10px;display:flex;gap:4px;flex-wrap:wrap">
+          <span style="cursor:pointer" onclick="mediaBrowseTo('${source.id}','')">${escHtml(source.label)}</span>
+          ${crumbs.map((c,i) => `<span> / </span><span style="cursor:pointer" onclick="mediaBrowseTo('${source.id}','${jsEsc(crumbs.slice(0,i+1).join('/'))}')">${escHtml(c)}</span>`).join('')}
+        </div>
+        <div id="media-browse-list" style="display:flex;flex-direction:column;gap:2px;max-height:520px;overflow-y:auto">
+          ${_mediaBrowseEntries.map(e => e.type==='dir' ? `
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer" onclick="mediaBrowseTo('${source.id}','${jsEsc((_mediaBrowsePath?_mediaBrowsePath+'/':'')+e.name)}')" onmouseover="this.style.background='#181818'" onmouseout="this.style.background=''">
+              <span>📁</span><span style="font-size:12px;color:#c0c0c0">${escHtml(e.name)}</span>
+            </div>` : `
+            <div class="media-file-row" draggable="true" data-source-id="${source.id}" data-path="${escHtml((_mediaBrowsePath?_mediaBrowsePath+'/':'')+e.name)}" data-name="${escHtml(e.name)}" data-kind="${e.kind}"
+                 style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:grab" onmouseover="this.style.background='#181818'" onmouseout="this.style.background=''">
+              <span>${e.kind==='video'?'🎞':e.kind==='audio'?'🎵':'🖼'}</span><span style="font-size:12px;color:#c0c0c0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(e.name)}</span>
+            </div>`).join('') || '<div style="font-size:12px;color:#333">Empty folder</div>'}
+        </div>`}
+    </div>`
+}
+
+function mediaPlaylistPanelHtml() {
+  const pl = _mediaDev.playlist || []
+  const pb = _mediaDev.playback || {}
+  return `
+    <div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px">
+      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Playlist — drag files here</div>
+      <div id="media-playlist-list" style="display:flex;flex-direction:column;gap:3px;min-height:60px">
+        ${pl.map((it,i) => `
+          <div class="media-pl-row" draggable="true" data-idx="${i}"
+               style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:5px;cursor:grab;
+                      background:${pb.index===i?'#0d2a1a':'#181818'};border:1px solid ${pb.index===i?'#1e5030':'#2a2a2a'}"
+               ondblclick="mediaPlayIndex(${i})">
+            <span style="font-size:10px;color:#555;width:16px">${i+1}</span>
+            <span>${it.kind==='video'?'🎞':it.kind==='audio'?'🎵':'🖼'}</span>
+            <span style="flex:1;font-size:11px;color:#c0c0c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(it.name)}</span>
+            <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171" onclick="mediaRemoveFromPlaylist(${i})">✕</button>
+          </div>`).join('') || '<div id="media-playlist-empty" style="font-size:11px;color:#333;text-align:center;padding:20px 0;border:1px dashed #222;border-radius:6px">Drag files here</div>'}
+      </div>
+    </div>`
+}
+
+function mediaFmtTime(s) { s=Math.max(0,Math.floor(s||0)); const m=Math.floor(s/60); const ss=String(s%60).padStart(2,'0'); return `${m}:${ss}` }
+
+function mediaTransportHtml() {
+  const pb = _mediaDev.playback || {}
+  const pl = _mediaDev.playlist || []
+  const current = pl[pb.index]
+  return `
+    <div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px 18px">
+      <div style="font-size:12px;color:#c0c0c0;margin-bottom:8px">${current ? '▶ '+escHtml(current.name) : 'Nothing playing'}</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:10px;color:#555;width:36px">${mediaFmtTime(pb.position)}</span>
+        <input type="range" min="0" max="${pb.duration||0}" value="${pb.position||0}" style="flex:1"
+               oninput="mediaSeek(this.value)" ${pb.duration?'':'disabled'}/>
+        <span style="font-size:10px;color:#555;width:36px">${mediaFmtTime(pb.duration)}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="btn btn-ghost btn-xs" onclick="mediaControl('prev')">⏮</button>
+        <button class="btn btn-primary btn-xs" onclick="mediaTogglePlay()">${pb.status==='playing'?'⏸':'▶'}</button>
+        <button class="btn btn-ghost btn-xs" onclick="mediaControl('next')">⏭</button>
+        <button class="btn btn-ghost btn-xs" style="color:${pb.shuffle?'#4fc3f7':'#888'}" onclick="mediaControl('shuffle',${!pb.shuffle})">🔀</button>
+        <button class="btn btn-ghost btn-xs" style="color:${pb.repeat!=='off'?'#4fc3f7':'#888'}" onclick="mediaCycleRepeat()">${pb.repeat==='one'?'🔂':'🔁'}</button>
+        <div style="flex:1"></div>
+        <span style="font-size:11px;color:#555">🔊</span>
+        <input type="range" min="0" max="100" value="${pb.volume??100}" style="width:80px" oninput="mediaControl('volume',+this.value)"/>
+      </div>
+    </div>`
+}
+
+async function mediaScanUsb() {
+  if (!_mediaDev) return
+  const r = await fetch(`/api/devices/${_mediaDev.id}/media/scan-usb`, {method:'POST'})
+  const data = await r.json().catch(()=>({}))
+  if (!r.ok) alert('Scan failed: '+(data.error||r.status))
+}
+
+async function mediaRemoveSource(sourceId) {
+  if (!confirm('Remove this source? Any playlist items from it will also be removed.')) return
+  await fetch(`/api/devices/${_mediaDev.id}/media/sources/${sourceId}`, {method:'DELETE'})
+  if (_mediaBrowseSourceId===sourceId) { _mediaBrowseSourceId=null; _mediaBrowsePath=''; _mediaBrowseEntries=[] }
+}
+
+async function mediaBrowseTo(sourceId, path) {
+  _mediaBrowseSourceId = sourceId; _mediaBrowsePath = path
+  try {
+    const r = await fetch(`/api/devices/${_mediaDev.id}/media/browse?sourceId=${encodeURIComponent(sourceId)}&path=${encodeURIComponent(path)}`)
+    const data = await r.json()
+    _mediaBrowseEntries = r.ok ? (data.entries||[]) : []
+  } catch { _mediaBrowseEntries = [] }
+  renderMediaEditor()
+}
+
+function mediaRemoveFromPlaylist(idx) {
+  mediaSavePlaylist((_mediaDev.playlist||[]).filter((_,i)=>i!==idx))
+}
+
+async function mediaSavePlaylist(items) {
+  await fetch(`/api/devices/${_mediaDev.id}/media/playlist`, {
+    method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items})
+  })
+}
+
+function mediaPlayIndex(idx) { mediaControl('setIndex', idx) }
+
+function mediaTogglePlay() {
+  const pb = _mediaDev.playback||{}
+  if (pb.status==='playing') mediaControl('pause')
+  else if (pb.index<0 && (_mediaDev.playlist||[]).length) mediaControl('setIndex', 0)
+  else mediaControl('play')
+}
+
+function mediaSeek(v) { mediaControl('seek', +v) }
+
+function mediaCycleRepeat() {
+  const cur = _mediaDev.playback?.repeat||'off'
+  mediaControl('repeat', cur==='off' ? 'all' : cur==='all' ? 'one' : 'off')
+}
+
+async function mediaControl(action, value) {
+  if (!_mediaDev) return
+  await fetch(`/api/devices/${_mediaDev.id}/media/control`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action, value})
+  })
+}
+
+async function mediaDeleteDevice(devId) {
+  if (!confirm('Remove this media player? Mounted sources will be unmounted.')) return
+  await fetch(`/api/devices/${devId}`, {method:'DELETE'})
+  renderAll()
+  showTab('devices', document.getElementById('nav-devices'))
+}
+
+function mediaBindDragDrop() {
+  document.querySelectorAll('.media-file-row').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      _mediaDragItem = { sourceId:el.dataset.sourceId, path:el.dataset.path, name:el.dataset.name, kind:el.dataset.kind }
+      _mediaDragPlaylistIdx = null
+      e.dataTransfer.effectAllowed = 'copy'
+    })
+  })
+  const plList = document.getElementById('media-playlist-list')
+  if (plList) {
+    plList.addEventListener('dragover', e => e.preventDefault())
+    plList.addEventListener('drop', e => {
+      e.preventDefault()
+      if (_mediaDragItem) {
+        const items = [...(_mediaDev.playlist||[]), _mediaDragItem]
+        _mediaDragItem = null
+        mediaSavePlaylist(items)
+      }
+    })
+  }
+  document.querySelectorAll('.media-pl-row').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      if (e.target.tagName==='BUTTON') { e.preventDefault(); return }
+      _mediaDragPlaylistIdx = +el.dataset.idx
+      _mediaDragItem = null
+      e.dataTransfer.effectAllowed = 'move'
+    })
+    el.addEventListener('dragover', e => e.preventDefault())
+    el.addEventListener('drop', e => {
+      e.preventDefault()
+      const toIdx = +el.dataset.idx
+      if (_mediaDragPlaylistIdx !== null && _mediaDragPlaylistIdx !== toIdx) {
+        const items = [...(_mediaDev.playlist||[])]
+        const [moved] = items.splice(_mediaDragPlaylistIdx, 1)
+        items.splice(toIdx, 0, moved)
+        _mediaDragPlaylistIdx = null
+        mediaSavePlaylist(items)
+      }
+    })
+  })
+}
 
 // ── Macro Editor ──────────────────────────────────────────────────────────────
 ;(function(){
@@ -8957,6 +9292,7 @@ function hdmiLayoutEditor(layout) {
   // Palette sections
   const coyotes = Object.values(S.devices).filter(d=>d.type==='coyote')
   const cameras  = Object.values(S.devices).filter(d=>d.type==='camera')
+  const mediaPlayers = Object.values(S.devices).filter(d=>d.type==='media')
   const groups   = S.groups || []
 
   const paletteHtml = `
@@ -8989,10 +9325,27 @@ function hdmiLayoutEditor(layout) {
             <span>📷</span>${d.name}
           </div>`).join('')}
       ` : ''}
+      ${mediaPlayers.length ? `
+        <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Media Players</div>
+        ${mediaPlayers.map(d => `
+          <div class="hdmi-pal-item" draggable="true"
+               data-wtype="media" data-devid="${d.id}"
+               style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+            <span>🎬</span>${d.name}
+          </div>`).join('')}
+      ` : ''}
       <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Other</div>
       <div class="hdmi-pal-item" draggable="true" data-wtype="clock"
            style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
         <span>🕐</span>Clock
+      </div>
+      <div class="hdmi-pal-item" draggable="true" data-wtype="text"
+           style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+        <span>📝</span>Text
+      </div>
+      <div class="hdmi-pal-item" draggable="true" data-wtype="bodymap"
+           style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+        <span>🧍</span>Body Map
       </div>
       <div class="hdmi-pal-item" draggable="true" data-wtype="video"
            style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#555;display:flex;align-items:center;gap:6px">
@@ -9018,8 +9371,11 @@ function hdmiLayoutEditor(layout) {
                style="grid-column:${c+1}/span ${cs};grid-row:${r+1}/span ${rs};background:#0d1a2a;border:1px solid #1e3050;border-radius:6px;padding:8px;position:relative;cursor:grab"
                draggable="true">
             <div style="font-size:11px;color:#5a8aaa;margin-bottom:3px">${label.icon}</div>
-            <div style="font-size:11px;color:#c0d0e0;font-weight:500;line-height:1.3">${label.text}</div>
-            <button class="btn btn-ghost btn-xs" style="position:absolute;top:4px;right:4px;font-size:9px;padding:1px 4px;color:#f87171" onclick="hdmiRemoveWidget('${layout.id}','${w.id}',event)">✕</button>
+            <div style="font-size:11px;color:#c0d0e0;font-weight:500;line-height:1.3;white-space:pre-wrap;word-break:break-word">${label.text}</div>
+            <div style="position:absolute;top:4px;right:4px;display:flex;gap:2px">
+              ${w.type==='text' ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiEditText('${layout.id}','${w.id}',event)">✎</button>` : ''}
+              <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171" onclick="hdmiRemoveWidget('${layout.id}','${w.id}',event)">✕</button>
+            </div>
             ${c+cs < cols ? `<div class="hdmi-resize-handle hdmi-resize-h" data-axis="col"    data-layout-id="${layout.id}" data-widget-id="${w.id}" draggable="false" style="position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:ew-resize"></div>` : ''}
             ${r+rs < rows ? `<div class="hdmi-resize-handle hdmi-resize-v" data-axis="row"    data-layout-id="${layout.id}" data-widget-id="${w.id}" draggable="false" style="position:absolute;left:0;bottom:-4px;width:100%;height:8px;cursor:ns-resize"></div>` : ''}
             ${(c+cs < cols && r+rs < rows) ? `<div class="hdmi-resize-handle hdmi-resize-c" data-axis="both" data-layout-id="${layout.id}" data-widget-id="${w.id}" draggable="false" style="position:absolute;right:-4px;bottom:-4px;width:14px;height:14px;cursor:nwse-resize;background:#2a4a6a;border-radius:3px 0 6px 0"></div>` : ''}
@@ -9074,6 +9430,12 @@ function hdmiWidgetLabel(w) {
   }
   if (w.type === 'clock')  return { icon:'🕐', text:'Clock' }
   if (w.type === 'video')  return { icon:'▶', text:'Video' }
+  if (w.type === 'text')   return { icon:'📝', text: w.text ? escHtml(w.text) : '<span style="color:#3a4a5a">(empty — click ✎ to add text)</span>' }
+  if (w.type === 'bodymap') return { icon:'🧍', text: 'Body Map' }
+  if (w.type === 'media') {
+    const d = S.devices[w.deviceId]
+    return { icon:'🎬', text: d?.name || 'Media Player' }
+  }
   return { icon:'?', text: w.type }
 }
 
@@ -9113,6 +9475,8 @@ function bindHdmiDragDrop(layout) {
         if (_hdmiDragPalette.type==='channel') { w.deviceId=_hdmiDragPalette.deviceId; w.channel=_hdmiDragPalette.channel }
         if (_hdmiDragPalette.type==='group')   { w.groupId=_hdmiDragPalette.groupId }
         if (_hdmiDragPalette.type==='camera')  { w.deviceId=_hdmiDragPalette.deviceId }
+        if (_hdmiDragPalette.type==='media')   { w.deviceId=_hdmiDragPalette.deviceId }
+        if (_hdmiDragPalette.type==='text')    { w.text = prompt('Text to display:', '') || '' }
         widgets.push(w)
       } else if (_hdmiDragCell) {
         const w = widgets.find(w=>w.id===_hdmiDragCell.widgetId)
@@ -9134,6 +9498,16 @@ async function hdmiRemoveWidget(layoutId, widgetId, e) {
   e.stopPropagation()
   const layout = (_hdmiDev?.layouts||[]).find(l=>l.id===layoutId); if(!layout) return
   const widgets = (layout.widgets||[]).filter(w=>w.id!==widgetId)
+  await hdmiSaveWidgets(layoutId, widgets)
+}
+
+async function hdmiEditText(layoutId, widgetId, e) {
+  e.stopPropagation()
+  const layout = (_hdmiDev?.layouts||[]).find(l=>l.id===layoutId); if(!layout) return
+  const w = (layout.widgets||[]).find(w=>w.id===widgetId); if (!w) return
+  const text = prompt('Text to display:', w.text||'')
+  if (text === null) return
+  const widgets = (layout.widgets||[]).map(x => x.id===widgetId ? {...x, text} : x)
   await hdmiSaveWidgets(layoutId, widgets)
 }
 

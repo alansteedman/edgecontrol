@@ -76,4 +76,13 @@ else
   log "UV_THREADPOOL_SIZE already set — skipping"
 fi
 
+# ── cifs-utils (media player SMB shares) ──────────────────────────────────────
+if ! command -v mount.cifs >/dev/null 2>&1; then
+  log "Installing cifs-utils"
+  apt-get update -qq
+  apt-get install -y -qq cifs-utils
+else
+  log "cifs-utils already installed — skipping"
+fi
+
 log "Migration complete"

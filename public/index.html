@@ -1257,7 +1257,7 @@ function connect() {
       if (ws.readyState === 1) {
         _wsAlive = false
         ws.send(JSON.stringify({type:'ping'}))
-        setTimeout(() => { if (!_wsAlive) { ws.close(); } }, 5000)
+        setTimeout(() => { if (!_wsAlive) { ws.close(); } }, 15000)
       }
     }, 25000)
   }

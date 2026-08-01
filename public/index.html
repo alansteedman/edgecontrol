@@ -8864,9 +8864,11 @@ async function ppDisconnect(id) {
 
 // ── HDMI Layout Editor ────────────────────────────────────────────────────────
 
-const HDMI_GRIDS = ['2x2','2x3','3x2','3x3','4x2','4x3','4x4','6x4']
+const HDMI_GRID_MAX_COLS = 12
+const HDMI_GRID_MAX_ROWS = 10
 
 let _hdmiDragPalette = null  // { type, deviceId, channel, groupId }
+let _hdmiResize       = null // { widgetId, axis, startX, startY, startCs, startRs, colUnit, rowUnit, cellEl, cols, rows, occ }
 let _hdmiDragCell    = null  // { widgetId, fromCol, fromRow } when dragging existing widget
 let _hdmiDev = null
 
@@ -8902,15 +8904,26 @@ function renderHdmiEditor() {
   `
 
   if (active) {
-    // grid size change
-    document.getElementById('hdmi-grid-sel').onchange = async function() {
-      active.grid = this.value
+    // grid size change (custom cols × rows)
+    const applyGridSize = async () => {
+      const colsEl = document.getElementById('hdmi-grid-cols'), rowsEl = document.getElementById('hdmi-grid-rows')
+      const newCols = Math.max(1, Math.min(HDMI_GRID_MAX_COLS, parseInt(colsEl.value)||1))
+      const newRows = Math.max(1, Math.min(HDMI_GRID_MAX_ROWS, parseInt(rowsEl.value)||1))
+      const newGrid = `${newCols}x${newRows}`
+      if (newGrid === active.grid) return
+      // Clamp/drop widgets that no longer fit the shrunk grid
+      const widgets = (active.widgets||[])
+        .map(w => ({ ...w, col: Math.min(w.col, newCols-1), row: Math.min(w.row, newRows-1) }))
+        .map(w => ({ ...w, colSpan: Math.min(w.colSpan||1, newCols-w.col), rowSpan: Math.min(w.rowSpan||1, newRows-w.row) }))
+      active.grid = newGrid; active.widgets = widgets
       await fetch(`/api/devices/${_hdmiDev.id}/hdmi/layouts/${active.id}`, {
         method:'PUT', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ grid: this.value })
+        body: JSON.stringify({ grid: newGrid, widgets })
       })
       renderHdmiEditor()
     }
+    document.getElementById('hdmi-grid-cols').onchange = applyGridSize
+    document.getElementById('hdmi-grid-rows').onchange = applyGridSize
     // rename layout
     const nameEl = document.getElementById('hdmi-layout-name')
     if (nameEl) {
@@ -9006,13 +9019,10 @@ function hdmiLayoutEditor(layout) {
                draggable="true">
             <div style="font-size:11px;color:#5a8aaa;margin-bottom:3px">${label.icon}</div>
             <div style="font-size:11px;color:#c0d0e0;font-weight:500;line-height:1.3">${label.text}</div>
-            <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
-              ${cs < cols-c ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiResizeWidget('${layout.id}','${w.id}',${cs+1},${rs},event)">→</button>` : ''}
-              ${cs > 1      ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiResizeWidget('${layout.id}','${w.id}',${cs-1},${rs},event)">←</button>` : ''}
-              ${rs < rows-r ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiResizeWidget('${layout.id}','${w.id}',${cs},${rs+1},event)">↓</button>` : ''}
-              ${rs > 1      ? `<button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px" onclick="hdmiResizeWidget('${layout.id}','${w.id}',${cs},${rs-1},event)">↑</button>` : ''}
-              <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171" onclick="hdmiRemoveWidget('${layout.id}','${w.id}',event)">✕</button>
-            </div>
+            <button class="btn btn-ghost btn-xs" style="position:absolute;top:4px;right:4px;font-size:9px;padding:1px 4px;color:#f87171" onclick="hdmiRemoveWidget('${layout.id}','${w.id}',event)">✕</button>
+            ${c+cs < cols ? `<div class="hdmi-resize-handle hdmi-resize-h" data-axis="col"    data-layout-id="${layout.id}" data-widget-id="${w.id}" draggable="false" style="position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:ew-resize"></div>` : ''}
+            ${r+rs < rows ? `<div class="hdmi-resize-handle hdmi-resize-v" data-axis="row"    data-layout-id="${layout.id}" data-widget-id="${w.id}" draggable="false" style="position:absolute;left:0;bottom:-4px;width:100%;height:8px;cursor:ns-resize"></div>` : ''}
+            ${(c+cs < cols && r+rs < rows) ? `<div class="hdmi-resize-handle hdmi-resize-c" data-axis="both" data-layout-id="${layout.id}" data-widget-id="${w.id}" draggable="false" style="position:absolute;right:-4px;bottom:-4px;width:14px;height:14px;cursor:nwse-resize;background:#2a4a6a;border-radius:3px 0 6px 0"></div>` : ''}
           </div>`
       } else {
         gridCells += `
@@ -9031,9 +9041,11 @@ function hdmiLayoutEditor(layout) {
              style="background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:5px 9px;border-radius:6px;font-size:13px;width:160px"/>
       <div style="display:flex;align-items:center;gap:6px">
         <span style="font-size:11px;color:#555">Grid</span>
-        <select id="hdmi-grid-sel" style="background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:5px 8px;border-radius:6px;font-size:12px">
-          ${HDMI_GRIDS.map(g=>`<option value="${g}" ${g===layout.grid?'selected':''}>${g}</option>`).join('')}
-        </select>
+        <input id="hdmi-grid-cols" type="number" min="1" max="${HDMI_GRID_MAX_COLS}" value="${cols}"
+               style="width:44px;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:5px 6px;border-radius:6px;font-size:12px;text-align:center"/>
+        <span style="font-size:11px;color:#555">×</span>
+        <input id="hdmi-grid-rows" type="number" min="1" max="${HDMI_GRID_MAX_ROWS}" value="${rows}"
+               style="width:44px;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:5px 6px;border-radius:6px;font-size:12px;text-align:center"/>
       </div>
     </div>
     <div style="display:flex;gap:14px;align-items:flex-start">
@@ -9078,12 +9090,14 @@ function bindHdmiDragDrop(layout) {
   // Existing widget drag start
   document.querySelectorAll('.hdmi-cell-filled').forEach(el => {
     el.addEventListener('dragstart', e => {
-      if (e.target.tagName === 'BUTTON') { e.preventDefault(); return }
+      if (e.target.tagName === 'BUTTON' || e.target.classList.contains('hdmi-resize-handle')) { e.preventDefault(); return }
       _hdmiDragCell = { widgetId: el.dataset.widgetId }
       _hdmiDragPalette = null
       e.dataTransfer.effectAllowed = 'move'
     })
   })
+
+  hdmiBindResizeHandles(layout)
 
   // Drop zones
   document.querySelectorAll('.hdmi-cell-empty').forEach(el => {
@@ -9123,11 +9137,75 @@ async function hdmiRemoveWidget(layoutId, widgetId, e) {
   await hdmiSaveWidgets(layoutId, widgets)
 }
 
-async function hdmiResizeWidget(layoutId, widgetId, cs, rs, e) {
-  e.stopPropagation()
-  const layout = (_hdmiDev?.layouts||[]).find(l=>l.id===layoutId); if(!layout) return
-  const widgets = (layout.widgets||[]).map(w => w.id===widgetId ? {...w,colSpan:cs,rowSpan:rs} : w)
-  await hdmiSaveWidgets(layoutId, widgets)
+// ── Resize handles — drag a widget's edge/corner to grow or shrink its span ──
+function hdmiOccupiedMap(widgets, excludeId) {
+  const occ = new Set()
+  for (const w of widgets) {
+    if (w.id === excludeId) continue
+    for (let r=w.row; r<w.row+(w.rowSpan||1); r++)
+      for (let c=w.col; c<w.col+(w.colSpan||1); c++)
+        occ.add(`${c},${r}`)
+  }
+  return occ
+}
+function hdmiCanPlace(occ, col, row, cs, rs, cols, rows) {
+  if (col<0||row<0||col+cs>cols||row+rs>rows) return false
+  for (let r=row; r<row+rs; r++)
+    for (let c=col; c<col+cs; c++)
+      if (occ.has(`${c},${r}`)) return false
+  return true
+}
+
+function hdmiBindResizeHandles(layout) {
+  document.querySelectorAll('.hdmi-resize-handle').forEach(handle => {
+    handle.addEventListener('mousedown', e => {
+      e.preventDefault(); e.stopPropagation()
+      const widgetId = handle.dataset.widgetId
+      const w = (layout.widgets||[]).find(w=>w.id===widgetId); if (!w) return
+      const [cols, rows] = (layout.grid||'4x2').split('x').map(Number)
+      const gridEl = document.getElementById('hdmi-grid-editor')
+      const style = getComputedStyle(gridEl)
+      const colGap = parseFloat(style.columnGap) || 6, rowGap = parseFloat(style.rowGap) || 6
+      const colUnit = (gridEl.clientWidth - colGap*(cols-1)) / cols + colGap
+      const emptyCell = gridEl.querySelector('.hdmi-cell-empty')
+      const rowUnit = (emptyCell ? emptyCell.getBoundingClientRect().height : 80) + rowGap
+      const cellEl = handle.closest('.hdmi-cell-filled')
+      _hdmiResize = {
+        widgetId, axis: handle.dataset.axis, layoutId: layout.id,
+        startX: e.clientX, startY: e.clientY,
+        startCs: w.colSpan||1, startRs: w.rowSpan||1,
+        col: w.col, row: w.row, cols, rows, colUnit, rowUnit, cellEl,
+        occ: hdmiOccupiedMap(layout.widgets||[], widgetId)
+      }
+      document.addEventListener('mousemove', hdmiResizeMove)
+      document.addEventListener('mouseup', hdmiResizeEnd)
+    })
+  })
+}
+
+function hdmiResizeMove(e) {
+  const r = _hdmiResize; if (!r) return
+  const deltaCols = r.axis!=='row'  ? Math.round((e.clientX-r.startX)/r.colUnit) : 0
+  const deltaRows = r.axis!=='col'  ? Math.round((e.clientY-r.startY)/r.rowUnit) : 0
+  let cs = Math.max(1, Math.min(r.cols-r.col, r.startCs+deltaCols))
+  let rs = Math.max(1, Math.min(r.rows-r.row, r.startRs+deltaRows))
+  while (cs>1 && !hdmiCanPlace(r.occ, r.col, r.row, cs, rs, r.cols, r.rows)) cs--
+  while (rs>1 && !hdmiCanPlace(r.occ, r.col, r.row, cs, rs, r.cols, r.rows)) rs--
+  r.liveCs = cs; r.liveRs = rs
+  r.cellEl.style.gridColumn = `${r.col+1}/span ${cs}`
+  r.cellEl.style.gridRow = `${r.row+1}/span ${rs}`
+}
+
+async function hdmiResizeEnd() {
+  const r = _hdmiResize
+  document.removeEventListener('mousemove', hdmiResizeMove)
+  document.removeEventListener('mouseup', hdmiResizeEnd)
+  _hdmiResize = null
+  if (!r) return
+  if (r.liveCs === r.startCs && r.liveRs === r.startRs) return
+  const layout = (_hdmiDev?.layouts||[]).find(l=>l.id===r.layoutId); if (!layout) return
+  const widgets = (layout.widgets||[]).map(w => w.id===r.widgetId ? {...w, colSpan:r.liveCs, rowSpan:r.liveRs} : w)
+  await hdmiSaveWidgets(r.layoutId, widgets)
 }
 
 async function hdmiSwitchLayout(devId, layoutId) {

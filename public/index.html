@@ -9072,6 +9072,7 @@ function renderHdmiEditor() {
       <div style="font-size:16px;font-weight:600;color:#e0e0e0">📺 ${_hdmiDev.name}</div>
       <div style="display:flex;gap:8px">
         <a href="/hdmi" target="_blank" class="btn btn-ghost btn-xs" style="text-decoration:none">Open HDMI preview ↗</a>
+        <button class="btn btn-ghost btn-xs" onclick="fetch('/api/hdmi/reload',{method:'POST'})">↺ Reload display</button>
         <button class="btn btn-outline btn-xs" onclick="hdmiDeleteDevice('${_hdmiDev.id}')">Remove TV</button>
       </div>
     </div>

@@ -55,6 +55,7 @@ function handle(m) {
   if (m.type === 'device:removed') { delete S.devices[m.id]; renderHdmi() }
   if (m.type === 'device:updated') { S.devices[m.device.id] = m.device; renderHdmi() }
   if (m.type === 'hdmi:updated')   { Object.assign(S.devices[m.device.id] || {}, m.device); S.devices[m.device.id] = m.device; renderHdmi() }
+  if (m.type === 'hdmi:reload')    { location.reload() }
   if (m.type === 'group:updated' || m.type === 'group:added' || m.type === 'group:removed' || m.type === 'groups:reordered') {
     if (m.type === 'group:updated') { const i = S.groups.findIndex(g=>g.id===m.group.id); if(i>=0) S.groups[i]=m.group; else S.groups.push(m.group) }
     if (m.type === 'group:added')   S.groups.push(m.group)

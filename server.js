@@ -2944,6 +2944,12 @@ app.put('/api/devices/:id/hdmi/active', (req,res) => {
   res.json({ok:true})
 })
 
+app.post('/api/hdmi/reload', requireAuth, (req,res) => {
+  const s = JSON.stringify({ type:'hdmi:reload' })
+  for (const ws of clients) if (ws.readyState === 1 && ws.isHdmi) ws.send(s)
+  res.json({ok:true})
+})
+
 app.post('/api/devices/:id/connect', (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
   const r=dev.connect(); if(r?.catch) r.catch(e=>console.error(`[${dev.id}]`,e.message)); res.json({ok:true})

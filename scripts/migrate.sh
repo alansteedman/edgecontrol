@@ -19,15 +19,12 @@ fi
 
 # ── tty7 autologin drop-in ────────────────────────────────────────────────────
 GETTY_DROP_IN="/etc/systemd/system/getty@tty7.service.d"
-if [ ! -f "$GETTY_DROP_IN/autologin.conf" ]; then
-  log "Installing getty@tty7 autologin drop-in"
-  mkdir -p "$GETTY_DROP_IN"
-  cp "$APP_DIR/systemd/getty-tty7-autologin.conf" "$GETTY_DROP_IN/autologin.conf"
-  systemctl daemon-reload
-  systemctl enable getty@tty7.service
-else
-  log "tty7 autologin already configured — skipping"
-fi
+mkdir -p "$GETTY_DROP_IN"
+# Always copy — ensures chvt 7 is present even on older installs that had the conf without it
+cp "$APP_DIR/systemd/getty-tty7-autologin.conf" "$GETTY_DROP_IN/autologin.conf"
+systemctl daemon-reload
+systemctl enable getty@tty7.service
+log "tty7 autologin drop-in installed"
 
 # ── .bash_profile kiosk launch ────────────────────────────────────────────────
 BASH_PROFILE="/home/$APP_USER/.bash_profile"

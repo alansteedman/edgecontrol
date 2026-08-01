@@ -318,17 +318,22 @@ function builtinFrameAmp(wfId, tick, speed=1) {
 function startChWfViz(cv, devId, ch) {
   const state = { phase: 0 }
   const dpr = window.devicePixelRatio || 1
-  const W = cv.clientWidth || cv.offsetWidth || 400
-  const H = cv.clientHeight || cv.offsetHeight || 80
-  cv.width = W * dpr; cv.height = H * dpr
+  let W = 0, H = 0
   const ctx = cv.getContext('2d')
-  ctx.scale(dpr, dpr)
   const colorTop = ch === 'A' ? '#a5f3fc' : '#fde68a'
   const colorBot = ch === 'A' ? 'rgba(79,195,247,.7)' : 'rgba(251,191,36,.7)'
   const actColorTop = '#fde68a', actColorBot = 'rgba(251,191,36,.7)'
 
   function draw(ts) {
     if (!cv.isConnected) return
+    const cw = cv.clientWidth || cv.offsetWidth
+    const ch2 = cv.clientHeight || cv.offsetHeight
+    if (!cw || !ch2) { requestAnimationFrame(draw); return }
+    if (cw !== W || ch2 !== H) {
+      W = cw; H = ch2
+      cv.width = W * dpr; cv.height = H * dpr
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    }
     ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
     const dev = S.devices?.[devId]
     if (!dev || dev.status !== 'connected') {
@@ -378,16 +383,21 @@ function startChWfViz(cv, devId, ch) {
 function startGrpWfViz(cv, groupId) {
   const state = { phase: 0 }
   const dpr = window.devicePixelRatio || 1
-  const W = cv.clientWidth || cv.offsetWidth || 400
-  const H = cv.clientHeight || cv.offsetHeight || 80
-  cv.width = W * dpr; cv.height = H * dpr
+  let W = 0, H = 0
   const ctx = cv.getContext('2d')
-  ctx.scale(dpr, dpr)
   const colorTop = '#e9d5ff'
   const colorBot = 'rgba(167,139,250,.7)'
 
   function draw(ts) {
     if (!cv.isConnected) return
+    const cw = cv.clientWidth || cv.offsetWidth
+    const ch = cv.clientHeight || cv.offsetHeight
+    if (!cw || !ch) { requestAnimationFrame(draw); return }
+    if (cw !== W || ch !== H) {
+      W = cw; H = ch
+      cv.width = W * dpr; cv.height = H * dpr
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    }
     ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
     const grp = S.groups?.find(g => g.id === groupId)
     const firstCh = grp?.channels?.find(({ deviceId }) => S.devices?.[deviceId]?.status === 'connected')

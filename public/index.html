@@ -8990,12 +8990,18 @@ function renderMacroList() {
     const div=document.createElement('div')
     div.className='mlist-item'+(active?' mactive':'')+(running?' mrunning':'')
     div.innerHTML=`
-      <span style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${running?(waiting?'⏸ ':'▶ '):''}${m.name||'Untitled'}</span>
+      <button style="background:none;border:none;cursor:pointer;font-size:12px;padding:0 4px;flex-shrink:0;color:${running?'#f87171':'#4ade80'}" onclick="event.stopPropagation();macroListToggle('${m.id}')" title="${running?'Stop':'Run'}">${running?'■':'▶'}</button>
+      <span style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${waiting?'⏸ ':''}${m.name||'Untitled'}</span>
       <button style="background:none;border:none;color:#333;cursor:pointer;font-size:13px;padding:0 2px;flex-shrink:0" onclick="event.stopPropagation();macroDeletePrompt('${m.id}')" title="Delete">×</button>
     `
     div.addEventListener('click',()=>macroOpen(m.id))
     el.appendChild(div)
   })
+}
+
+window.macroListToggle = async function(id) {
+  if (ME.running.has(id)) await fetch('/api/macros/'+id+'/stop',{method:'POST'})
+  else await macroRunId(id)
 }
 
 // ── Monitor window ────────────────────────────────────────────────────────────
@@ -9085,7 +9091,7 @@ function macroOpen(id) {
 window.macroNew = async function() {
   const res=await fetch('/api/macros',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'New Macro',blocks:[],conns:[]})})
   const m=await res.json()
-  ME.macros.push(m)
+  if(!ME.macros.find(x=>x.id===m.id)) ME.macros.push(m)
   renderMacroList()
   macroOpen(m.id)
 }
@@ -9116,12 +9122,30 @@ window.macroNameChanged = function() { setDirty() }
 window.macroRun = async function() {
   if(!ME.currentId) return
   if(ME.dirty) await macroSave()
-  await fetch('/api/macros/'+ME.currentId+'/run',{method:'POST'})
+  await macroRunId(ME.currentId)
 }
 
 window.macroStop = async function() {
   if(!ME.currentId) return
   await fetch('/api/macros/'+ME.currentId+'/stop',{method:'POST'})
+}
+
+// Run any macro by id (used by editor Run button and the list play icons).
+// Handles the device-in-use conflict warning from the server.
+async function macroRunId(id, force) {
+  const res = await fetch('/api/macros/'+id+'/run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(force ? {force:true} : {})
+  })
+  if (res.status === 409) {
+    const data = await res.json().catch(()=>({}))
+    if (data.conflict) {
+      const lines = data.conflicts.map(c => `• ${c.devices.join(', ')} — already used by "${c.macroName}"`).join('\n')
+      if (confirm(`This macro uses a device that's already in use:\n\n${lines}\n\nStart anyway?`)) {
+        await macroRunId(id, true)
+      }
+    }
+  }
 }
 
 window.macroResume = async function() {
@@ -9387,10 +9411,22 @@ let _hdmiResize       = null // { widgetId, axis, startX, startY, startCs, start
 let _hdmiDragCell    = null  // { widgetId, fromCol, fromRow } when dragging existing widget
 let _hdmiDev = null
 
+let _hdmiMacros = []
+let _hdmiMacrosLoaded = false
+async function loadHdmiMacros() {
+  try {
+    const r = await fetch('/api/macros')
+    _hdmiMacros = r.ok ? await r.json() : []
+  } catch { _hdmiMacros = [] }
+  _hdmiMacrosLoaded = true
+  if (document.getElementById('tab-hdmi')?.classList.contains('active')) renderHdmiEditor()
+}
+
 function renderHdmiEditor() {
   const root = document.getElementById('hdmi-editor-root')
   _hdmiDev = Object.values(S.devices).find(d => d.type === 'hdmi')
   if (!_hdmiDev) { root.innerHTML = '<div class="empty">No TV device</div>'; return }
+  if (!_hdmiMacrosLoaded) loadHdmiMacros()
 
   const layouts = _hdmiDev.layouts || []
   const activeId = _hdmiDev.activeLayout
@@ -9514,6 +9550,15 @@ function hdmiLayoutEditor(layout) {
             <span>🎬</span>${d.name}
           </div>`).join('')}
       ` : ''}
+      ${_hdmiMacros.length ? `
+        <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Macros</div>
+        ${_hdmiMacros.map(m => `
+          <div class="hdmi-pal-item" draggable="true"
+               data-wtype="macro" data-macroid="${m.id}" data-macroname="${escHtml(m.name)}"
+               style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+            <span>▷</span>${escHtml(m.name)}
+          </div>`).join('')}
+      ` : ''}
       <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Other</div>
       <div class="hdmi-pal-item" draggable="true" data-wtype="clock"
            style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
@@ -9616,6 +9661,7 @@ function hdmiWidgetLabel(w) {
     const d = S.devices[w.deviceId]
     return { icon:'🎬', text: d?.name || 'Media Player' }
   }
+  if (w.type === 'macro') return { icon:'▷', text: w.macroName || 'Macro' }
   return { icon:'?', text: w.type }
 }
 
@@ -9623,7 +9669,7 @@ function bindHdmiDragDrop(layout) {
   // Palette drag start
   document.querySelectorAll('.hdmi-pal-item').forEach(el => {
     el.addEventListener('dragstart', e => {
-      _hdmiDragPalette = { type:el.dataset.wtype, deviceId:el.dataset.devid, channel:el.dataset.ch, groupId:el.dataset.groupid }
+      _hdmiDragPalette = { type:el.dataset.wtype, deviceId:el.dataset.devid, channel:el.dataset.ch, groupId:el.dataset.groupid, macroId:el.dataset.macroid, macroName:el.dataset.macroname }
       _hdmiDragCell = null
       e.dataTransfer.effectAllowed = 'copy'
     })
@@ -9656,6 +9702,7 @@ function bindHdmiDragDrop(layout) {
         if (_hdmiDragPalette.type==='group')   { w.groupId=_hdmiDragPalette.groupId }
         if (_hdmiDragPalette.type==='camera')  { w.deviceId=_hdmiDragPalette.deviceId }
         if (_hdmiDragPalette.type==='media')   { w.deviceId=_hdmiDragPalette.deviceId }
+        if (_hdmiDragPalette.type==='macro')   { w.macroId=_hdmiDragPalette.macroId; w.macroName=_hdmiDragPalette.macroName }
         if (_hdmiDragPalette.type==='text')    { w.text = prompt('Text to display:', '') || '' }
         widgets.push(w)
       } else if (_hdmiDragCell) {

@@ -26,7 +26,7 @@ video{width:100%;height:100%;object-fit:cover;border-radius:4px;display:block}
 <div id="root"></div>
 <script>
 const WS_URL = location.origin.replace(/^http/,'ws')
-let S = { devices:{}, groups:[], waveforms:{ builtin:[], custom:[], live:[] } }
+let S = { devices:{}, groups:[], waveforms:{ builtin:[], custom:[], live:[] }, macroLiveState:{} }
 let _ws
 let _cams = {}
 const _liveSpectra = {}
@@ -46,9 +46,14 @@ function handle(m) {
   if (m.type === 'state') {
     S.waveforms = m.waveforms
     S.groups = m.groups || []
+    S.macroLiveState = m.macroLiveState || {}
     S.devices = {}
     for (const d of m.devices) { d.tickAt = performance.now(); S.devices[d.id] = d }
     renderHdmi()
+  }
+  if (m.type?.startsWith('macro:')) {
+    updateMacroLiveStateClient(m)
+    document.querySelectorAll(`[data-macro-id="${m.id}"]`).forEach(el => el._macroSync?.())
   }
   if (m.type === 'device:state') {
     if (S.devices[m.id]) { Object.assign(S.devices[m.id], m); S.devices[m.id].tickAt = performance.now() }
@@ -160,6 +165,7 @@ function buildWidget(w) {
   if (w.type === 'text')    return buildTextWidget(w)
   if (w.type === 'bodymap') return buildBodyMapWidget(w)
   if (w.type === 'media')   return buildMediaWidget(w)
+  if (w.type === 'macro')   return buildMacroWidget(w)
   const el = document.createElement('div')
   el.className = 'w'
   return el
@@ -298,6 +304,96 @@ function mediaSendControl(deviceId, action, value) {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ action, value })
   }).catch(()=>{})
+}
+
+// ── Macro Player widget — read-only status mirror of the Macro Editor's
+// monitor popup, scaled down to a TV tile. No controls here; resuming a
+// paused macro happens from the Macro Editor page, same as everywhere else
+// in this app where the TV only displays state.
+const MACRO_BD = {
+  start:{icon:'▶',label:'Start',tx:'#4ade80'}, end:{icon:'■',label:'End',tx:'#f87171'},
+  stop_all:{icon:'⛔',label:'Stop All',tx:'#fca5a5'}, delay:{icon:'⏱',label:'Delay',tx:'#93c5fd'},
+  ramp:{icon:'↗',label:'Ramp',tx:'#d8b4fe'}, wait_eom:{icon:'◈',label:'Wait EOM',tx:'#fdba74'},
+  wait_manual:{icon:'⏸',label:'Waiting',tx:'#fde68a'}, if_else:{icon:'⋈',label:'If/Else',tx:'#f0abfc'},
+  loop:{icon:'↺',label:'Loop',tx:'#a5b4fc'}, run_macro:{icon:'▷',label:'Run Macro',tx:'#6ee7b7'},
+  dev:{icon:'⚡',label:'Set Device',tx:'#fca5a5'}, hue_set:{icon:'☀',label:'Set Hue',tx:'#c4b5fd'},
+  hue_ramp:{icon:'↗',label:'Hue Ramp',tx:'#c4b5fd'},
+}
+function macroBlockSummary(type, cfg) {
+  if (!cfg) return ''
+  switch(type) {
+    case 'delay':    return `${cfg.dur??10}s`
+    case 'ramp':     return `${cfg.from??0} → ${cfg.to??100}`
+    case 'wait_eom': return `${(cfg.cond||'').includes('>')?'>':'<'} ${cfg.thr??70}%`
+    case 'wait_manual': return cfg.prompt||''
+    case 'if_else':  return `${(cfg.cond||'').includes('>')?'>':'<'} ${cfg.thr??80}%`
+    case 'loop':     return cfg.mode==='Repeat N times'?`×${cfg.count??3}`:`EOM ${(cfg.mode||'').includes('>')?'>':'<'} ${cfg.thr??75}%`
+    case 'dev':      return cfg.waveform||''
+    case 'hue_set':  return `${cfg.hueTargetName||cfg.hueTarget||'—'} · ${cfg.action==='off'?'OFF':`${cfg.bri??80}%`}`
+    case 'hue_ramp': return `${cfg.hueTargetName||''} ${cfg.from??20}%→${cfg.to??100}% / ${cfg.dur||30}s`
+    default: return ''
+  }
+}
+function updateMacroLiveStateClient(m) {
+  const id = m.id; if (!id) return
+  if (m.type === 'macro:running') S.macroLiveState[id] = { status:'running', name:m.name, blockId:null, blockType:null, config:null, countdown:null, ramp:null, waitPrompt:null, label:null }
+  else if (m.type === 'macro:stopped') delete S.macroLiveState[id]
+  else if (S.macroLiveState[id]) {
+    const st = S.macroLiveState[id]
+    if (m.type === 'macro:step') { st.status='running'; st.blockId=m.blockId; st.blockType=m.blockType; st.config=m.config; st.countdown=null; st.ramp=null; st.waitPrompt=null; st.label=null }
+    else if (m.type === 'macro:countdown') st.countdown = { remaining:m.remaining, total:m.total }
+    else if (m.type === 'macro:ramp') st.ramp = { value:m.value, from:m.from, to:m.to, elapsed:m.elapsed, total:m.total }
+    else if (m.type === 'macro:wait') { st.status='waiting'; st.waitPrompt=m.prompt }
+    else if (m.type === 'macro:label') st.label = { text:m.text, color:m.color }
+  }
+}
+
+function buildMacroWidget(w) {
+  const el = document.createElement('div')
+  el.className = 'w'
+  el.dataset.macroId = w.macroId
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-shrink:0">
+      <span class="w-title">${w.macroName || 'Macro'}</span>
+      <span id="macro-status-${w.id}" style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:3px"></span>
+    </div>
+    <div id="macro-body-${w.id}" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:0"></div>`
+
+  function sync() {
+    const st = S.macroLiveState[w.macroId]
+    const statusEl = document.getElementById(`macro-status-${w.id}`)
+    const bodyEl = document.getElementById(`macro-body-${w.id}`)
+    if (!statusEl || !bodyEl) return
+    if (!st) {
+      statusEl.textContent = 'IDLE'; statusEl.style.color = '#3a4a5a'; statusEl.style.background = '#0a0f1a'
+      bodyEl.innerHTML = `<span style="font-size:28px;opacity:.3">⏸</span><span style="font-size:11px;color:#2a3555">Not running</span>`
+      return
+    }
+    const waiting = st.status === 'waiting'
+    statusEl.textContent = waiting ? 'WAITING' : 'RUNNING'
+    statusEl.style.color = waiting ? '#fde68a' : '#4ade80'
+    statusEl.style.background = waiting ? '#222000' : '#0e2614'
+    const bd = MACRO_BD[st.blockType] || { icon:'●', label:st.blockType||'—', tx:'#8ab0d0' }
+    const summary = macroBlockSummary(st.blockType, st.config)
+    let progressHtml = ''
+    if (st.countdown) {
+      const pct = Math.max(0, Math.min(100, 100 - (st.countdown.remaining / (st.countdown.total||1)) * 100))
+      progressHtml = `<div style="width:100%;max-width:160px;height:5px;background:#131925;border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${bd.tx}"></div></div><span style="font-size:10px;color:#5a6a8a">${st.countdown.remaining.toFixed(1)}s left</span>`
+    } else if (st.ramp) {
+      const pct = Math.max(0, Math.min(100, (st.ramp.elapsed / (st.ramp.total||1)) * 100))
+      progressHtml = `<div style="width:100%;max-width:160px;height:5px;background:#131925;border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${bd.tx}"></div></div><span style="font-size:10px;color:#5a6a8a">${st.ramp.value}</span>`
+    }
+    bodyEl.innerHTML = `
+      <span style="font-size:26px;color:${bd.tx}">${bd.icon}</span>
+      <span style="font-size:13px;font-weight:600;color:#c0d0e0">${waiting ? (st.waitPrompt||'Waiting…') : bd.label}</span>
+      ${summary && !waiting ? `<span style="font-size:11px;color:#5a6a8a">${summary}</span>` : ''}
+      ${st.label ? `<span style="font-size:10px;color:${st.label.color||'#8ab0d0'}">${st.label.text}</span>` : ''}
+      ${progressHtml}`
+  }
+
+  el._macroSync = sync
+  sync()
+  return el
 }
 
 function buildMediaWidget(w) {

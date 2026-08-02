@@ -697,9 +697,30 @@ async function registerPairingAgent() {
 const devices = {}
 const clients = new Set()
 let streamDeck = null  // declared early to avoid TDZ when devices auto-connect at startup
+
+// Compact live-status snapshot per running macro, kept in sync purely from the
+// broadcast stream (single choke point below) so late-joining clients — like
+// the HDMI page loading fresh — can render correct state immediately via the
+// initial 'state' message instead of waiting for the next macro event.
+const macroLiveState = {}
+function updateMacroLiveState(msg) {
+  const id = msg.id; if (!id) return
+  if (msg.type === 'macro:running') macroLiveState[id] = { status:'running', name:msg.name, blockId:null, blockType:null, config:null, countdown:null, ramp:null, waitPrompt:null, label:null }
+  else if (msg.type === 'macro:stopped') delete macroLiveState[id]
+  else if (macroLiveState[id]) {
+    const st = macroLiveState[id]
+    if (msg.type === 'macro:step') { st.status='running'; st.blockId=msg.blockId; st.blockType=msg.blockType; st.config=msg.config; st.countdown=null; st.ramp=null; st.waitPrompt=null; st.label=null }
+    else if (msg.type === 'macro:countdown') st.countdown = { remaining:msg.remaining, total:msg.total }
+    else if (msg.type === 'macro:ramp') st.ramp = { value:msg.value, from:msg.from, to:msg.to, elapsed:msg.elapsed, total:msg.total }
+    else if (msg.type === 'macro:wait') { st.status='waiting'; st.waitPrompt=msg.prompt }
+    else if (msg.type === 'macro:label') st.label = { text:msg.text, color:msg.color }
+  }
+}
+
 function broadcast(msg) {
   const s = JSON.stringify(msg)
   for (const ws of clients) if (ws.readyState === 1) ws.send(s)
+  if (msg.type?.startsWith('macro:')) updateMacroLiveState(msg)
   // Notify Stream Deck on device state changes
   if (msg.type === 'device:status' || msg.type === 'device:state' || msg.type === 'eom:config' || msg.type === 'eom:denial') {
     streamDeck?.onDeviceUpdate()
@@ -2796,7 +2817,7 @@ wss.on('connection', (ws, request) => {
   ws.isApp  = !!(request.session?.appAuthed && !request.session?.authed)
   ws.isHdmi = !!(request.headers.referer || '').includes('/hdmi') || (request.headers.origin || '').includes('localhost')
   clients.add(ws)
-  ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
+  ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, macroLiveState, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
   if (_updateAvailable) ws.send(JSON.stringify({ type:'update:available', version:_updateAvailable.version, current:APP_VERSION }))
   ws.on('message', raw => {
     try {
@@ -4551,10 +4572,42 @@ app.delete('/api/macros/:id', (req, res) => {
   res.json({ ok: true })
 })
 
+function macroDeviceIds(macro, visited = new Set()) {
+  const ids = new Set()
+  if (!macro || visited.has(macro.id)) return ids
+  visited.add(macro.id)
+  for (const b of macro.blocks || []) {
+    const cfg = b.config || {}
+    if (b.devRef) ids.add(b.devRef)
+    if (cfg.estimRef) ids.add(cfg.estimRef)
+    if (cfg.nimbleRef) ids.add(cfg.nimbleRef)
+    if (cfg.ppRef) ids.add(cfg.ppRef)
+    if (cfg.hueTarget) { const d = cfg.hueTarget.split(':')[0]; if (d) ids.add(d) }
+    if (cfg.ioTarget) { const d = cfg.ioTarget.split(':')[0]; if (d) ids.add(d) }
+    if (b.type === 'run_macro' && cfg.macroId) {
+      const sub = macroStore.find(m => m.id === cfg.macroId)
+      for (const id of macroDeviceIds(sub, visited)) ids.add(id)
+    }
+  }
+  return ids
+}
+
 app.post('/api/macros/:id/run', (req, res) => {
   const macro = macroStore.find(x => x.id === req.params.id)
   if (!macro) return res.status(404).json({ error: 'not found' })
   if (macroRunners[req.params.id]) return res.status(409).json({ error: 'already running' })
+
+  if (!req.body?.force) {
+    const myDevices = macroDeviceIds(macro)
+    const conflicts = []
+    for (const [runningId, runner] of Object.entries(macroRunners)) {
+      const theirDevices = macroDeviceIds(runner.macro)
+      const shared = [...myDevices].filter(id => theirDevices.has(id))
+      if (shared.length) conflicts.push({ macroId: runningId, macroName: runner.macro.name, devices: shared.map(id => devices[id]?.name || id) })
+    }
+    if (conflicts.length) return res.status(409).json({ conflict: true, conflicts })
+  }
+
   const runner = new MacroRunner(macro)
   macroRunners[req.params.id] = runner
   runner.run().catch(e => console.error('[macro] run error:', e.message))

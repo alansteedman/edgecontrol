@@ -7873,6 +7873,7 @@ let _mediaDev = null
 let _mediaBrowseSourceId = null
 let _mediaBrowsePath = ''
 let _mediaBrowseEntries = []
+let _mediaBrowsing = false
 let _mediaDragItem = null
 let _mediaDragPlaylistIdx = null
 
@@ -8063,26 +8064,66 @@ function renderSmbWizard() {
   }
 }
 
+function mediaThumbUrl(sourceId, path) {
+  return `/api/devices/${_mediaDev.id}/media/thumbnail?sourceId=${encodeURIComponent(sourceId)}&path=${encodeURIComponent(path)}`
+}
+
+function mediaThumbHtml(kind, sourceId, path, size) {
+  const icon = kind==='video'?'🎞':kind==='audio'?'🎵':'🖼'
+  const canThumb = kind==='video' || kind==='image'
+  return `
+    <div style="width:${size}px;height:${size}px;position:relative;flex-shrink:0;border-radius:4px;overflow:hidden;background:#0a0a0a;display:flex;align-items:center;justify-content:center">
+      <span style="font-size:${Math.round(size*0.5)}px">${icon}</span>
+      ${canThumb ? `<img src="${mediaThumbUrl(sourceId,path)}" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onerror="this.remove()"/>` : ''}
+    </div>`
+}
+
+function mediaFmtSize(bytes) {
+  if (!bytes) return ''
+  const units=['B','KB','MB','GB']; let i=0, n=bytes
+  while (n>=1024 && i<units.length-1) { n/=1024; i++ }
+  return `${n.toFixed(i===0?0:1)}${units[i]}`
+}
+
+function mediaIsNowPlaying(sourceId, path) {
+  const pb = _mediaDev.playback || {}
+  const cur = (_mediaDev.playlist||[])[pb.index]
+  return !!cur && cur.sourceId===sourceId && cur.path===path && pb.status!=='stopped'
+}
+
+const MEDIA_PANEL_HEIGHT = 560
+
 function mediaBrowserPanelHtml() {
   const source = (_mediaDev.sources||[]).find(s=>s.id===_mediaBrowseSourceId)
   const crumbs = _mediaBrowsePath ? _mediaBrowsePath.split('/').filter(Boolean) : []
   return `
-    <div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px;min-height:420px">
-      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Files</div>
-      ${!source ? '<div style="font-size:12px;color:#444">Select a source to browse</div>' : `
-        <div style="font-size:11px;color:#4a6a8a;margin-bottom:10px;display:flex;gap:4px;flex-wrap:wrap">
+    <div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px;height:${MEDIA_PANEL_HEIGHT}px;display:flex;flex-direction:column">
+      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;flex-shrink:0">Files</div>
+      ${!source ? `
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#333">
+          <span style="font-size:28px">📂</span><span style="font-size:12px">Select a source to browse</span>
+        </div>` : `
+        <div style="font-size:11px;color:#4a6a8a;margin-bottom:10px;display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0">
           <span style="cursor:pointer" onclick="mediaBrowseTo('${source.id}','')">${escHtml(source.label)}</span>
           ${crumbs.map((c,i) => `<span> / </span><span style="cursor:pointer" onclick="mediaBrowseTo('${source.id}','${jsEsc(crumbs.slice(0,i+1).join('/'))}')">${escHtml(c)}</span>`).join('')}
         </div>
-        <div id="media-browse-list" style="display:flex;flex-direction:column;gap:2px;max-height:520px;overflow-y:auto">
-          ${_mediaBrowseEntries.map(e => e.type==='dir' ? `
+        <div id="media-browse-list" style="display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto;min-height:0">
+          ${_mediaBrowsing ? '<div style="text-align:center;padding:40px 0;color:#444;font-size:12px">Loading…</div>' : _mediaBrowseEntries.map(e => e.type==='dir' ? `
             <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer" onclick="mediaBrowseTo('${source.id}','${jsEsc((_mediaBrowsePath?_mediaBrowsePath+'/':'')+e.name)}')" onmouseover="this.style.background='#181818'" onmouseout="this.style.background=''">
-              <span>📁</span><span style="font-size:12px;color:#c0c0c0">${escHtml(e.name)}</span>
-            </div>` : `
-            <div class="media-file-row" draggable="true" data-source-id="${source.id}" data-path="${escHtml((_mediaBrowsePath?_mediaBrowsePath+'/':'')+e.name)}" data-name="${escHtml(e.name)}" data-kind="${e.kind}"
-                 style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:grab" onmouseover="this.style.background='#181818'" onmouseout="this.style.background=''">
-              <span>${e.kind==='video'?'🎞':e.kind==='audio'?'🎵':'🖼'}</span><span style="font-size:12px;color:#c0c0c0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(e.name)}</span>
-            </div>`).join('') || '<div style="font-size:12px;color:#333">Empty folder</div>'}
+              <div style="width:32px;height:32px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:16px">📁</div>
+              <span style="font-size:12px;color:#c0c0c0">${escHtml(e.name)}</span>
+            </div>` : (() => {
+              const path = (_mediaBrowsePath?_mediaBrowsePath+'/':'')+e.name
+              const playing = mediaIsNowPlaying(source.id, path)
+              return `
+            <div class="media-file-row" draggable="true" data-source-id="${source.id}" data-path="${escHtml(path)}" data-name="${escHtml(e.name)}" data-kind="${e.kind}"
+                 style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:6px;cursor:grab;background:${playing?'#0d2a1a':'transparent'};border:1px solid ${playing?'#1e5030':'transparent'}"
+                 onmouseover="this.style.background='${playing?'#0d2a1a':'#181818'}'" onmouseout="this.style.background='${playing?'#0d2a1a':'transparent'}'">
+              ${mediaThumbHtml(e.kind, source.id, path, 56)}
+              <span style="flex:1;min-width:0;font-size:12px;color:#c0c0c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${playing?'▶ ':''}${escHtml(e.name)}</span>
+              <span style="font-size:10px;color:#444;flex-shrink:0">${mediaFmtSize(e.size)}</span>
+            </div>`
+            })()).join('') || '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;height:100%;color:#333"><span style="font-size:22px">📭</span><span style="font-size:12px">Empty folder</span></div>'}
         </div>`}
     </div>`
 }
@@ -8091,19 +8132,19 @@ function mediaPlaylistPanelHtml() {
   const pl = _mediaDev.playlist || []
   const pb = _mediaDev.playback || {}
   return `
-    <div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px">
-      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Playlist — drag files here</div>
-      <div id="media-playlist-list" style="display:flex;flex-direction:column;gap:3px;min-height:60px">
+    <div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px;height:${MEDIA_PANEL_HEIGHT}px;display:flex;flex-direction:column">
+      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;flex-shrink:0">Playlist — drag files here</div>
+      <div id="media-playlist-list" style="display:flex;flex-direction:column;gap:3px;flex:1;overflow-y:auto;min-height:0">
         ${pl.map((it,i) => `
           <div class="media-pl-row" draggable="true" data-idx="${i}"
-               style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:5px;cursor:grab;
+               style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;cursor:grab;flex-shrink:0;
                       background:${pb.index===i?'#0d2a1a':'#181818'};border:1px solid ${pb.index===i?'#1e5030':'#2a2a2a'}"
                ondblclick="mediaPlayIndex(${i})">
-            <span style="font-size:10px;color:#555;width:16px">${i+1}</span>
-            <span>${it.kind==='video'?'🎞':it.kind==='audio'?'🎵':'🖼'}</span>
-            <span style="flex:1;font-size:11px;color:#c0c0c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(it.name)}</span>
-            <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171" onclick="mediaRemoveFromPlaylist(${i})">✕</button>
-          </div>`).join('') || '<div id="media-playlist-empty" style="font-size:11px;color:#333;text-align:center;padding:20px 0;border:1px dashed #222;border-radius:6px">Drag files here</div>'}
+            <span style="font-size:10px;color:#555;width:16px;flex-shrink:0">${i+1}</span>
+            ${mediaThumbHtml(it.kind, it.sourceId, it.path, 40)}
+            <span style="flex:1;min-width:0;font-size:11px;color:#c0c0c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${pb.index===i?'▶ ':''}${escHtml(it.name)}</span>
+            <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171;flex-shrink:0" onclick="mediaRemoveFromPlaylist(${i})">✕</button>
+          </div>`).join('') || '<div id="media-playlist-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;height:100%;border:1px dashed #222;border-radius:6px;color:#333"><span style="font-size:22px">🎵</span><span style="font-size:11px">Drag files here</span></div>'}
       </div>
     </div>`
 }
@@ -8133,7 +8174,23 @@ function mediaTransportHtml() {
         <span style="font-size:11px;color:#555">🔊</span>
         <input type="range" min="0" max="100" value="${pb.volume??100}" style="width:80px" oninput="mediaControl('volume',+this.value)"/>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #222">
+        <button class="btn ${pb.previewSeconds?'btn-primary':'btn-ghost'} btn-xs" onclick="mediaTogglePreview()">${pb.previewSeconds?'⏹ Stop preview':'▶ Preview playlist'}</button>
+        <span style="font-size:11px;color:#555">— play first</span>
+        <input id="media-preview-secs" type="number" min="1" value="${_mediaPreviewSecs}" style="width:50px;background:#0a0a0a;border:1px solid #2a2a2a;color:#e0e0e0;padding:4px 6px;border-radius:5px;font-size:12px;text-align:center" onchange="_mediaPreviewSecs=Math.max(1,parseInt(this.value)||10)" ${pb.previewSeconds?'disabled':''}/>
+        <span style="font-size:11px;color:#555">seconds of each file — keeps running even if you leave this page</span>
+      </div>
     </div>`
+}
+
+let _mediaPreviewSecs = 10
+
+function mediaTogglePreview() {
+  const pb = _mediaDev.playback || {}
+  if (pb.previewSeconds) { mediaControl('previewStop'); return }
+  if (!(_mediaDev.playlist||[]).length) return
+  _mediaPreviewSecs = Math.max(1, parseInt(document.getElementById('media-preview-secs')?.value) || _mediaPreviewSecs)
+  mediaControl('previewStart', _mediaPreviewSecs)
 }
 
 async function mediaScanUsb() {
@@ -8151,12 +8208,13 @@ async function mediaRemoveSource(sourceId) {
 
 async function mediaBrowseTo(sourceId, path) {
   _mediaBrowseSourceId = sourceId; _mediaBrowsePath = path
+  _mediaBrowsing = true; renderMediaEditor()
   try {
     const r = await fetch(`/api/devices/${_mediaDev.id}/media/browse?sourceId=${encodeURIComponent(sourceId)}&path=${encodeURIComponent(path)}`)
     const data = await r.json()
     _mediaBrowseEntries = r.ok ? (data.entries||[]) : []
   } catch { _mediaBrowseEntries = [] }
-  renderMediaEditor()
+  _mediaBrowsing = false; renderMediaEditor()
 }
 
 function mediaRemoveFromPlaylist(idx) {

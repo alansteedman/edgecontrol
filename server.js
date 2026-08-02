@@ -10,7 +10,7 @@ import { dirname, join, resolve, extname } from 'path'
 import { networkInterfaces, userInfo } from 'os'
 import { createBluetooth } from 'node-ble'
 import multer from 'multer'
-import { exec, execSync, execFileSync, spawn } from 'child_process'
+import { exec, execFile, execSync, execFileSync, spawn } from 'child_process'
 import net from 'net'
 import dgram from 'dgram'
 import { promises as dnsPromises } from 'dns'
@@ -278,6 +278,12 @@ const BUILTIN_ACTIVITIES = [
 // ── Audio files ──────────────────────────────────────────────────────────────
 const AUDIO_DIR = join(__dirname, 'audio')
 if (!existsSync(AUDIO_DIR)) mkdirSync(AUDIO_DIR, { recursive: true })
+
+// ── Media player thumbnails ───────────────────────────────────────────────────
+// Small (200px) generated JPEGs cached by content hash — not the media files
+// themselves, just tiny previews, so this doesn't meaningfully wear the SD card.
+const THUMB_DIR = join(__dirname, 'thumbnails')
+if (!existsSync(THUMB_DIR)) mkdirSync(THUMB_DIR, { recursive: true })
 
 // ── Live audio inputs ─────────────────────────────────────────────────────────
 const LIVE_AUDIO_PATH = join(__dirname, 'live-audio.json')
@@ -2274,7 +2280,9 @@ class MediaPlayerDevice {
     this.id = id; this.name = name; this.type = 'media'; this.status = 'connected'
     this.sources = Array.isArray(sources) ? sources : []
     this.playlist = Array.isArray(playlist) ? playlist : []
-    this.playback = { index:-1, status:'stopped', position:0, duration:0, volume:100, shuffle:false, repeat:'off', ...(playback||{}) }
+    this.playback = { index:-1, status:'stopped', position:0, duration:0, volume:100, shuffle:false, repeat:'off', previewSeconds:0, ...(playback||{}) }
+    // previewSeconds is ephemeral (driven by an in-process timer) — never trust a persisted value from disk
+    this.playback.previewSeconds = 0
   }
   connect() {}
   async disconnect() {}
@@ -2368,6 +2376,30 @@ function mountCifs(source) {
   } finally {
     try { unlinkSync(credsPath) } catch {}
   }
+}
+
+// Preview mode — auto-advances the playlist every N seconds regardless of
+// whether any control page is open, so it survives navigation/tab close.
+// Timers are in-memory only (not persisted; a restart just stops preview).
+const _mediaPreviewTimers = new Map()
+function mediaStopPreview(dev) {
+  const t = _mediaPreviewTimers.get(dev.id)
+  if (t) { clearInterval(t); _mediaPreviewTimers.delete(dev.id) }
+  dev.playback.previewSeconds = 0
+}
+function mediaStartPreview(dev, seconds) {
+  mediaStopPreview(dev)
+  dev.playback.previewSeconds = seconds
+  if (dev.playback.index < 0 && dev.playlist.length) { dev.playback.index = 0; dev.playback.position = 0 }
+  dev.playback.status = 'playing'
+  const timer = setInterval(() => {
+    if (!dev.playlist.length) return
+    dev.playback.index = mediaNextIndex(dev, 1)
+    dev.playback.position = 0
+    dev.playback.status = 'playing'
+    broadcast({ type:'media:state', id:dev.id, playback:dev.playback })
+  }, seconds*1000)
+  _mediaPreviewTimers.set(dev.id, timer)
 }
 
 function mediaNextIndex(dev, dir) {
@@ -3055,7 +3087,7 @@ app.delete('/api/devices/:id', async (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
   try{await dev.disconnect()}catch{}
   const wasCamera = dev.type==='camera'
-  if (dev.type==='media') for (const s of dev.sources) unmountMediaSource(s)
+  if (dev.type==='media') { mediaStopPreview(dev); for (const s of dev.sources) unmountMediaSource(s) }
   delete devices[req.params.id]; config.devices=config.devices.filter(d=>d.id!==req.params.id); saveConfig(config)
   if (wasCamera) rebuildGo2rtcConfig()
   broadcast({type:'device:removed',id:req.params.id}); res.json({ok:true})
@@ -3231,6 +3263,32 @@ app.get('/api/devices/:id/media/browse', (req,res) => {
   res.json({ path:req.query.path||'', entries:result })
 })
 
+app.get('/api/devices/:id/media/thumbnail', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).end()
+  const source = dev.sources.find(s=>s.id===req.query.sourceId)
+  if (!source || source.connected===false) return res.status(404).end()
+  const kind = mediaKindForExt(req.query.path||'')
+  if (kind !== 'video' && kind !== 'image') return res.status(404).end()
+  let filePath
+  try { filePath = resolveMediaPath(source, req.query.path||'') } catch { return res.status(400).end() }
+  let stat
+  try { stat = statSync(filePath) } catch { return res.status(404).end() }
+  const key = createHash('sha1').update(`${filePath}:${stat.mtimeMs}:${stat.size}`).digest('hex')
+  const thumbPath = join(THUMB_DIR, `${key}.jpg`)
+  if (existsSync(thumbPath)) {
+    res.set('Cache-Control', 'public, max-age=604800')
+    return res.sendFile(thumbPath)
+  }
+  const args = kind === 'video'
+    ? ['-y', '-ss', '3', '-i', filePath, '-frames:v', '1', '-vf', 'scale=200:-1', thumbPath]
+    : ['-y', '-i', filePath, '-frames:v', '1', '-vf', "scale='min(200,iw)':-1", thumbPath]
+  execFile('ffmpeg', args, { timeout: 10000 }, (err) => {
+    if (err || !existsSync(thumbPath)) return res.status(404).end()
+    res.set('Cache-Control', 'public, max-age=604800')
+    res.sendFile(thumbPath)
+  })
+})
+
 app.put('/api/devices/:id/media/playlist', (req,res) => {
   const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
   const items = Array.isArray(req.body.items) ? req.body.items : []
@@ -3246,6 +3304,9 @@ app.post('/api/devices/:id/media/control', (req,res) => {
   const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
   const { action, value } = req.body
   const pb = dev.playback
+  // Taking manual control while a preview session is running ends it —
+  // otherwise the next auto-advance tick would fight whatever the user just did.
+  if (_mediaPreviewTimers.has(dev.id) && !['previewStart','previewStop','progress','seek','volume'].includes(action)) mediaStopPreview(dev)
   switch (action) {
     case 'play':  pb.status='playing'; break
     case 'pause': pb.status='paused'; break
@@ -3261,6 +3322,12 @@ app.post('/api/devices/:id/media/control', (req,res) => {
       break
     case 'seek':
       if (typeof value==='number') pb.position=value
+      break
+    case 'previewStart':
+      if (typeof value==='number' && value>0 && dev.playlist.length) mediaStartPreview(dev, value)
+      break
+    case 'previewStop':
+      mediaStopPreview(dev)
       break
     case 'progress':
       // Periodic position/duration echo from whichever widget is actually

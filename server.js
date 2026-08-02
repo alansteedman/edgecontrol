@@ -13,6 +13,7 @@ import multer from 'multer'
 import { exec, execSync, execFileSync, spawn } from 'child_process'
 import net from 'net'
 import dgram from 'dgram'
+import { promises as dnsPromises } from 'dns'
 import { createGzip } from 'zlib'
 import { EventEmitter } from 'events'
 EventEmitter.defaultMaxListeners = 100
@@ -2424,9 +2425,20 @@ async function doScan() {
   if (isScanning) return
   isScanning=true; scanResults=[]
   broadcast({ type:'scan:start' })
+  // Use an independent DBus/node-ble connection for the manual scan instead
+  // of the shared cached adapter (used by CoyoteDevice.connect() etc.). The
+  // shared adapter's discovery gets started/stopped constantly by device
+  // reconnect loops (the BLE chip can't scan and connect at the same time)
+  // and its internal device-list cache goes stale from that churn — a fresh
+  // connection reliably sees every device, the shared one doesn't.
+  let scanBt = null
   try {
-    const adp=await getAdapter()
-    await adp.startDiscovery()
+    scanBt = createBluetooth()
+    const adp = (config.hciDeviceId != null)
+      ? await scanBt.bluetooth.getAdapter(`hci${config.hciDeviceId}`)
+      : await scanBt.bluetooth.defaultAdapter()
+    if (!await adp.isPowered().catch(()=>true)) await adp.setPowered(true).catch(()=>{})
+    if (!await adp.isDiscovering().catch(()=>false)) await adp.startDiscovery()
     const seen=new Set()
     const poll=setInterval(async()=>{
       try {
@@ -2447,10 +2459,13 @@ async function doScan() {
       } catch {}
     },500)
     setTimeout(async()=>{
-      clearInterval(poll); await adp.stopDiscovery().catch(()=>{})
+      clearInterval(poll)
+      await adp.stopDiscovery().catch(()=>{})
+      try { scanBt.destroy() } catch {}
       isScanning=false; broadcast({ type:'scan:done', results:scanResults })
     },10000)
   } catch(e) {
+    try { scanBt?.destroy() } catch {}
     isScanning=false; broadcast({ type:'scan:done', results:[] })
     console.error('Scan error:',e.message)
   }
@@ -3103,6 +3118,61 @@ app.post('/api/devices/:id/media/scan-usb', (req,res) => {
   if (cfg) { cfg.sources=dev.sources; saveConfig(config) }
   broadcast({ type:'media:updated', device:dev.toJSON() })
   res.json({ added, sources: dev.toJSON().sources })
+})
+
+// Sweep the local /24 for hosts with SMB (port 445) open, best-effort reverse
+// DNS for a friendly name. Read-only network probe — no credentials involved.
+async function scanSmbHosts() {
+  const ifaces = networkInterfaces()
+  let localIp = null
+  for (const addrs of Object.values(ifaces)) {
+    for (const a of addrs) { if (a.family==='IPv4' && !a.internal) { localIp = a.address; break } }
+    if (localIp) break
+  }
+  if (!localIp) return []
+  const subnet = localIp.split('.').slice(0,3).join('.')
+  const found = []
+  const tryIp = (ip, timeout) => new Promise(resolve => {
+    const sock = new net.Socket()
+    sock.setTimeout(timeout)
+    sock.connect(445, ip, () => { found.push(ip); sock.destroy(); resolve() })
+    sock.on('error', () => { sock.destroy(); resolve() })
+    sock.on('timeout', () => { sock.destroy(); resolve() })
+  })
+  const ips = Array.from({length:254}, (_,i) => `${subnet}.${i+1}`)
+  const BATCH=32, TIMEOUT=500
+  for (let i=0; i<ips.length; i+=BATCH) await Promise.all(ips.slice(i,i+BATCH).map(ip=>tryIp(ip,TIMEOUT)))
+  const results = await Promise.all(found.map(async ip => {
+    const name = await dnsPromises.reverse(ip).then(names => names[0]).catch(() => null)
+    return { ip, name }
+  }))
+  return results
+}
+app.get('/api/devices/:id/media/sources/smb/scan', async (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
+  try { res.json({ hosts: await scanSmbHosts() }) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// List a host's shares using the given credentials — lets the UI offer a
+// picker instead of the user having to already know the exact share name.
+app.post('/api/devices/:id/media/sources/smb/list-shares', (req,res) => {
+  const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
+  const { host, username, password, domain } = req.body
+  if (!host) return res.status(400).json({error:'host is required'})
+  const args = ['-L', `//${host}`, '-g']
+  if (username) args.push('-U', domain ? `${domain}\\${username}%${password||''}` : `${username}%${password||''}`)
+  else args.push('-N')
+  try {
+    const out = execFileSync('smbclient', args, { encoding:'utf8', timeout:8000 })
+    const shares = out.split('\n')
+      .map(l => l.split('|'))
+      .filter(p => p[0] === 'Disk' && p[1] && !p[1].endsWith('$'))
+      .map(p => p[1])
+    res.json({ shares })
+  } catch (e) {
+    res.status(500).json({ error: e.stderr?.toString().trim() || e.message })
+  }
 })
 
 app.post('/api/devices/:id/media/sources/smb', (req,res) => {

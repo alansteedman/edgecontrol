@@ -1246,6 +1246,17 @@ select.mci{cursor:pointer}
   </div>
 </div>
 
+<!-- SMB network share wizard -->
+<div class="overlay" id="smb-wizard-overlay">
+  <div class="modal" style="width:420px">
+    <div class="modal-head">
+      <h2>🌐 Add Network Share</h2>
+      <button class="btn btn-ghost btn-xs" onclick="mediaCloseSmbWizard()">✕</button>
+    </div>
+    <div id="smb-wizard-body"></div>
+  </div>
+</div>
+
 <script>
 // ── State ────────────────────────────────────────────────────────────────────
 let ws, S = { devices:{}, waveforms:{builtin:[],custom:[],live:[]}, groups:[], activities:[], role:'admin', authEnabled:false, deck:{ status:'disconnected', name:null } }
@@ -7864,7 +7875,6 @@ let _mediaBrowsePath = ''
 let _mediaBrowseEntries = []
 let _mediaDragItem = null
 let _mediaDragPlaylistIdx = null
-let _mediaShowSmbForm = false
 
 function jsEsc(s) { return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'") }
 
@@ -7911,54 +7921,145 @@ function mediaSourcesPanelHtml() {
           <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171" onclick="event.stopPropagation();mediaRemoveSource('${s.id}')">✕</button>
         </div>`).join('') || '<div style="font-size:11px;color:#333;margin-bottom:10px">No sources yet</div>'}
       <button class="btn btn-ghost btn-xs" style="width:100%;margin-top:6px" onclick="mediaScanUsb()">🔌 Scan for USB drives</button>
-      <button class="btn btn-ghost btn-xs" style="width:100%;margin-top:6px" onclick="mediaToggleSmbForm()">🌐 Add network share</button>
-      ${_mediaShowSmbForm ? mediaSmbFormHtml() : ''}
+      <button class="btn btn-ghost btn-xs" style="width:100%;margin-top:6px" onclick="mediaOpenSmbWizard()">🌐 Add network share</button>
     </div>`
 }
 
-function mediaSmbFormHtml() {
-  const inp = 'width:100%;background:#0a0a0a;border:1px solid #2a2a2a;color:#e0e0e0;padding:6px 8px;border-radius:5px;font-size:12px;margin-bottom:6px'
-  return `
-    <div style="margin-top:8px;padding:10px;background:#0a0a0a;border:1px solid #222;border-radius:8px">
-      <input id="smb-label" type="text" placeholder="Name (optional)" style="${inp}"/>
-      <input id="smb-host" type="text" placeholder="Host or IP" style="${inp}"/>
-      <input id="smb-share" type="text" placeholder="Share name" style="${inp}"/>
-      <input id="smb-username" type="text" placeholder="Username" style="${inp}"/>
-      <input id="smb-password" type="password" placeholder="Password" style="${inp}"/>
-      <input id="smb-domain" type="text" placeholder="Domain (optional)" style="${inp};margin-bottom:8px"/>
-      <div id="smb-error" style="font-size:11px;color:#f87171;margin-bottom:6px;display:none"></div>
-      <div style="display:flex;gap:6px">
-        <button class="btn btn-ghost btn-xs" style="flex:1" onclick="mediaToggleSmbForm()">Cancel</button>
-        <button class="btn btn-primary btn-xs" style="flex:1" onclick="mediaAddSmbShare()">Connect</button>
-      </div>
-    </div>`
+// ── Add Network Share wizard: scan → pick host → auth → pick share → mount ──
+let _smbWiz = null  // { step:'hosts'|'auth'|'shares', hosts, scanning, host, hostLabel, shares, listing, mounting, error }
+
+function mediaOpenSmbWizard() {
+  _smbWiz = { step:'hosts', hosts:null, scanning:false, host:'', hostLabel:'', shares:null, listing:false, mounting:false, error:'' }
+  document.getElementById('smb-wizard-overlay').classList.add('open')
+  renderSmbWizard()
+  smbWizScan()
 }
 
-function mediaToggleSmbForm() {
-  _mediaShowSmbForm = !_mediaShowSmbForm
-  renderMediaEditor()
+function mediaCloseSmbWizard() {
+  document.getElementById('smb-wizard-overlay').classList.remove('open')
+  _smbWiz = null
 }
 
-async function mediaAddSmbShare() {
-  const label = document.getElementById('smb-label').value.trim()
-  const host = document.getElementById('smb-host').value.trim()
-  const share = document.getElementById('smb-share').value.trim()
-  const username = document.getElementById('smb-username').value
-  const password = document.getElementById('smb-password').value
-  const domain = document.getElementById('smb-domain').value.trim()
-  const errEl = document.getElementById('smb-error')
-  if (!host || !share) { errEl.textContent='Host and share are required'; errEl.style.display='block'; return }
+async function smbWizScan() {
+  _smbWiz.scanning = true; _smbWiz.error = ''; renderSmbWizard()
+  try {
+    const r = await fetch(`/api/devices/${_mediaDev.id}/media/sources/smb/scan`)
+    const data = await r.json()
+    _smbWiz.hosts = r.ok ? (data.hosts||[]) : []
+  } catch { _smbWiz.hosts = [] }
+  _smbWiz.scanning = false; renderSmbWizard()
+}
+
+function smbWizPickHost(ip, name) {
+  _smbWiz.host = ip; _smbWiz.hostLabel = name||ip; _smbWiz.step = 'auth'; _smbWiz.error = ''
+  renderSmbWizard()
+}
+
+function smbWizManualHost() {
+  const v = document.getElementById('smb-wiz-manual-host').value.trim()
+  if (!v) return
+  smbWizPickHost(v, v)
+}
+
+function smbWizBack() {
+  if (_smbWiz.step === 'shares') { _smbWiz.step = 'auth'; _smbWiz.shares = null }
+  else if (_smbWiz.step === 'auth') { _smbWiz.step = 'hosts' }
+  _smbWiz.error = ''
+  renderSmbWizard()
+}
+
+async function smbWizConnect() {
+  const username = document.getElementById('smb-wiz-username').value
+  const password = document.getElementById('smb-wiz-password').value
+  const domain = document.getElementById('smb-wiz-domain').value.trim()
+  _smbWiz.username = username; _smbWiz.password = password; _smbWiz.domain = domain
+  _smbWiz.listing = true; _smbWiz.error = ''; renderSmbWizard()
+  try {
+    const r = await fetch(`/api/devices/${_mediaDev.id}/media/sources/smb/list-shares`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ host:_smbWiz.host, username, password, domain })
+    })
+    const data = await r.json()
+    if (!r.ok) throw new Error(data.error||'failed to list shares')
+    _smbWiz.shares = data.shares||[]
+    _smbWiz.step = 'shares'
+  } catch(e) {
+    _smbWiz.error = e.message
+  }
+  _smbWiz.listing = false; renderSmbWizard()
+}
+
+async function smbWizPickShare(share) {
+  _smbWiz.mounting = true; _smbWiz.error = ''; renderSmbWizard()
   try {
     const r = await fetch(`/api/devices/${_mediaDev.id}/media/sources/smb`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ label, host, share, username, password, domain })
+      body: JSON.stringify({ label:`${_smbWiz.hostLabel}/${share}`, host:_smbWiz.host, share, username:_smbWiz.username, password:_smbWiz.password, domain:_smbWiz.domain })
     })
     const data = await r.json()
     if (!r.ok) throw new Error(data.error||'mount failed')
-    _mediaShowSmbForm = false
+    mediaCloseSmbWizard()
   } catch(e) {
-    errEl.textContent = e.message
-    errEl.style.display = 'block'
+    _smbWiz.mounting = false; _smbWiz.error = e.message
+    renderSmbWizard()
+  }
+}
+
+function renderSmbWizard() {
+  const body = document.getElementById('smb-wizard-body')
+  if (!body || !_smbWiz) return
+  const inp = 'width:100%;background:#0a0a0a;border:1px solid #2a2a2a;color:#e0e0e0;padding:8px 10px;border-radius:6px;font-size:13px;margin-bottom:8px'
+  const errHtml = _smbWiz.error ? `<div style="font-size:11px;color:#f87171;margin-bottom:8px">${escHtml(_smbWiz.error)}</div>` : ''
+
+  if (_smbWiz.step === 'hosts') {
+    body.innerHTML = `
+      <div style="font-size:11px;color:#555;margin-bottom:10px">${_smbWiz.scanning ? 'Scanning network for SMB shares…' : 'Select a host, or enter one manually'}</div>
+      ${_smbWiz.scanning ? '<div style="text-align:center;padding:20px 0;color:#444;font-size:12px">🔄 Scanning…</div>' : `
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;max-height:240px;overflow-y:auto">
+          ${(_smbWiz.hosts||[]).map(h => `
+            <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#181818;border:1px solid #2a2a2a;border-radius:7px;cursor:pointer" onclick="smbWizPickHost('${h.ip}','${jsEsc(h.name||h.ip)}')" onmouseover="this.style.borderColor='#4fc3f7'" onmouseout="this.style.borderColor='#2a2a2a'">
+              <span>🖥</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;color:#e0e0e0">${escHtml(h.name||h.ip)}</div>
+                ${h.name ? `<div style="font-size:10px;color:#555">${h.ip}</div>` : ''}
+              </div>
+              <span style="color:#555">›</span>
+            </div>`).join('') || '<div style="font-size:12px;color:#333;text-align:center;padding:10px 0">No SMB hosts found</div>'}
+        </div>`}
+      ${errHtml}
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input id="smb-wiz-manual-host" type="text" placeholder="Or enter host/IP manually" style="${inp};margin-bottom:0;flex:1" onkeydown="if(event.key==='Enter')smbWizManualHost()"/>
+        <button class="btn btn-ghost btn-xs" onclick="smbWizManualHost()">Next</button>
+      </div>
+      <button class="btn btn-ghost btn-xs" style="width:100%" onclick="smbWizScan()" ${_smbWiz.scanning?'disabled':''}>🔄 Rescan</button>
+    `
+  } else if (_smbWiz.step === 'auth') {
+    body.innerHTML = `
+      <div style="font-size:12px;color:#c0c0c0;margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        <button class="btn btn-ghost btn-xs" onclick="smbWizBack()">← Back</button>
+        <span>🖥 <b>${escHtml(_smbWiz.hostLabel)}</b></span>
+      </div>
+      <input id="smb-wiz-username" type="text" placeholder="Username" style="${inp}"/>
+      <input id="smb-wiz-password" type="password" placeholder="Password" style="${inp}" onkeydown="if(event.key==='Enter')smbWizConnect()"/>
+      <input id="smb-wiz-domain" type="text" placeholder="Domain (optional)" style="${inp}"/>
+      ${errHtml}
+      <button class="btn btn-primary btn-sm" style="width:100%" onclick="smbWizConnect()" ${_smbWiz.listing?'disabled':''}>${_smbWiz.listing ? 'Connecting…' : 'Connect'}</button>
+    `
+  } else if (_smbWiz.step === 'shares') {
+    body.innerHTML = `
+      <div style="font-size:12px;color:#c0c0c0;margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        <button class="btn btn-ghost btn-xs" onclick="smbWizBack()">← Back</button>
+        <span>🖥 <b>${escHtml(_smbWiz.hostLabel)}</b> — select a share</span>
+      </div>
+      ${_smbWiz.mounting ? '<div style="text-align:center;padding:20px 0;color:#444;font-size:12px">Connecting…</div>' : `
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${(_smbWiz.shares||[]).map(s => `
+            <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#181818;border:1px solid #2a2a2a;border-radius:7px;cursor:pointer" onclick="smbWizPickShare('${jsEsc(s)}')" onmouseover="this.style.borderColor='#4fc3f7'" onmouseout="this.style.borderColor='#2a2a2a'">
+              <span>📁</span><span style="font-size:13px;color:#e0e0e0;flex:1">${escHtml(s)}</span><span style="color:#555">›</span>
+            </div>`).join('') || '<div style="font-size:12px;color:#333;text-align:center;padding:10px 0">No shares found — check credentials</div>'}
+        </div>`}
+      ${errHtml}
+    `
   }
 }
 

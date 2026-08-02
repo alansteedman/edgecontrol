@@ -43,7 +43,8 @@ apt-get install -y -qq \
   cage \
   chromium-browser \
   xwayland \
-  cifs-utils
+  cifs-utils \
+  smbclient
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
 log "Installing Node.js $NODE_VERSION"

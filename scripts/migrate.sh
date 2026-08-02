@@ -85,4 +85,13 @@ else
   log "cifs-utils already installed — skipping"
 fi
 
+# ── smbclient (media player SMB share listing) ────────────────────────────────
+if ! command -v smbclient >/dev/null 2>&1; then
+  log "Installing smbclient"
+  apt-get update -qq
+  apt-get install -y -qq smbclient
+else
+  log "smbclient already installed — skipping"
+fi
+
 log "Migration complete"

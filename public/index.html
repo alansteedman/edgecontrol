@@ -7922,7 +7922,28 @@ function mediaSourcesPanelHtml() {
           <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171" onclick="event.stopPropagation();mediaRemoveSource('${s.id}')">✕</button>
         </div>`).join('') || '<div style="font-size:11px;color:#333;margin-bottom:10px">No sources yet</div>'}
       <button class="btn btn-ghost btn-xs" style="width:100%;margin-top:6px" onclick="mediaScanUsb()">🔌 Scan for USB drives</button>
-      <button class="btn btn-ghost btn-xs" style="width:100%;margin-top:6px" onclick="mediaOpenSmbWizard()">🌐 Add network share</button>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+        <button class="btn btn-ghost btn-xs" style="flex:1" onclick="mediaOpenSmbWizard()">🌐 Add network share</button>
+        <button class="btn btn-ghost btn-xs" style="padding:4px 8px" onclick="mediaToggleSmbHelp()" title="Sharing setup help">ⓘ</button>
+      </div>
+      ${_mediaSmbHelpOpen ? mediaSmbHelpHtml() : ''}
+    </div>`
+}
+
+let _mediaSmbHelpOpen = false
+function mediaToggleSmbHelp() { _mediaSmbHelpOpen = !_mediaSmbHelpOpen; renderMediaEditor() }
+
+function mediaSmbHelpHtml() {
+  return `
+    <div style="margin-top:8px;padding:10px;background:#0a0a0a;border:1px solid #222;border-radius:8px;font-size:11px;color:#999;line-height:1.6">
+      <div style="font-weight:700;color:#c0c0c0;margin-bottom:4px">NAS / Windows PC</div>
+      <div style="margin-bottom:10px">Usually works out of the box — just use the account you'd normally log into that device with.</div>
+      <div style="font-weight:700;color:#c0c0c0;margin-bottom:4px">🍎 Sharing from a Mac</div>
+      <div>Macs need two separate steps most people never touch:</div>
+      <ol style="margin:4px 0 0 16px;padding:0">
+        <li style="margin-bottom:4px"><b>System Settings → General → Sharing → File Sharing</b> — turn it on, and add the folder you want to share.</li>
+        <li>Click <b>Options…</b> next to File Sharing, then under <b>"Share files and folders using SMB"</b>, tick the box for your account. macOS will ask you to re-enter your password right there — that step is required even if the account already has a password, since macOS stores a separate login just for SMB.</li>
+      </ol>
     </div>`
 }
 

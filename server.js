@@ -3,11 +3,11 @@ import { createProxyMiddleware } from 'http-proxy-middleware'
 import { StreamDeckController } from './streamdeck.js'
 import { WebSocket, WebSocketServer } from 'ws'
 import { createServer } from 'http'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, open as fsOpen, read as fsRead, write as fsWrite, close as fsClose, createReadStream, statSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, open as fsOpen, read as fsRead, write as fsWrite, close as fsClose, createReadStream, statSync, statfsSync } from 'fs'
 import { Readable } from 'stream'
 import { fileURLToPath } from 'url'
 import { dirname, join, resolve, extname } from 'path'
-import { networkInterfaces, userInfo } from 'os'
+import { networkInterfaces, userInfo, cpus, totalmem, freemem, loadavg } from 'os'
 import { createBluetooth } from 'node-ble'
 import multer from 'multer'
 import { exec, execFile, execSync, execFileSync, spawn } from 'child_process'
@@ -3947,6 +3947,46 @@ app.post('/api/devices/:id/hue/scene', async (req,res) => {
 app.post('/api/devices/:id/cmd', (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
   const {channel,params}=req.body; if (dev.setChannel&&channel) dev.setChannel(channel,params); res.json({ok:true})
+})
+
+// CPU % needs two samples to compute — os.cpus() only gives cumulative
+// counters since boot. Keep the previous sample around and diff against it
+// on each request; the very first call after startup has nothing to diff
+// against, so it reports null until the second call.
+let _lastCpuSample = null
+function cpuPercent() {
+  const sample = cpus()
+  if (!_lastCpuSample || _lastCpuSample.length !== sample.length) { _lastCpuSample = sample; return null }
+  let idleDelta = 0, totalDelta = 0
+  for (let i = 0; i < sample.length; i++) {
+    const a = _lastCpuSample[i].times, b = sample[i].times
+    const idle = b.idle - a.idle
+    const total = (b.user - a.user) + (b.nice - a.nice) + (b.sys - a.sys) + (b.irq - a.irq) + idle
+    idleDelta += idle; totalDelta += total
+  }
+  _lastCpuSample = sample
+  return totalDelta > 0 ? Math.round((1 - idleDelta / totalDelta) * 100) : null
+}
+
+function cpuTempC() {
+  try { return Math.round(parseInt(readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8'), 10) / 100) / 10 }
+  catch { return null }
+}
+
+app.get('/api/system/resources', requireAdmin, (req, res) => {
+  const memTotal = totalmem(), memFree = freemem(), memUsed = memTotal - memFree
+  let disk = null
+  try {
+    const st = statfsSync('/')
+    const diskTotal = st.blocks * st.bsize, diskFree = st.bfree * st.bsize
+    disk = { totalBytes: diskTotal, freeBytes: diskFree, usedBytes: diskTotal - diskFree, percent: Math.round(((diskTotal - diskFree) / diskTotal) * 100) }
+  } catch (e) { console.error('[resources] disk stat failed:', e.message) }
+  res.json({
+    cpu: { percent: cpuPercent(), cores: cpus().length, loadAvg: loadavg() },
+    mem: { totalBytes: memTotal, freeBytes: memFree, usedBytes: memUsed, percent: Math.round((memUsed / memTotal) * 100) },
+    disk,
+    tempC: cpuTempC(),
+  })
 })
 
 app.get('/api/config',  requireAdmin, (req,res) => res.json(safeConfig()))

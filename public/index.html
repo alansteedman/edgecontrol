@@ -804,6 +804,11 @@ select.mci{cursor:pointer}
             <span id="cfg-update-status" style="font-size:12px;color:#6b7280;display:none"></span>
           </div>
         </div>
+        <div class="cfg-row">
+          <label>Resources</label>
+          <button class="btn btn-ghost btn-sm" id="resources-toggle-btn" onclick="resourcesToggle()">📊 Show live resources</button>
+        </div>
+        <div id="resources-panel" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #1a1a1a"></div>
       </div>
 
       <!-- WiFi -->
@@ -1427,6 +1432,76 @@ async function cfgCheckForUpdate() {
   btn.disabled = false
 }
 
+// ── Live resources (Config tab) ────────────────────────────────────────────
+let _resourcesTimer = null
+
+function resourcesBar(pct, color) {
+  const p = Math.max(0, Math.min(100, pct ?? 0))
+  return `<div style="height:6px;background:#111;border-radius:3px;overflow:hidden;margin-top:4px"><div style="height:100%;width:${p}%;background:${color};transition:width .4s"></div></div>`
+}
+function resourcesFmtBytes(b) {
+  if (!b && b !== 0) return '—'
+  const units = ['B','KB','MB','GB','TB']; let i = 0, n = b
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
+  return `${n.toFixed(i === 0 ? 0 : 1)}${units[i]}`
+}
+function resourcesColorFor(pct) {
+  if (pct == null) return '#444'
+  return pct >= 90 ? '#f87171' : pct >= 70 ? '#fdba74' : '#4ade80'
+}
+
+async function resourcesFetch() {
+  const panel = document.getElementById('resources-panel')
+  if (!panel) return
+  let d
+  try { d = await (await fetch('/api/system/resources')).json() }
+  catch { panel.innerHTML = '<div style="font-size:12px;color:#f87171">Failed to load resources</div>'; return }
+
+  const cpuPct = d.cpu?.percent, memPct = d.mem?.percent, diskPct = d.disk?.percent, temp = d.tempC
+
+  panel.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#888"><span>CPU</span><span style="color:${resourcesColorFor(cpuPct)}">${cpuPct == null ? '—' : cpuPct + '%'}</span></div>
+        ${resourcesBar(cpuPct, resourcesColorFor(cpuPct))}
+        <div style="font-size:10px;color:#444;margin-top:3px">${d.cpu?.cores ?? '—'} cores · load ${(d.cpu?.loadAvg || []).map(n => n.toFixed(2)).join(' / ') || '—'}</div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#888"><span>Memory</span><span style="color:${resourcesColorFor(memPct)}">${memPct == null ? '—' : memPct + '%'}</span></div>
+        ${resourcesBar(memPct, resourcesColorFor(memPct))}
+        <div style="font-size:10px;color:#444;margin-top:3px">${resourcesFmtBytes(d.mem?.usedBytes)} / ${resourcesFmtBytes(d.mem?.totalBytes)}</div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#888"><span>SD Card</span><span style="color:${resourcesColorFor(diskPct)}">${diskPct == null ? '—' : diskPct + '%'}</span></div>
+        ${resourcesBar(diskPct, resourcesColorFor(diskPct))}
+        <div style="font-size:10px;color:#444;margin-top:3px">${d.disk ? `${resourcesFmtBytes(d.disk.usedBytes)} / ${resourcesFmtBytes(d.disk.totalBytes)}` : 'Unavailable'}</div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#888"><span>Temperature</span><span style="color:${temp == null ? '#444' : temp >= 80 ? '#f87171' : temp >= 65 ? '#fdba74' : '#4ade80'}">${temp == null ? '—' : temp + '°C'}</span></div>
+        ${resourcesBar(temp == null ? 0 : (temp / 90) * 100, temp == null ? '#444' : temp >= 80 ? '#f87171' : temp >= 65 ? '#fdba74' : '#4ade80')}
+        <div style="font-size:10px;color:#444;margin-top:3px">${temp == null ? 'Sensor unavailable' : temp >= 80 ? 'Throttling likely' : 'Normal'}</div>
+      </div>
+    </div>`
+}
+
+function resourcesStop() {
+  const panel = document.getElementById('resources-panel')
+  const btn = document.getElementById('resources-toggle-btn')
+  if (panel) panel.style.display = 'none'
+  if (btn) btn.textContent = '📊 Show live resources'
+  if (_resourcesTimer) { clearInterval(_resourcesTimer); _resourcesTimer = null }
+}
+
+window.resourcesToggle = function() {
+  const panel = document.getElementById('resources-panel')
+  if (panel.style.display !== 'none') { resourcesStop(); return }
+  panel.style.display = 'block'
+  document.getElementById('resources-toggle-btn').textContent = '📊 Hide live resources'
+  panel.innerHTML = '<div style="font-size:12px;color:#555">Loading…</div>'
+  resourcesFetch()
+  _resourcesTimer = setInterval(resourcesFetch, 2000)
+}
+
 async function _updApply() {
   document.getElementById('upd-btn').disabled = true
   document.getElementById('upd-spinner').style.display = 'block'
@@ -1774,6 +1849,7 @@ function showTab(name,btn) {
   if(name==='media') renderMediaEditor()
   if(name==='camera') { _cameraActive=true; cameraStart() }
   else if(_cameraActive) cameraStop()
+  if(name!=='config') resourcesStop()
 }
 function showSub(name,btn) {
   document.querySelectorAll('.sub-pane').forEach(p=>p.classList.remove('active'))

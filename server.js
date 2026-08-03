@@ -2444,7 +2444,10 @@ function mediaStartPreview(dev, seconds) {
   dev.playback.status = 'playing'
   const timer = setInterval(async () => {
     if (!dev.playlist.length || _mediaPreviewTimers.get(dev.id) !== timer) return
-    dev.playback.index = mediaNextIndex(dev, 1)
+    // Preview always loops the whole playlist, independent of the playlist's own repeat setting.
+    dev.playback.index = dev.playback.shuffle
+      ? Math.floor(Math.random() * dev.playlist.length)
+      : (dev.playback.index + 1) % dev.playlist.length
     await mediaRandomizeStart(dev, seconds)
     if (_mediaPreviewTimers.get(dev.id) !== timer) return
     dev.playback.status = 'playing'

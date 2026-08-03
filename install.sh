@@ -44,7 +44,13 @@ apt-get install -y -qq \
   chromium-browser \
   xwayland \
   cifs-utils \
-  smbclient
+  smbclient \
+  pipewire \
+  pipewire-pulse \
+  wireplumber \
+  pipewire-audio-client-libraries \
+  pulseaudio-utils \
+  alsa-utils
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
 log "Installing Node.js $NODE_VERSION"
@@ -251,6 +257,21 @@ BPEOF
 else
   ok "~/.bash_profile already has kiosk config — skipping"
 fi
+
+# ── HDMI audio ────────────────────────────────────────────────────────────────
+# The kiosk's Chromium needs a running PipeWire session to output sound through
+# HDMI — apt installing pipewire/wireplumber only enables their systemd --user
+# units, it doesn't start them for a user that isn't logged in yet. Enabling
+# linger keeps the user's systemd instance (and PipeWire with it) running even
+# before the tty7 autologin session starts.
+log "Enabling audio (PipeWire) for $APP_USER"
+loginctl enable-linger "$APP_USER"
+APP_UID="$(id -u "$APP_USER")"
+mkdir -p "/run/user/$APP_UID"
+chown "$APP_USER:$APP_USER" "/run/user/$APP_UID"
+runuser -l "$APP_USER" -c "XDG_RUNTIME_DIR=/run/user/$APP_UID systemctl --user daemon-reload"
+runuser -l "$APP_USER" -c "XDG_RUNTIME_DIR=/run/user/$APP_UID systemctl --user enable --now pipewire pipewire-pulse wireplumber" || true
+ok "PipeWire enabled for $APP_USER"
 
 # ── Avahi ─────────────────────────────────────────────────────────────────────
 log "Enabling avahi mDNS"

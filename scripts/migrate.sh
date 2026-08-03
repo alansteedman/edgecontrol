@@ -94,4 +94,23 @@ else
   log "smbclient already installed — skipping"
 fi
 
+# ── PipeWire (HDMI audio for the kiosk) ───────────────────────────────────────
+if ! command -v pactl >/dev/null 2>&1; then
+  log "Installing pipewire (HDMI audio)"
+  apt-get update -qq
+  apt-get install -y -qq pipewire pipewire-pulse wireplumber pipewire-audio-client-libraries pulseaudio-utils alsa-utils
+  loginctl enable-linger "$APP_USER"
+  APP_UID="$(id -u "$APP_USER")"
+  mkdir -p "/run/user/$APP_UID"
+  chown "$APP_USER:$APP_USER" "/run/user/$APP_UID"
+  runuser -l "$APP_USER" -c "XDG_RUNTIME_DIR=/run/user/$APP_UID systemctl --user daemon-reload"
+  runuser -l "$APP_USER" -c "XDG_RUNTIME_DIR=/run/user/$APP_UID systemctl --user enable --now pipewire pipewire-pulse wireplumber" || true
+  # Chromium's audio service only connects to PipeWire at startup — restart the
+  # kiosk session so it picks up the newly available audio server.
+  systemctl restart getty@tty7.service 2>/dev/null || true
+  log "PipeWire enabled — kiosk restarted to pick up audio"
+else
+  log "pipewire already installed — skipping"
+fi
+
 log "Migration complete"

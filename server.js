@@ -2332,16 +2332,17 @@ function resolveMediaPath(source, relPath) {
   return target
 }
 
-// Scan for removable USB partitions not yet mounted and mount each read-only.
-// Deliberately excludes the boot device — only /dev/sd* (USB mass storage on
-// a Pi, which boots from mmcblk0/nvme) is considered, on top of lsblk's own
-// "removable" flag as a second safety net.
+// Scan for USB partitions not yet mounted and mount each read-only.
+// Deliberately excludes the boot device by only considering /dev/sd*
+// (USB mass storage on a Pi, which always boots from mmcblk0/nvme) —
+// NOT lsblk's "removable" flag, which some USB SSDs (e.g. Samsung T9,
+// using UAS) report as false even though they're plainly removable.
 function scanUsbDrives(dev) {
   const tree = JSON.parse(execFileSync('lsblk', ['-J','-o','NAME,PATH,FSTYPE,MOUNTPOINT,RM,TYPE,LABEL'], { encoding:'utf8' }))
   const found = []
   ;(function walk(list) {
     for (const d of list || []) {
-      if (d.type==='part' && d.rm && d.fstype && !d.mountpoint && d.path?.startsWith('/dev/sd')) found.push(d)
+      if (d.type==='part' && d.fstype && !d.mountpoint && d.path?.startsWith('/dev/sd')) found.push(d)
       if (d.children) walk(d.children)
     }
   })(tree.blockdevices)

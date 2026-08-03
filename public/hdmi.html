@@ -408,17 +408,31 @@ function buildMediaWidget(w) {
   label.textContent = 'No media'
   el.appendChild(label)
 
-  let mediaEl = null, currentIdx = -1, imgTimer = null, progressTimer = null
+  let mediaEl = null, currentIdx = -1, imgTimer = null, progressTimer = null, stallTimer = null
 
   function stopTimers() {
     if (imgTimer) { clearTimeout(imgTimer); imgTimer = null }
     if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
+    if (stallTimer) { clearTimeout(stallTimer); stallTimer = null }
   }
 
   function advanceOnEnd() {
     const pb = S.devices[w.deviceId]?.playback
     if (pb?.repeat === 'one') { if (mediaEl) { mediaEl.currentTime = 0; mediaEl.play().catch(()=>{}) } else loadItem(currentIdx, true) }
     else mediaSendControl(w.deviceId, 'next')
+  }
+
+  // Some files can't actually be decoded in-browser (unsupported codec/
+  // container, corrupt stream) — they never error, they just sit there
+  // showing nothing. If a file hasn't started producing frames a few
+  // seconds after we told it to play, treat it as broken and skip it
+  // rather than sitting on a black screen for the rest of the preview.
+  function armStallWatchdog() {
+    if (stallTimer) clearTimeout(stallTimer)
+    stallTimer = setTimeout(() => {
+      console.warn('[media] stalled, skipping:', mediaEl?.currentSrc)
+      advanceOnEnd()
+    }, 6000)
   }
 
   function loadItem(idx) {
@@ -439,10 +453,13 @@ function buildMediaWidget(w) {
       mediaEl.volume = (pb.volume ?? 100) / 100
       mediaEl.addEventListener('ended', advanceOnEnd)
       mediaEl.addEventListener('loadedmetadata', () => { if (pb.position) mediaEl.currentTime = pb.position })
+      mediaEl.addEventListener('error', () => { console.warn('[media] failed to load, skipping:', item.name); advanceOnEnd() })
+      mediaEl.addEventListener('playing', () => { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null } })
       el.appendChild(mediaEl)
       progressTimer = setInterval(() => {
         if (mediaEl && !mediaEl.paused) mediaReportProgress(w.deviceId, mediaEl.currentTime, mediaEl.duration||0)
       }, 3000)
+      if (mediaEl.autoplay) armStallWatchdog()
     } else if (item.kind === 'image') {
       mediaEl = document.createElement('img')
       mediaEl.src = src
@@ -458,7 +475,7 @@ function buildMediaWidget(w) {
     const pb = dev.playback || {}
     if (pb.index !== currentIdx) { loadItem(pb.index); return }
     if (mediaEl && (mediaEl.tagName==='VIDEO' || mediaEl.tagName==='AUDIO')) {
-      if (pb.status==='playing' && mediaEl.paused) mediaEl.play().catch(()=>{})
+      if (pb.status==='playing' && mediaEl.paused) { mediaEl.play().catch(()=>{}); armStallWatchdog() }
       if (pb.status!=='playing' && !mediaEl.paused) mediaEl.pause()
       mediaEl.volume = (pb.volume ?? 100) / 100
       // Only snap to a reported position on real drift — this widget is
@@ -685,9 +702,16 @@ function startChWfViz(cv, devId, ch) {
   const colorTop = ch === 'A' ? '#a5f3fc' : '#fde68a'
   const colorBot = ch === 'A' ? 'rgba(79,195,247,.7)' : 'rgba(251,191,36,.7)'
   const actColorTop = '#fde68a', actColorBot = 'rgba(251,191,36,.7)'
+  let lastPaint = 0, idlePainted = false
 
   function draw(ts) {
     if (!cv.isConnected) return
+    // Layouts can have several of these waveform canvases running at once
+    // (plus a video widget decoding/painting) — a scrolling waveform reads
+    // just as smooth well under 60fps, so cap it to leave headroom for
+    // everything else on screen.
+    if (ts - lastPaint < 40) { requestAnimationFrame(draw); return }
+    lastPaint = ts
     const cw = cv.clientWidth || cv.offsetWidth
     const ch2 = cv.clientHeight || cv.offsetHeight
     if (!cw || !ch2) { requestAnimationFrame(draw); return }
@@ -695,11 +719,15 @@ function startChWfViz(cv, devId, ch) {
       W = cw; H = ch2
       cv.width = W * dpr; cv.height = H * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      idlePainted = false
     }
-    ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
     const dev = S.devices?.[devId]
     if (!dev || dev.status !== 'connected') {
-      ctx.fillStyle = '#1c1c1c'; ctx.fillRect(0, H-1, W, 1)
+      if (!idlePainted) {
+        ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
+        ctx.fillStyle = '#1c1c1c'; ctx.fillRect(0, H-1, W, 1)
+        idlePainted = true
+      }
       requestAnimationFrame(draw); return
     }
     const chData = dev.channels?.[ch] || {}
@@ -710,6 +738,8 @@ function startChWfViz(cv, devId, ch) {
     const actDef = actMode ? (S.activities || []).find(a => a.id === chData.activityId) : null
     const vizWfId = actDef ? actDef.ampWave : wfId
     if (!actMode && vizWfId && vizWfId.startsWith('live-input:')) {
+      idlePainted = false
+      ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
       _drawLiveViz(ctx, W, H, vizWfId.slice('live-input:'.length), intensity, colorTop, colorBot)
       requestAnimationFrame(draw); return
     }
@@ -717,6 +747,8 @@ function startChWfViz(cv, devId, ch) {
       || (S.waveforms?.live || []).find(w => w.id === vizWfId)
     if (!wf) { requestAnimationFrame(draw); return }
     if (wf.type === 'audio') {
+      idlePainted = false
+      ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
       const g2 = ctx.createLinearGradient(0, 0, 0, H)
       g2.addColorStop(0, actMode ? actColorTop : colorTop)
       g2.addColorStop(1, actMode ? actColorBot : colorBot)
@@ -728,6 +760,22 @@ function startChWfViz(cv, devId, ch) {
       }
       requestAnimationFrame(draw); return
     }
+    // A zero-intensity channel paints the exact same flat line on every
+    // frame — paint it once and leave the canvas alone until something
+    // actually changes, instead of repainting a static image 25x/sec.
+    if (intensity === 0) {
+      if (!idlePainted) {
+        const flatX = Math.floor(W * 0.3)
+        ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
+        ctx.fillStyle = colorBot; ctx.fillRect(0, H - 1, W, 1)
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5
+        ctx.beginPath(); ctx.moveTo(flatX, 0); ctx.lineTo(flatX, H); ctx.stroke()
+        idlePainted = true
+      }
+      requestAnimationFrame(draw); return
+    }
+    idlePainted = false
+    ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
     const isBuiltin = !Array.isArray(wf.frames)
     const fLen = isBuiltin ? 480 : wf.frames.length
     const chTick = dev.ticks?.[ch] || 0
@@ -766,9 +814,12 @@ function startGrpWfViz(cv, groupId) {
   const ctx = cv.getContext('2d')
   const colorTop = '#e9d5ff'
   const colorBot = 'rgba(167,139,250,.7)'
+  let lastPaint = 0, idlePainted = false
 
   function draw(ts) {
     if (!cv.isConnected) return
+    if (ts - lastPaint < 40) { requestAnimationFrame(draw); return }
+    lastPaint = ts
     const cw = cv.clientWidth || cv.offsetWidth
     const ch = cv.clientHeight || cv.offsetHeight
     if (!cw || !ch) { requestAnimationFrame(draw); return }
@@ -776,8 +827,8 @@ function startGrpWfViz(cv, groupId) {
       W = cw; H = ch
       cv.width = W * dpr; cv.height = H * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      idlePainted = false
     }
-    ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
     const grp = S.groups?.find(g => g.id === groupId)
     const firstCh = grp?.channels?.find(({ deviceId }) => S.devices?.[deviceId]?.status === 'connected')
     let intensity, wfId, speed, actMode = false, actDef = null
@@ -794,6 +845,8 @@ function startGrpWfViz(cv, groupId) {
     const grpColorTop = actMode ? '#fde68a' : colorTop
     const grpColorBot = actMode ? 'rgba(251,191,36,.7)' : colorBot
     if (!actMode && wfId && wfId.startsWith('live-input:')) {
+      idlePainted = false
+      ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
       _drawLiveViz(ctx, W, H, wfId.slice('live-input:'.length), intensity, grpColorTop, grpColorBot)
       requestAnimationFrame(draw); return
     }
@@ -801,6 +854,8 @@ function startGrpWfViz(cv, groupId) {
       || (S.waveforms?.live || []).find(w => w.id === wfId)
     if (!wf) { requestAnimationFrame(draw); return }
     if (wf.type === 'audio') {
+      idlePainted = false
+      ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
       const g2 = ctx.createLinearGradient(0, 0, 0, H)
       g2.addColorStop(0, grpColorTop); g2.addColorStop(1, grpColorBot)
       for (let px = 0; px < W; px++) {
@@ -811,6 +866,22 @@ function startGrpWfViz(cv, groupId) {
       }
       requestAnimationFrame(draw); return
     }
+    // Same idle short-circuit as the channel version — a zero-intensity
+    // (or no connected channel) group paints an identical flat line every
+    // frame otherwise.
+    if (intensity === 0) {
+      if (!idlePainted) {
+        const flatX = Math.floor(W * 0.3)
+        ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
+        ctx.fillStyle = grpColorBot; ctx.fillRect(0, H - 1, W, 1)
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5
+        ctx.beginPath(); ctx.moveTo(flatX, 0); ctx.lineTo(flatX, H); ctx.stroke()
+        idlePainted = true
+      }
+      requestAnimationFrame(draw); return
+    }
+    idlePainted = false
+    ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H)
     const isBuiltin = !Array.isArray(wf.frames)
     const fLen = isBuiltin ? 480 : wf.frames.length
     const tickDev = firstCh ? S.devices[firstCh.deviceId] : null

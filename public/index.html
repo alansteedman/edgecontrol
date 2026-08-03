@@ -8099,6 +8099,15 @@ function mediaThumbHtml(kind, sourceId, path, size) {
     </div>`
 }
 
+// Container formats whose contents often use codecs the browser's <video>
+// element can't decode (old DivX/Xvid in .avi, HEVC/AC3/etc in .mkv) —
+// a cheap extension-based heuristic, not a real per-file codec probe.
+const MEDIA_RISKY_EXT = new Set(['avi', 'mkv'])
+function mediaMayNotPlay(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase()
+  return MEDIA_RISKY_EXT.has(ext)
+}
+
 function mediaFmtSize(bytes) {
   if (!bytes) return ''
   const units=['B','KB','MB','GB']; let i=0, n=bytes
@@ -8142,6 +8151,7 @@ function mediaBrowserPanelHtml() {
                  onmouseover="this.style.background='${playing?'#0d2a1a':'#181818'}'" onmouseout="this.style.background='${playing?'#0d2a1a':'transparent'}'">
               ${mediaThumbHtml(e.kind, source.id, path, 56)}
               <span style="flex:1;min-width:0;font-size:12px;color:#c0c0c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${playing?'▶ ':''}${escHtml(e.name)}</span>
+              ${mediaMayNotPlay(e.name) ? `<span style="font-size:10px;color:#fdba74;flex-shrink:0" title="This format sometimes uses a codec the browser can't play — video may come up black">⚠ may not play</span>` : ''}
               <span style="font-size:10px;color:#444;flex-shrink:0">${mediaFmtSize(e.size)}</span>
             </div>`
             })()).join('') || '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;height:100%;color:#333"><span style="font-size:22px">📭</span><span style="font-size:12px">Empty folder</span></div>'}
@@ -8163,7 +8173,7 @@ function mediaPlaylistPanelHtml() {
                ondblclick="mediaPlayIndex(${i})">
             <span style="font-size:10px;color:#555;width:16px;flex-shrink:0">${i+1}</span>
             ${mediaThumbHtml(it.kind, it.sourceId, it.path, 40)}
-            <span style="flex:1;min-width:0;font-size:11px;color:#c0c0c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${pb.index===i?'▶ ':''}${escHtml(it.name)}</span>
+            <span style="flex:1;min-width:0;font-size:11px;color:#c0c0c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${pb.index===i?'▶ ':''}${mediaMayNotPlay(it.name)?'<span style="color:#fdba74" title="This format sometimes uses a codec the browser can\'t play — video may come up black">⚠</span> ':''}${escHtml(it.name)}</span>
             <button class="btn btn-ghost btn-xs" style="font-size:9px;padding:1px 4px;color:#f87171;flex-shrink:0" onclick="mediaRemoveFromPlaylist(${i})">✕</button>
           </div>`).join('') || '<div id="media-playlist-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;height:100%;border:1px dashed #222;border-radius:6px;color:#333"><span style="font-size:22px">🎵</span><span style="font-size:11px">Drag files here</span></div>'}
       </div>

@@ -3322,6 +3322,24 @@ app.get('/api/devices/:id/media/browse', (req,res) => {
   res.json({ path:req.query.path||'', entries:result })
 })
 
+// Thumbnail requests arrive in bursts — a folder with dozens of video files
+// fires that many <img> requests near-simultaneously, and each miss spawns
+// its own ffmpeg process. Uncapped, that's enough concurrent ffmpeg seeks to
+// starve everything else on the Pi (video playback included). Queue them and
+// only let a couple run at once; cached hits above never enter this queue.
+const THUMB_MAX_CONCURRENT = 2
+let _thumbActive = 0
+const _thumbQueue = []
+function runThumbJob(fn) {
+  if (_thumbActive >= THUMB_MAX_CONCURRENT) { _thumbQueue.push(fn); return }
+  _thumbActive++
+  fn(() => {
+    _thumbActive--
+    const next = _thumbQueue.shift()
+    if (next) runThumbJob(next)
+  })
+}
+
 app.get('/api/devices/:id/media/thumbnail', (req,res) => {
   const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).end()
   const source = dev.sources.find(s=>s.id===req.query.sourceId)
@@ -3341,11 +3359,12 @@ app.get('/api/devices/:id/media/thumbnail', (req,res) => {
   const args = kind === 'video'
     ? ['-y', '-ss', '3', '-i', filePath, '-frames:v', '1', '-vf', 'scale=200:-1', thumbPath]
     : ['-y', '-i', filePath, '-frames:v', '1', '-vf', "scale='min(200,iw)':-1", thumbPath]
-  execFile('ffmpeg', args, { timeout: 10000 }, (err) => {
+  runThumbJob(done => execFile('ffmpeg', args, { timeout: 10000 }, (err) => {
+    done()
     if (err || !existsSync(thumbPath)) return res.status(404).end()
     res.set('Cache-Control', 'public, max-age=604800')
     res.sendFile(thumbPath)
-  })
+  }))
 })
 
 app.put('/api/devices/:id/media/playlist', (req,res) => {

@@ -2403,6 +2403,35 @@ function mountCifs(source) {
 // whether any control page is open, so it survives navigation/tab close.
 // Timers are in-memory only (not persisted; a restart just stops preview).
 const _mediaPreviewTimers = new Map()
+const _mediaDurationCache = new Map()  // "path:mtime:size" -> seconds
+function mediaProbeDuration(filePath) {
+  return new Promise(resolve => {
+    let stat
+    try { stat = statSync(filePath) } catch { return resolve(0) }
+    const key = `${filePath}:${stat.mtimeMs}:${stat.size}`
+    if (_mediaDurationCache.has(key)) return resolve(_mediaDurationCache.get(key))
+    execFile('ffprobe', ['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1', filePath], { timeout: 8000 }, (err, stdout) => {
+      const dur = !err && parseFloat(stdout) > 0 ? parseFloat(stdout) : 0
+      _mediaDurationCache.set(key, dur)
+      resolve(dur)
+    })
+  })
+}
+// Picks a random position for the item currently at dev.playback.index, leaving
+// at least `seconds` of runway before the end (falls back to 0 if duration is
+// unknown or too short to fit a random offset).
+async function mediaRandomizeStart(dev, seconds) {
+  const item = dev.playlist[dev.playback.index]
+  dev.playback.position = 0
+  if (!item || item.kind === 'image') return
+  const source = dev.sources.find(s => s.id === item.sourceId)
+  if (!source) return
+  let filePath
+  try { filePath = resolveMediaPath(source, item.path) } catch { return }
+  const duration = await mediaProbeDuration(filePath)
+  const maxStart = duration - seconds
+  if (maxStart > 0) dev.playback.position = Math.random() * maxStart
+}
 function mediaStopPreview(dev) {
   const t = _mediaPreviewTimers.get(dev.id)
   if (t) { clearInterval(t); _mediaPreviewTimers.delete(dev.id) }
@@ -2411,16 +2440,21 @@ function mediaStopPreview(dev) {
 function mediaStartPreview(dev, seconds) {
   mediaStopPreview(dev)
   dev.playback.previewSeconds = seconds
-  if (dev.playback.index < 0 && dev.playlist.length) { dev.playback.index = 0; dev.playback.position = 0 }
+  if (dev.playback.index < 0 && dev.playlist.length) dev.playback.index = 0
   dev.playback.status = 'playing'
-  const timer = setInterval(() => {
-    if (!dev.playlist.length) return
+  const timer = setInterval(async () => {
+    if (!dev.playlist.length || _mediaPreviewTimers.get(dev.id) !== timer) return
     dev.playback.index = mediaNextIndex(dev, 1)
-    dev.playback.position = 0
+    await mediaRandomizeStart(dev, seconds)
+    if (_mediaPreviewTimers.get(dev.id) !== timer) return
     dev.playback.status = 'playing'
     broadcast({ type:'media:state', id:dev.id, playback:dev.playback })
   }, seconds*1000)
   _mediaPreviewTimers.set(dev.id, timer)
+  mediaRandomizeStart(dev, seconds).then(() => {
+    if (_mediaPreviewTimers.get(dev.id) !== timer) return
+    broadcast({ type:'media:state', id:dev.id, playback:dev.playback })
+  })
 }
 
 function mediaNextIndex(dev, dir) {

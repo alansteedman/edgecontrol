@@ -809,6 +809,27 @@ select.mci{cursor:pointer}
           <button class="btn btn-ghost btn-sm" id="resources-toggle-btn" onclick="resourcesToggle()">📊 Show live resources</button>
         </div>
         <div id="resources-panel" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #1a1a1a"></div>
+
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #1a1a1a">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="font-size:12px;color:#888;line-height:1.5">Cooling fan<br><span style="font-size:10px;color:#444">Software-controlled 5V fan on GPIO14 (e.g. HighPi Pro)</span></div>
+            <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0">
+              <input type="checkbox" id="fan-toggle" onchange="fanToggle(this.checked)" style="opacity:0;width:0;height:0">
+              <span id="fan-toggle-track" style="position:absolute;cursor:pointer;inset:0;background:#1e1e1e;border:1px solid #333;border-radius:12px;transition:.3s">
+                <span id="fan-toggle-thumb" style="position:absolute;width:18px;height:18px;left:2px;top:2px;background:#444;border-radius:50%;transition:.3s"></span>
+              </span>
+            </label>
+          </div>
+          <div id="fan-threshold-row" style="margin-top:12px">
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-bottom:4px">
+              <span>Turn on above</span>
+              <span id="fan-threshold-val" style="font-family:monospace;color:#4fc3f7">60°C</span>
+            </div>
+            <input type="range" id="fan-threshold-slider" min="35" max="80" step="1" value="60"
+                   oninput="document.getElementById('fan-threshold-val').textContent=this.value+'°C'"
+                   onchange="fanSetThreshold(this.value)" style="width:100%">
+          </div>
+        </div>
       </div>
 
       <!-- WiFi -->
@@ -1502,6 +1523,38 @@ window.resourcesToggle = function() {
   _resourcesTimer = setInterval(resourcesFetch, 2000)
 }
 
+// ── Cooling fan (Config tab) ────────────────────────────────────────────────
+function updateFanUI(f) {
+  const tog = document.getElementById('fan-toggle')
+  const track = document.getElementById('fan-toggle-track')
+  const thumb = document.getElementById('fan-toggle-thumb')
+  const row = document.getElementById('fan-threshold-row')
+  const slider = document.getElementById('fan-threshold-slider')
+  const val = document.getElementById('fan-threshold-val')
+  if (tog) tog.checked = f.enabled
+  if (track) { track.style.background = f.enabled ? '#0d3a1a' : '#1e1e1e'; track.style.borderColor = f.enabled ? '#1a6a2a' : '#333' }
+  if (thumb) { thumb.style.transform = f.enabled ? 'translateX(20px)' : 'translateX(0)'; thumb.style.background = f.enabled ? '#4ade80' : '#444' }
+  if (row) row.style.opacity = f.enabled ? '1' : '.4'
+  if (slider) slider.value = f.thresholdC
+  if (val) val.textContent = f.thresholdC + '°C'
+}
+
+async function fanLoad() {
+  try { updateFanUI(await (await fetch('/api/system/fan')).json()) } catch {}
+}
+
+window.fanToggle = async function(enabled) {
+  const thresholdC = +document.getElementById('fan-threshold-slider').value
+  const r = await fetch('/api/system/fan', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, thresholdC }) })
+  updateFanUI(await r.json())
+}
+
+window.fanSetThreshold = async function(thresholdC) {
+  const enabled = document.getElementById('fan-toggle').checked
+  const r = await fetch('/api/system/fan', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, thresholdC: +thresholdC }) })
+  updateFanUI(await r.json())
+}
+
 async function _updApply() {
   document.getElementById('upd-btn').disabled = true
   document.getElementById('upd-spinner').style.display = 'block'
@@ -1842,7 +1895,7 @@ function showTab(name,btn) {
   if(name==='eom') renderEomCards()
   if(name==='hue') renderHueCards()
   if(name==='community') initCommunity()
-  if(name==='config') { loadWifiStatus(); loadBtCurrent(); loadAppSettings() }
+  if(name==='config') { loadWifiStatus(); loadBtCurrent(); loadAppSettings(); fanLoad() }
   if(name==='waveforms') setTimeout(initBandSelector, 50)
   if(name==='macros') setTimeout(()=>window._macroTabActivated?.(), 50)
   if(name==='hdmi') renderHdmiEditor()

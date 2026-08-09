@@ -81,7 +81,7 @@ if ! id "$APP_USER" &>/dev/null; then
 else
   ok "User $APP_USER already exists"
 fi
-usermod -aG sudo,bluetooth,dialout,plugdev,audio "$APP_USER" 2>/dev/null || true
+usermod -aG sudo,bluetooth,dialout,plugdev,audio,video,render "$APP_USER" 2>/dev/null || true
 
 log "Configuring sudoers"
 echo "$APP_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/edgecontroller
@@ -272,6 +272,18 @@ chown "$APP_USER:$APP_USER" "/run/user/$APP_UID"
 runuser -l "$APP_USER" -c "XDG_RUNTIME_DIR=/run/user/$APP_UID systemctl --user daemon-reload"
 runuser -l "$APP_USER" -c "XDG_RUNTIME_DIR=/run/user/$APP_UID systemctl --user enable --now pipewire pipewire-pulse wireplumber" || true
 ok "PipeWire enabled for $APP_USER"
+
+# ── Cooling fan: free GPIO14 from the serial console getty ───────────────────
+# GPIO14 defaults to UART TXD0 — the software-controlled fan feature
+# repurposes it as a plain GPIO output, which conflicts with the serial
+# console getty listening on it. This Pi is managed over SSH/network, never
+# physical serial console, so disabling it is the standard trade-off (same
+# one the official gpio-fan overlay assumes).
+log "Masking serial-getty@ttyAMA0 (frees GPIO14 for the cooling fan)"
+# It's runtime-generated (systemd re-detects the UART and re-enables the
+# getty at every boot), so a plain `disable` doesn't survive a reboot —
+# masking it does.
+systemctl mask serial-getty@ttyAMA0.service 2>/dev/null || true
 
 # ── Avahi ─────────────────────────────────────────────────────────────────────
 log "Enabling avahi mDNS"

@@ -145,6 +145,7 @@ if (!config.boxId) {
   }
 }
 if (!config.tunnel) config.tunnel = { enabled: false, token: '', hostname: '' }
+if (!config.fan) config.fan = { enabled: true, thresholdC: 60 }
 // Migrate old flat auth → new {admin, user} structure
 if (!config.auth) config.auth = { enabled: false }
 if (config.auth.username && !config.auth.admin) {
@@ -3834,7 +3835,26 @@ app.post('/api/cameras/:id/onvif/ptz', requireAuth, async (req, res) => {
   const dev = devices[req.params.id]
   if (!dev || dev.type !== 'camera') return res.status(404).json({ error: 'not found' })
   const { pan=0, tilt=0, action='move' } = req.body
-  const ptzUrl = dev.ptzServiceUrl || `http://${dev.ip}:8000/onvif/ptz_service`
+  let ptzUrl = dev.ptzServiceUrl || `http://${dev.ip}:8000/onvif/ptz_service`
+  // A stored ptzServiceUrl goes stale if the camera's IP changes (DHCP lease
+  // renewal etc) — video/audio keep working since those use dev.ip directly,
+  // but PTZ silently fails against the old address. Every camera brand/model
+  // uses a different port and path for its ONVIF services (there's no single
+  // convention to guess), so re-run the same capability-based discovery used
+  // when the camera was first added rather than assume a fixed port here too.
+  if (dev.ptzServiceUrl && !ptzUrl.startsWith(`http://${dev.ip}:`) && !ptzUrl.startsWith(`http://${dev.ip}/`)) {
+    console.log(`[${dev.id}] PTZ service URL (${ptzUrl}) doesn't match camera's current IP (${dev.ip}) — rediscovering`)
+    try {
+      const rediscovered = await onvifDiscoverDevice(dev.ip, dev.username, dev.password)
+      if (rediscovered.ptzServiceUrl) {
+        ptzUrl = rediscovered.ptzServiceUrl
+        dev.ptzServiceUrl = ptzUrl
+        const cfg = config.devices.find(d => d.id === dev.id)
+        if (cfg) { cfg.ptzServiceUrl = ptzUrl; saveConfig(config) }
+        console.log(`[${dev.id}] PTZ service URL corrected to ${ptzUrl}`)
+      }
+    } catch (e) { console.error(`[${dev.id}] PTZ rediscovery failed:`, e.message) }
+  }
 
   // Auto-discover profile token if not stored (e.g. camera added before ONVIF feature)
   if (!dev.ptzProfileToken) {
@@ -3972,6 +3992,47 @@ function cpuTempC() {
   try { return Math.round(parseInt(readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8'), 10) / 100) / 10 }
   catch { return null }
 }
+
+// Software-controlled 5V fan (e.g. HighPi Pro) wired to GPIO14 — a plain
+// on/off switch, no PWM. GPIO14 defaults to UART TXD0 (ALT4) — the Pi Hut's
+// own wiring for this fan assumes overriding that, same as the official
+// gpio-fan overlay does. Pi 5's RP1 has no /sys/class/gpio (legacy sysfs
+// GPIO isn't present on this kernel) — `pinctrl set <pin> op dh/dl` is the
+// supported way in, and (confirmed on hardware) the pin state persists
+// after the command exits, unlike naive libgpiod gpioset usage. Needs root;
+// the app user has passwordless sudo already.
+const FAN_GPIO = 14
+const FAN_HYSTERESIS_C = 5
+let _fanState = null, _fanTimer = null
+function fanSetPin(on) {
+  if (_fanState === on) return
+  execFile('sudo', ['pinctrl', 'set', String(FAN_GPIO), 'op', on ? 'dh' : 'dl'], (err) => {
+    if (err) console.error(`[fan] failed to set GPIO${FAN_GPIO}:`, err.message)
+    else { _fanState = on; console.log('[fan]', on ? 'ON' : 'OFF') }
+  })
+}
+function fanApplyConfig() {
+  if (_fanTimer) { clearInterval(_fanTimer); _fanTimer = null }
+  const fanCfg = config.fan || { enabled: true, thresholdC: 60 }
+  if (!fanCfg.enabled) { fanSetPin(false); return }
+  const check = () => {
+    const t = cpuTempC()
+    if (t == null) return
+    if (_fanState !== true && t >= fanCfg.thresholdC) fanSetPin(true)
+    else if (_fanState !== false && t <= fanCfg.thresholdC - FAN_HYSTERESIS_C) fanSetPin(false)
+  }
+  check()
+  _fanTimer = setInterval(check, 5000)
+}
+
+app.get('/api/system/fan', requireAdmin, (req, res) => res.json(config.fan || { enabled: true, thresholdC: 60 }))
+app.put('/api/system/fan', requireAdmin, (req, res) => {
+  const { enabled, thresholdC } = req.body || {}
+  config.fan = { enabled: enabled !== false, thresholdC: Math.max(35, Math.min(80, Math.round(thresholdC ?? 60))) }
+  saveConfig(config)
+  fanApplyConfig()
+  res.json(config.fan)
+})
 
 app.get('/api/system/resources', requireAdmin, (req, res) => {
   const memTotal = totalmem(), memFree = freemem(), memUsed = memTotal - memFree
@@ -5444,6 +5505,7 @@ process.on('unhandledRejection', r   => console.error('[REJECT]', r))
 // Start HTTP server immediately — don't wait for Bluetooth
 server.listen(3000, '0.0.0.0', () => {
   checkLicenseState()
+  fanApplyConfig()
   console.log('EdgeController running on http://0.0.0.0:3000')
   if (config.tunnel?.token) {
     if (config.tunnel?.enabled) {

@@ -113,4 +113,31 @@ else
   log "pipewire already installed — skipping"
 fi
 
+# ── video/render groups (HDMI hw decode) ──────────────────────────────────────
+# Set directly on a couple of Pis during live debugging but never made it
+# into a script until now.
+if ! id -nG "$APP_USER" | grep -qw render; then
+  log "Adding $APP_USER to video, render groups"
+  usermod -aG video,render "$APP_USER" 2>/dev/null || true
+else
+  log "video/render groups already set — skipping"
+fi
+
+# ── Cooling fan: free GPIO14 from the serial console getty ───────────────────
+# GPIO14 defaults to UART TXD0. The software-controlled fan feature (and the
+# official gpio-fan overlay it's modeled on) repurposes that pin as a plain
+# GPIO output, which conflicts with the serial console getty listening on it.
+# This Pi is managed over SSH/network, never physical serial console, so
+# disabling it is the standard trade-off — matches what dtoverlay=gpio-fan
+# itself assumes.
+if [ "$(systemctl is-enabled serial-getty@ttyAMA0.service 2>/dev/null)" != "masked" ]; then
+  log "Masking serial-getty@ttyAMA0 (frees GPIO14 for the cooling fan)"
+  # It's runtime-generated (systemd re-detects the UART and re-enables the
+  # getty at every boot), so a plain `disable` doesn't survive a reboot —
+  # masking it does.
+  systemctl mask serial-getty@ttyAMA0.service 2>/dev/null || true
+else
+  log "serial-getty@ttyAMA0 already masked — skipping"
+fi
+
 log "Migration complete"

@@ -26,7 +26,7 @@ video{width:100%;height:100%;object-fit:cover;border-radius:4px;display:block}
 <div id="root"></div>
 <script>
 const WS_URL = location.origin.replace(/^http/,'ws')
-let S = { devices:{}, groups:[], waveforms:{ builtin:[], custom:[], live:[] }, macroLiveState:{} }
+let S = { devices:{}, groups:[], waveforms:{ builtin:[], custom:[], live:[] }, macros:[], macroLiveState:{} }
 let _ws
 let _cams = {}
 const _liveSpectra = {}
@@ -47,11 +47,15 @@ function handle(m) {
     S.waveforms = m.waveforms
     S.groups = m.groups || []
     S.macroLiveState = m.macroLiveState || {}
+    S.macros = m.macros || []
     S.devices = {}
     for (const d of m.devices) { d.tickAt = performance.now(); S.devices[d.id] = d }
     renderHdmi()
   }
-  if (m.type?.startsWith('macro:')) {
+  if (m.type === 'macro:added')   { S.macros.push(m.macro) }
+  if (m.type === 'macro:updated') { const i = S.macros.findIndex(x => x.id === m.macro.id); if (i !== -1) S.macros[i] = m.macro; document.querySelectorAll(`[data-macro-id="${m.macro.id}"]`).forEach(el => el._macroSync?.()) }
+  if (m.type === 'macro:removed') { S.macros = S.macros.filter(x => x.id !== m.id) }
+  if (m.type?.startsWith('macro:') && m.type !== 'macro:added' && m.type !== 'macro:updated' && m.type !== 'macro:removed') {
     updateMacroLiveStateClient(m)
     document.querySelectorAll(`[data-macro-id="${m.id}"]`).forEach(el => el._macroSync?.())
   }
@@ -306,34 +310,94 @@ function mediaSendControl(deviceId, action, value) {
   }).catch(()=>{})
 }
 
-// ── Macro Player widget — read-only status mirror of the Macro Editor's
-// monitor popup, scaled down to a TV tile. No controls here; resuming a
-// paused macro happens from the Macro Editor page, same as everywhere else
-// in this app where the TV only displays state.
-const MACRO_BD = {
-  start:{icon:'▶',label:'Start',tx:'#4ade80'}, end:{icon:'■',label:'End',tx:'#f87171'},
-  stop_all:{icon:'⛔',label:'Stop All',tx:'#fca5a5'}, delay:{icon:'⏱',label:'Delay',tx:'#93c5fd'},
-  ramp:{icon:'↗',label:'Ramp',tx:'#d8b4fe'}, wait_eom:{icon:'◈',label:'Wait EOM',tx:'#fdba74'},
-  wait_manual:{icon:'⏸',label:'Waiting',tx:'#fde68a'}, if_else:{icon:'⋈',label:'If/Else',tx:'#f0abfc'},
-  loop:{icon:'↺',label:'Loop',tx:'#a5b4fc'}, run_macro:{icon:'▷',label:'Run Macro',tx:'#6ee7b7'},
-  dev:{icon:'⚡',label:'Set Device',tx:'#fca5a5'}, hue_set:{icon:'☀',label:'Set Hue',tx:'#c4b5fd'},
-  hue_ramp:{icon:'↗',label:'Hue Ramp',tx:'#c4b5fd'},
+// ── Macro Player widget — renders the actual block graph from the Macro
+// Editor (same layout, same colors), scaled-down and read-only. Greyed out
+// while idle; while running, the active block gets highlighted with its
+// live countdown/ramp progress, same data the editor's own monitor shows,
+// and the view auto-scrolls to keep it in frame. No controls here; resuming
+// a paused macro happens from the Macro Editor page, same as everywhere
+// else in this app where the TV only displays state.
+const MACRO_BLOCK_STYLES = {
+  start:       { label:'START',        icon:'▶', bg:'#0e2614', bd:'#4ade80', tx:'#4ade80' },
+  end:         { label:'END',          icon:'■', bg:'#260e0e', bd:'#f87171', tx:'#f87171' },
+  stop_all:    { label:'STOP ALL',     icon:'⛔', bg:'#2a0808', bd:'#dc2626', tx:'#fca5a5' },
+  delay:       { label:'DELAY',        icon:'⏱', bg:'#0d1a2e', bd:'#60a5fa', tx:'#93c5fd' },
+  ramp:        { label:'COYOTE RAMP',  icon:'↗', bg:'#1c0e2e', bd:'#c084fc', tx:'#d8b4fe' },
+  estim_ramp:  { label:'ESTIM RAMP',   icon:'↗', bg:'#221600', bd:'#f59e0b', tx:'#fcd34d' },
+  nimble_start:{ label:'NIMBLE START', icon:'▶', bg:'#061a26', bd:'#4fc3f7', tx:'#7dd3fc' },
+  nimble_stop: { label:'NIMBLE STOP',  icon:'⏹', bg:'#1a0606', bd:'#f87171', tx:'#fca5a5' },
+  nimble_ramp: { label:'NIMBLE RAMP',  icon:'↗', bg:'#061a26', bd:'#4fc3f7', tx:'#7dd3fc' },
+  hue_set:     { label:'SET HUE',      icon:'☀', bg:'#12101a', bd:'#a78bfa', tx:'#c4b5fd' },
+  hue_ramp:    { label:'HUE RAMP',     icon:'↗', bg:'#12101a', bd:'#a78bfa', tx:'#c4b5fd' },
+  io_set:      { label:'I/O SET',      icon:'⚡', bg:'#1a1400', bd:'#f0c040', tx:'#f0c040' },
+  wait_eom:    { label:'WAIT: EOM',    icon:'◈', bg:'#261500', bd:'#f97316', tx:'#fdba74' },
+  wait_manual: { label:'WAIT: MANUAL', icon:'⏸', bg:'#222000', bd:'#fbbf24', tx:'#fde68a' },
+  wait_pawprints:{ label:'WAIT: PAW',  icon:'🐾', bg:'#001a2e', bd:'#4fc3f7', tx:'#7dd3fc' },
+  if_pawprints:{ label:'PAW: IF/ELSE', icon:'🐾', bg:'#1a0e2e', bd:'#a78bfa', tx:'#c4b5fd' },
+  if_else:     { label:'IF / ELSE',    icon:'⋈', bg:'#1e0628', bd:'#e879f9', tx:'#f0abfc' },
+  run_macro:   { label:'RUN MACRO',    icon:'▷', bg:'#0a1a10', bd:'#34d399', tx:'#6ee7b7' },
+  loop:        { label:'LOOP',         icon:'↺', bg:'#0c0c1a', bd:'#818cf8', tx:'#a5b4fc' },
+  dev:         { label:'SET DEVICE',   icon:'⚡', bg:'#280d0d', bd:'#ef4444', tx:'#fca5a5' },
 }
-function macroBlockSummary(type, cfg) {
-  if (!cfg) return ''
-  switch(type) {
-    case 'delay':    return `${cfg.dur??10}s`
-    case 'ramp':     return `${cfg.from??0} → ${cfg.to??100}`
-    case 'wait_eom': return `${(cfg.cond||'').includes('>')?'>':'<'} ${cfg.thr??70}%`
-    case 'wait_manual': return cfg.prompt||''
-    case 'if_else':  return `${(cfg.cond||'').includes('>')?'>':'<'} ${cfg.thr??80}%`
-    case 'loop':     return cfg.mode==='Repeat N times'?`×${cfg.count??3}`:`EOM ${(cfg.mode||'').includes('>')?'>':'<'} ${cfg.thr??75}%`
-    case 'dev':      return cfg.waveform||''
-    case 'hue_set':  return `${cfg.hueTargetName||cfg.hueTarget||'—'} · ${cfg.action==='off'?'OFF':`${cfg.bri??80}%`}`
-    case 'hue_ramp': return `${cfg.hueTargetName||''} ${cfg.from??20}%→${cfg.to??100}% / ${cfg.dur||30}s`
+const MACRO_BLOCK_PORTS = {
+  start:{i:[],o:['o']}, end:{i:['i'],o:[]}, if_else:{i:['i'],o:['oy','on']}, if_pawprints:{i:['i'],o:['oy','on']},
+  loop:{i:['i'],o:['ob','od']}, dev:{i:['i'],o:['o']},
+}
+function macroBlockPorts(b)  { return MACRO_BLOCK_PORTS[b.type] || { i:['i'], o:['o'] } }
+function macroBlockStyle(b)  { return MACRO_BLOCK_STYLES[b.type] || { label:(b.type||'').toUpperCase(), icon:'?', bg:'#111', bd:'#333', tx:'#ccc' } }
+function macroBlockLabel(b) {
+  if (b.type !== 'dev') return macroBlockStyle(b).label
+  const dev = S.devices[b.devRef]
+  return dev ? `SET ${dev.name.toUpperCase()}` : 'SET DEVICE'
+}
+function macroBlockSub(b) { return b.type === 'dev' && b.channel ? `Channel ${b.channel}` : '' }
+function macroResolveWfName(id) {
+  if (!id) return '—'
+  const found = [...(S.waveforms.builtin||[]),...(S.waveforms.custom||[])].find(w=>w.id===id)
+  return found ? found.name : id
+}
+function macroBlockSummary(b, cfg) {
+  cfg = cfg || b.config || {}
+  switch (b.type) {
+    case 'delay':        return `${cfg.dur??10}s`
+    case 'ramp':          return `${cfg.from??20}→${cfg.to??160} over ${cfg.dur||30}s${cfg.block?' ⏸':''}`
+    case 'estim_ramp':    return `Ch ${cfg.channel||'Both'} ${cfg.from??0}→${cfg.to??80}% over ${cfg.dur||30}s${cfg.block?' ⏸':''}`
+    case 'nimble_start':  return `Start ${cfg.speed||30} SPM / depth ${cfg.depth??500}`
+    case 'nimble_stop':   return 'Stop stroke'
+    case 'nimble_ramp':   return `${cfg.param||'Speed'} ${cfg.from??20}→${cfg.to??120} over ${cfg.dur||30}s${cfg.block?' ⏸':''}`
+    case 'hue_set':        { const lbl = cfg.hueTargetName||cfg.hueTarget||'—'; return cfg.action==='off'?`${lbl} OFF`:`${lbl} · ${cfg.bri??80}%` }
+    case 'io_set':          { const lbl = cfg.ioTargetName||cfg.ioTarget||'—'; return `${lbl} ${cfg.action==='off'?'OFF':'ON'}` }
+    case 'hue_ramp':       return `${cfg.hueTargetName||''} ${cfg.from??20}%→${cfg.to??100}% over ${cfg.dur||30}s${cfg.block?' ⏸':''}`
+    case 'wait_eom':       return `EOM ${(cfg.cond||'').includes('>')?'>':'<'} ${cfg.thr??70}%`
+    case 'wait_manual':    return `"${cfg.prompt||'Continue when ready'}"`
+    case 'wait_pawprints': return cfg.mode==='Tilt Angle'?`Tilt ±${cfg.sensitivity??15} on ${cfg.axis||'Any'}`:`Press ${cfg.button||'Any'} button`
+    case 'if_pawprints':   return cfg.mode==='Tilt Angle'?`Tilt ±${cfg.sensitivity??15} on ${cfg.axis||'Any'}`:`${cfg.button||'Any'} pressed?`
+    case 'if_else':        return `If EOM ${(cfg.cond||'').includes('>')?'>':'<'} ${cfg.thr??80}%`
+    case 'loop':            return cfg.mode==='Repeat N times'?`×${cfg.count??3}`:`Until EOM ${(cfg.mode||'').includes('>')?'>':'<'} ${cfg.thr??75}%`
+    case 'run_macro':       { const m = S.macros.find(x=>x.id===cfg.macroId); return m?`▷ ${m.name}`:'— select macro —' }
+    case 'dev':              return cfg.waveform ? `${macroResolveWfName(cfg.waveform)} · ${cfg.intensity??cfg.powerA??''}` : (cfg.mode||'')
     default: return ''
   }
 }
+function macroPortPos(b, boxes, pt) {
+  const box = boxes[b.id] || { w:170, h:60 }
+  if (pt==='i')  return { x:b.x+box.w/2, y:b.y }
+  if (pt==='o')  return { x:b.x+box.w/2, y:b.y+box.h }
+  if (pt==='oy'||pt==='ob') return { x:b.x+box.w*.27, y:b.y+box.h }
+  if (pt==='on'||pt==='od') return { x:b.x+box.w*.73, y:b.y+box.h }
+  return { x:b.x, y:b.y }
+}
+function macroBezier(p1, p2) {
+  const dy = p2.y-p1.y, cp = Math.max(40, Math.abs(dy)*.55)
+  return `M ${p1.x} ${p1.y} C ${p1.x} ${p1.y+cp} ${p2.x} ${p2.y-cp} ${p2.x} ${p2.y}`
+}
+function macroPortColor(fp) {
+  if (fp==='oy'||fp==='ob') return '#4ade80'
+  if (fp==='on') return '#f87171'
+  if (fp==='od') return '#94a3b8'
+  return '#4a7fa8'
+}
+
 function updateMacroLiveStateClient(m) {
   const id = m.id; if (!id) return
   if (m.type === 'macro:running') S.macroLiveState[id] = { status:'running', name:m.name, blockId:null, blockType:null, config:null, countdown:null, ramp:null, waitPrompt:null, label:null }
@@ -352,43 +416,165 @@ function buildMacroWidget(w) {
   const el = document.createElement('div')
   el.className = 'w'
   el.dataset.macroId = w.macroId
+
   el.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-shrink:0">
       <span class="w-title">${w.macroName || 'Macro'}</span>
       <span id="macro-status-${w.id}" style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:3px"></span>
     </div>
-    <div id="macro-body-${w.id}" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:0"></div>`
+    <div id="macro-scroll-${w.id}" style="flex:1;min-height:0;overflow:auto;position:relative;border-radius:6px;background:#080b14">
+      <div id="macro-canvas-${w.id}" style="position:relative;transition:filter .4s,opacity .4s">
+        <svg id="macro-svg-${w.id}" style="position:absolute;top:0;left:0;pointer-events:none;overflow:visible"></svg>
+      </div>
+    </div>`
 
-  function sync() {
-    const st = S.macroLiveState[w.macroId]
-    const statusEl = document.getElementById(`macro-status-${w.id}`)
-    const bodyEl = document.getElementById(`macro-body-${w.id}`)
-    if (!statusEl || !bodyEl) return
-    if (!st) {
-      statusEl.textContent = 'IDLE'; statusEl.style.color = '#3a4a5a'; statusEl.style.background = '#0a0f1a'
-      bodyEl.innerHTML = `<span style="font-size:28px;opacity:.3">⏸</span><span style="font-size:11px;color:#2a3555">Not running</span>`
+  let builtMacroId = null, lastActiveBlockId = null
+
+  // Renders the static block graph once per macro (identical structure
+  // every time — position/connections don't change while running), then
+  // sync() only ever touches per-block highlight/progress on top of it.
+  function buildGraph() {
+    try { buildGraphInner() }
+    catch (e) { console.error('[macro widget] buildGraph failed:', e.message); builtMacroId = null }
+  }
+  function buildGraphInner() {
+    const macro = S.macros.find(m => m.id === w.macroId)
+    // Scoped to `el`, not `document.getElementById` — this runs at widget
+    // construction time, before renderHdmi() has appended `el` to the live
+    // document, and getElementById only searches the attached tree. Every
+    // lookup inside this widget needs to go through `el` for that reason.
+    const canvas = el.querySelector(`#macro-canvas-${w.id}`)
+    const svg = el.querySelector(`#macro-svg-${w.id}`)
+    if (!canvas || !svg) return
+    canvas.querySelectorAll('.mpw-blk').forEach(e => e.remove())
+    builtMacroId = w.macroId
+    if (!macro || !macro.blocks?.length) {
+      canvas.style.width = '100%'; canvas.style.height = '100%'
+      canvas.innerHTML = `<svg id="macro-svg-${w.id}" style="position:absolute;top:0;left:0"></svg><div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#2a3555;gap:6px"><span style="font-size:22px;opacity:.4">▷</span><span style="font-size:11px">Macro not found</span></div>`
       return
     }
-    const waiting = st.status === 'waiting'
-    statusEl.textContent = waiting ? 'WAITING' : 'RUNNING'
-    statusEl.style.color = waiting ? '#fde68a' : '#4ade80'
-    statusEl.style.background = waiting ? '#222000' : '#0e2614'
-    const bd = MACRO_BD[st.blockType] || { icon:'●', label:st.blockType||'—', tx:'#8ab0d0' }
-    const summary = macroBlockSummary(st.blockType, st.config)
-    let progressHtml = ''
-    if (st.countdown) {
-      const pct = Math.max(0, Math.min(100, 100 - (st.countdown.remaining / (st.countdown.total||1)) * 100))
-      progressHtml = `<div style="width:100%;max-width:160px;height:5px;background:#131925;border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${bd.tx}"></div></div><span style="font-size:10px;color:#5a6a8a">${st.countdown.remaining.toFixed(1)}s left</span>`
-    } else if (st.ramp) {
-      const pct = Math.max(0, Math.min(100, (st.ramp.elapsed / (st.ramp.total||1)) * 100))
-      progressHtml = `<div style="width:100%;max-width:160px;height:5px;background:#131925;border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${bd.tx}"></div></div><span style="font-size:10px;color:#5a6a8a">${st.ramp.value}</span>`
+    const maxX = Math.max(...macro.blocks.map(b => (b.x||0) + (b.w||180))) + 20
+    const maxY = Math.max(...macro.blocks.map(b => (b.y||0) + (b.h||70))) + 20
+    canvas.style.width = maxX + 'px'; canvas.style.height = maxY + 'px'
+    svg.setAttribute('width', maxX); svg.setAttribute('height', maxY)
+
+    for (const b of macro.blocks) {
+      const s = macroBlockStyle(b)
+      const bel = document.createElement('div')
+      bel.className = 'mpw-blk'
+      bel.id = `mpwb-${w.id}-${b.id}`
+      bel.style.cssText = `position:absolute;left:${b.x||0}px;top:${b.y||0}px;min-width:150px;max-width:190px;border-radius:7px;border:1.5px solid ${s.bd}55;background:${s.bg};box-shadow:0 3px 14px rgba(0,0,0,.5);transition:box-shadow .2s`
+      const lbl = macroBlockLabel(b), sub = macroBlockSub(b), summary = macroBlockSummary(b)
+      bel.innerHTML = `
+        <div style="padding:6px 9px;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;letter-spacing:.3px;color:${s.tx}">
+          <span style="font-size:11px;flex-shrink:0">${s.icon}</span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${lbl}${sub?`<br><span style="font-size:8px;opacity:.6;font-weight:400">${sub}</span>`:''}</span>
+        </div>
+        <div id="mpwbd-${w.id}-${b.id}" style="padding:2px 9px 7px;font-size:9px;color:rgba(255,255,255,.5);background:rgba(0,0,0,.35);border-radius:0 0 6px 6px;line-height:1.5;min-height:${summary?'auto':'0'}">${summary || ''}</div>`
+      canvas.appendChild(bel)
     }
-    bodyEl.innerHTML = `
-      <span style="font-size:26px;color:${bd.tx}">${bd.icon}</span>
-      <span style="font-size:13px;font-weight:600;color:#c0d0e0">${waiting ? (st.waitPrompt||'Waiting…') : bd.label}</span>
-      ${summary && !waiting ? `<span style="font-size:11px;color:#5a6a8a">${summary}</span>` : ''}
-      ${st.label ? `<span style="font-size:10px;color:${st.label.color||'#8ab0d0'}">${st.label.text}</span>` : ''}
-      ${progressHtml}`
+
+    // Measure real rendered sizes before drawing connectors, same two-pass
+    // approach the full editor uses (sizes vary with label/summary length).
+    requestAnimationFrame(() => {
+      const boxes = {}
+      for (const b of macro.blocks) {
+        const bel = canvas.querySelector(`#mpwb-${w.id}-${b.id}`)
+        if (bel) boxes[b.id] = { w: bel.offsetWidth, h: bel.offsetHeight }
+      }
+      svg.innerHTML = ''
+      const blockMap = {}; for (const b of macro.blocks) blockMap[b.id] = b
+      for (const c of macro.conns || []) {
+        const fb = blockMap[c.fid], tb = blockMap[c.tid]
+        if (!fb || !tb) continue
+        const p1 = macroPortPos(fb, boxes, c.fp), p2 = macroPortPos(tb, boxes, 'i')
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+        path.setAttribute('d', macroBezier(p1, p2))
+        path.setAttribute('stroke', macroPortColor(c.fp))
+        path.setAttribute('stroke-width', '2'); path.setAttribute('fill', 'none'); path.setAttribute('opacity', '.7')
+        svg.appendChild(path)
+      }
+      // Blocks are laid out at whatever x/y they were dragged to in the
+      // editor — rarely (0,0) — so the scroll view defaulting to (0,0)
+      // often shows nothing but blank canvas at rest. Scroll to the START
+      // block (every macro has exactly one) so something is visible
+      // immediately instead of only once a running highlight scrolls to it.
+      const scrollWrap = el.querySelector(`#macro-scroll-${w.id}`)
+      const startBlock = macro.blocks.find(b => b.type === 'start') || macro.blocks[0]
+      const startEl = startBlock && canvas.querySelector(`#mpwb-${w.id}-${startBlock.id}`)
+      if (scrollWrap && startEl) startEl.scrollIntoView({ block: 'start', inline: 'start' })
+    })
+  }
+
+  function sync() {
+    const macro = S.macros.find(m => m.id === w.macroId)
+    const canvasNow = el.querySelector(`#macro-canvas-${w.id}`)
+    // Rebuild if the macro changed, OR if it was built empty (e.g. this
+    // widget's very first sync landed before S.macros had arrived over the
+    // WS 'state' message yet) but the data has since shown up — otherwise
+    // the graph stays permanently blank until something else forces a
+    // fresh widget instance (e.g. starting the macro elsewhere).
+    const builtEmpty = builtMacroId === w.macroId && canvasNow && !canvasNow.querySelector('.mpw-blk') && macro?.blocks?.length
+    if (w.macroId !== builtMacroId || builtEmpty) buildGraph()
+    const st = S.macroLiveState[w.macroId]
+    const statusEl = el.querySelector(`#macro-status-${w.id}`)
+    const canvas = el.querySelector(`#macro-canvas-${w.id}`)
+    const scrollWrap = el.querySelector(`#macro-scroll-${w.id}`)
+    if (!statusEl || !canvas) return
+
+    const running = !!st
+    const waiting = running && st.status === 'waiting'
+    // Opacity blends toward the (near-black) background, so combining it
+    // with grayscale was fading the whole graph to almost nothing — the
+    // blocks were genuinely there, just invisible. Grayscale + a milder
+    // brightness dip reads as clearly "off" without losing visibility.
+    canvas.style.filter = running ? 'none' : 'grayscale(1) brightness(.75)'
+    canvas.style.opacity = '1'
+
+    if (!running) {
+      statusEl.textContent = 'IDLE'; statusEl.style.color = '#3a4a5a'; statusEl.style.background = '#0a0f1a'
+    } else {
+      statusEl.textContent = waiting ? 'WAITING' : 'RUNNING'
+      statusEl.style.color = waiting ? '#fde68a' : '#4ade80'
+      statusEl.style.background = waiting ? '#222000' : '#0e2614'
+    }
+
+    // Clear the previous active block's highlight/progress before applying
+    // the new one — cheap enough to always touch on every sync, and avoids
+    // tracking a second piece of "what was highlighted" state.
+    if (lastActiveBlockId) {
+      const prevEl = el.querySelector(`#mpwb-${w.id}-${lastActiveBlockId}`)
+      if (prevEl) prevEl.style.boxShadow = '0 3px 14px rgba(0,0,0,.5)'
+      const prevBody = el.querySelector(`#mpwbd-${w.id}-${lastActiveBlockId}`)
+      const macro = S.macros.find(m => m.id === w.macroId)
+      const prevBlock = macro?.blocks?.find(b => b.id === lastActiveBlockId)
+      if (prevBody && prevBlock) prevBody.innerHTML = macroBlockSummary(prevBlock) || ''
+      lastActiveBlockId = null
+    }
+
+    if (running && st.blockId) {
+      const activeEl = el.querySelector(`#mpwb-${w.id}-${st.blockId}`)
+      const bodyEl = el.querySelector(`#mpwbd-${w.id}-${st.blockId}`)
+      if (activeEl) {
+        activeEl.style.boxShadow = '0 0 0 2px #4ade80, 0 0 16px #4ade8088'
+        lastActiveBlockId = st.blockId
+        if (scrollWrap) activeEl.scrollIntoView({ block:'center', inline:'center', behavior:'smooth' })
+      }
+      if (bodyEl) {
+        let progressHtml = ''
+        if (st.countdown) {
+          const pct = Math.max(0, Math.min(100, 100 - (st.countdown.remaining / (st.countdown.total||1)) * 100))
+          progressHtml = `<div style="margin-top:4px;height:4px;background:#131925;border-radius:2px;overflow:hidden"><div style="width:${pct}%;height:100%;background:#93c5fd"></div></div><span style="font-size:8px;color:#5a6a8a">${st.countdown.remaining.toFixed(1)}s left</span>`
+        } else if (st.ramp) {
+          const pct = Math.max(0, Math.min(100, (st.ramp.elapsed / (st.ramp.total||1)) * 100))
+          progressHtml = `<div style="margin-top:4px;height:4px;background:#131925;border-radius:2px;overflow:hidden"><div style="width:${pct}%;height:100%;background:#d8b4fe"></div></div><span style="font-size:8px;color:#5a6a8a">${st.ramp.value}</span>`
+        } else if (waiting) {
+          progressHtml = `<span style="color:#fde68a">${st.waitPrompt || 'Waiting…'}</span>`
+        }
+        if (st.label) progressHtml += `<div style="color:${st.label.color||'#8ab0d0'};margin-top:2px">${st.label.text}</div>`
+        if (progressHtml) bodyEl.innerHTML = progressHtml
+      }
+    }
   }
 
   el._macroSync = sync

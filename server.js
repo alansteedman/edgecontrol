@@ -3,6 +3,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware'
 import { StreamDeckController } from './streamdeck.js'
 import { WebSocket, WebSocketServer } from 'ws'
 import { createServer } from 'http'
+import https from 'https'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, open as fsOpen, read as fsRead, write as fsWrite, close as fsClose, createReadStream, statSync, statfsSync } from 'fs'
 import { Readable } from 'stream'
 import { fileURLToPath } from 'url'
@@ -361,15 +362,21 @@ function startLiveCapture(id) {
 
   // Start a single stereo capture process shared by all logical inputs on this device
   const SR = 44100
-  const CHUNK = Math.floor(SR * 0.1)  // 4410 samples per channel = 100ms
+  const CHUNK = Math.floor(SR * 0.05)  // 2205 samples per channel = 50ms (min: > FFT_N samples)
   const BYTES = CHUNK * 2 * 4         // stereo interleaved f32le
   const FFT_N = 2048, half = FFT_N >> 1, nyquist = SR / 2
   const LOG_MIN = Math.log10(20), LOG_MAX = Math.log10(20000), NUM_BANDS = 24
   const hann = new Float32Array(FFT_N)
   for (let i = 0; i < FFT_N; i++) hann[i] = 0.5*(1-Math.cos(2*Math.PI*i/(FFT_N-1)))
 
-  const args = ['-f','alsa','-i',`plughw:${li.card},${li.device}`,'-ac','2','-ar',String(SR),'-f','f32le','pipe:1']
-  const proc = spawn('ffmpeg', args, { stdio:['ignore','pipe','ignore'] })
+  // arecord (not ffmpeg) so we can force tight ALSA buffer/period times — ffmpeg's alsa
+  // demuxer has no equivalent flag and just inherits the driver's default buffer size,
+  // which on a lot of USB audio interfaces is 300-500ms+. 50ms buffer / 10ms period here
+  // trades a bit of underrun risk for much lower capture latency (this is what was causing
+  // the audio-reactive waveform to visibly lag the beat). Output format (raw f32le stereo
+  // interleaved) is unchanged, so nothing downstream needs to change.
+  const args = ['-D',`plughw:${li.card},${li.device}`,'-f','FLOAT_LE','-c','2','-r',String(SR),'-t','raw','--buffer-time=50000','--period-time=10000','-']
+  const proc = spawn('arecord', args, { stdio:['ignore','pipe','ignore'] })
   const refs = new Set([id])
   const monitors = new Set()  // active monitor encoder stdinStreams
   const wsMonitors = new Set()  // WS clients receiving raw PCM for low-latency monitoring
@@ -609,16 +616,41 @@ async function autoProvision() {
 }
 
 // ── BLE ───────────────────────────────────────────────────────────────────────
-const { bluetooth, destroy } = createBluetooth()
-// Prevent dbus-next bus/connection error events from crashing the process
-// These fire when a BLE device disconnects mid-GATT (unhandled error event kills Node)
-if (bluetooth.dbus) {
-  bluetooth.dbus.on('error', err => console.error('[dbus error]', err?.message || err))
-  if (bluetooth.dbus._connection) {
-    bluetooth.dbus._connection.on('error', err => console.error('[dbus conn error]', err?.message || err))
+// Root cause (confirmed on hardware): this shared DBus connection used to be
+// created here at module load, but the boot sequence further down runs
+// `systemctl restart bluetooth` shortly after — which tears down and
+// restarts BlueZ, killing this connection mid-init ("[dbus error] write
+// EPIPE"). Every getAdapter() call afterwards then hung forever (no error,
+// no timeout — the write silently failed). Manual "Scan Bluetooth" always
+// worked because doScan() opens its own fresh connection each time instead
+// of reusing this one. Fix: don't create this connection until AFTER that
+// boot-time restart has actually completed (initBluetoothConnection() is
+// called from its exec callback, not here) — recreateBluetoothConnection()
+// stays as a safety net for the connection dying later during normal
+// runtime (BLE devices disconnecting mid-GATT etc), which is what this
+// error handling originally existed for.
+let bluetooth, destroy, adapter = null
+let _bleReconnecting = false
+function initBluetoothConnection() {
+  const conn = createBluetooth()
+  bluetooth = conn.bluetooth
+  destroy = conn.destroy
+  adapter = null
+  if (bluetooth.dbus) {
+    bluetooth.dbus.on('error', err => { console.error('[dbus error]', err?.message || err); recreateBluetoothConnection() })
+    if (bluetooth.dbus._connection) {
+      bluetooth.dbus._connection.on('error', err => { console.error('[dbus conn error]', err?.message || err); recreateBluetoothConnection() })
+    }
   }
 }
-let adapter = null
+function recreateBluetoothConnection() {
+  if (_bleReconnecting) return
+  _bleReconnecting = true
+  try { destroy?.() } catch {}
+  console.log('[ble] recreating DBus connection after error')
+  initBluetoothConnection()
+  _bleReconnecting = false
+}
 async function getAdapter() {
   if (!adapter) {
     adapter = (config.hciDeviceId != null)
@@ -929,7 +961,7 @@ class CoyoteDevice {
         // seq=0: physical button press — device self-incremented by ±1 from its current intensity
         this._lastBtnAt = Date.now()
         console.log(`[${this.id}] BTN hex=${Buffer.from(buf).toString('hex')} newA=${newA} newB=${newB} dA=${this._deviceA} dB=${this._deviceB} bcA=${this.buttonControl.A} bcB=${this.buttonControl.B}`)
-        const STEP = 5
+        const STEP = 1
         let changed = false
         if (newA !== this._deviceA && this.buttonControl.A) {
           let val = this.channels.A.intensity || 0
@@ -2507,7 +2539,7 @@ for (const d of config.devices) {
         }
       }
     }
-  } catch {}
+  } catch (e) { console.log(`[boot] device setup failed for ${d.id}:`, e.message) }
 }
 // Always rebuild go2rtc config on startup so it stays in sync with saved cameras
 rebuildGo2rtcConfig()
@@ -2806,7 +2838,7 @@ server.keepAliveTimeout = 65000
 server.headersTimeout = 66000
 const wss    = new WebSocketServer({ noServer: true })
 
-server.on('upgrade', (request, socket, head) => {
+function handleUpgrade(request, socket, head) {
   sessionMW(request, {}, () => {
     const referer = request.headers.referer || ''
     const origin  = request.headers.origin  || ''
@@ -2816,14 +2848,137 @@ server.on('upgrade', (request, socket, head) => {
       socket.destroy()
       return
     }
-    // Route camera WebSocket upgrades to go2rtc, everything else to the main WS server
-    if (request.url.startsWith('/api/go2rtc/')) {
+    // Route camera WebSocket upgrades to go2rtc, talkback mic audio to its own
+    // handler, everything else to the main WS server
+    if (request.url.startsWith('/api/talkback')) {
+      talkbackWss.handleUpgrade(request, socket, head, ws => talkbackWss.emit('connection', ws, request))
+    } else if (request.url.startsWith('/api/go2rtc/')) {
       request.url = request.url.replace('/api/go2rtc', '')
       go2rtcProxy.upgrade(request, socket, head)
     } else {
       wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request))
     }
   })
+}
+server.on('upgrade', handleUpgrade)
+
+// ── HTTPS listener (self-signed) ────────────────────────────────────────────
+// getUserMedia (mic capture for TV talkback) requires a secure context. The
+// Cloudflare tunnel already terminates TLS, so remote access is fine as-is —
+// this is only needed so the mic works when opening the app on the LAN via
+// http://<pi-ip>:3000. Browsers will show a one-time cert warning to accept.
+const CERTS_DIR      = join(__dirname, 'certs')
+const TLS_KEY_PATH   = join(CERTS_DIR, 'key.pem')
+const TLS_CERT_PATH  = join(CERTS_DIR, 'cert.pem')
+const TLS_IP_PATH    = join(CERTS_DIR, 'ip.txt')
+
+function getLocalIp() {
+  const ifaces = networkInterfaces()
+  for (const addrs of Object.values(ifaces)) {
+    for (const a of addrs) {
+      if (a.family === 'IPv4' && !a.internal) return a.address
+    }
+  }
+  return null
+}
+
+function ensureTlsCert() {
+  const ip = getLocalIp()
+  const prevIp = existsSync(TLS_IP_PATH) ? readFileSync(TLS_IP_PATH, 'utf8').trim() : null
+  if (existsSync(TLS_KEY_PATH) && existsSync(TLS_CERT_PATH) && prevIp === ip) return
+  try {
+    if (!existsSync(CERTS_DIR)) mkdirSync(CERTS_DIR, { recursive: true })
+    const san = ['IP:127.0.0.1', 'DNS:localhost']
+    if (ip) san.push(`IP:${ip}`)
+    execSync(`openssl req -x509 -newkey rsa:2048 -nodes -keyout "${TLS_KEY_PATH}" -out "${TLS_CERT_PATH}" -days 3650 -subj "/CN=edgecontroller" -addext "subjectAltName=${san.join(',')}"`, { stdio: 'pipe' })
+    if (ip) writeFileSync(TLS_IP_PATH, ip)
+    console.log(`[tls] generated self-signed cert for ${ip || 'localhost'}`)
+  } catch (e) {
+    console.error('[tls] cert generation failed:', e.message)
+  }
+}
+ensureTlsCert()
+
+let httpsServer = null
+if (existsSync(TLS_KEY_PATH) && existsSync(TLS_CERT_PATH)) {
+  try {
+    httpsServer = https.createServer({ key: readFileSync(TLS_KEY_PATH), cert: readFileSync(TLS_CERT_PATH) }, app)
+    httpsServer.keepAliveTimeout = 65000
+    httpsServer.headersTimeout = 66000
+    httpsServer.on('upgrade', handleUpgrade)
+    httpsServer.listen(3443, '0.0.0.0', () => console.log('HTTPS listening on 3443 (self-signed, LAN mic access)'))
+  } catch (e) {
+    console.error('[tls] https server failed to start:', e.message)
+  }
+}
+
+// ── TV Talkback: browser mic → HDMI audio output ────────────────────────────
+// Raw PCM (s16le, 48kHz, mono) streamed over a dedicated binary WebSocket,
+// piped straight into `paplay` targeting the HDMI sink. Whatever's already
+// playing on that sink (kiosk video, macro audio cues) gets ducked for the
+// duration of the talkback session and restored when it ends.
+const talkbackWss = new WebSocketServer({ noServer: true })
+let _talkbackProc = null
+let _talkbackDucked = null // [{ index, prevVolume }] snapshot taken at duck time
+
+function pulseEnv() {
+  return { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${userInfo().uid}` }
+}
+
+function findHdmiSink() {
+  try {
+    const out = execSync('pactl list sinks short', { env: pulseEnv() }).toString()
+    const line = out.split('\n').find(l => /hdmi/i.test(l))
+    return line ? line.split('\t')[1] : null
+  } catch { return null }
+}
+
+function duckHdmiAudio() {
+  try {
+    const out = execSync('pactl list sink-inputs', { env: pulseEnv() }).toString()
+    const blocks = out.split(/\n(?=Sink Input #)/)
+    _talkbackDucked = []
+    for (const b of blocks) {
+      const idxM = b.match(/Sink Input #(\d+)/)
+      const volM = b.match(/Volume:.*?(\d+)%/)
+      if (!idxM) continue
+      _talkbackDucked.push({ index: idxM[1], prevVolume: volM ? volM[1] : '100' })
+      execSync(`pactl set-sink-input-volume ${idxM[1]} 25%`, { env: pulseEnv() })
+    }
+  } catch (e) { console.error('[talkback] duck failed:', e.message) }
+}
+
+function restoreHdmiAudio() {
+  if (!_talkbackDucked) return
+  for (const { index, prevVolume } of _talkbackDucked) {
+    try { execSync(`pactl set-sink-input-volume ${index} ${prevVolume}%`, { env: pulseEnv() }) } catch {}
+  }
+  _talkbackDucked = null
+}
+
+talkbackWss.on('connection', ws => {
+  if (_talkbackProc) { try { _talkbackProc.kill() } catch {} ; _talkbackProc = null }
+  const sink = findHdmiSink()
+  duckHdmiAudio()
+  _talkbackProc = spawn('paplay', [
+    '--raw', '--format=s16le', '--rate=48000', '--channels=1',
+    ...(sink ? [`--device=${sink}`] : [])
+  ], { env: pulseEnv() })
+  _talkbackProc.on('error', e => console.error('[talkback] paplay error:', e.message))
+  _talkbackProc.stdin.on('error', () => {}) // EPIPE if paplay exits mid-write
+  let ended = false
+  const end = () => {
+    if (ended) return
+    ended = true
+    if (_talkbackProc) { try { _talkbackProc.stdin.end() } catch {}; try { _talkbackProc.kill() } catch {} ; _talkbackProc = null }
+    restoreHdmiAudio()
+  }
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary || !_talkbackProc?.stdin?.writable) return
+    _talkbackProc.stdin.write(data)
+  })
+  ws.on('close', end)
+  ws.on('error', end)
 })
 
 function safeConfig() {
@@ -2856,7 +3011,7 @@ wss.on('connection', (ws, request) => {
   ws.isApp  = !!(request.session?.appAuthed && !request.session?.authed)
   ws.isHdmi = !!(request.headers.referer || '').includes('/hdmi') || (request.headers.origin || '').includes('localhost')
   clients.add(ws)
-  ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, macroLiveState, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
+  ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, macros:macroStore, macroLiveState, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
   if (_updateAvailable) ws.send(JSON.stringify({ type:'update:available', version:_updateAvailable.version, current:APP_VERSION }))
   ws.on('message', raw => {
     try {
@@ -3379,6 +3534,26 @@ app.put('/api/devices/:id/media/playlist', (req,res) => {
   res.json({ok:true, playlist:dev.playlist})
 })
 
+// Populates pb.duration authoritatively via ffprobe shortly after a track
+// starts, instead of waiting on the browser's own duration reporting — which
+// can get stuck unresolved (permanently 0) on a large file over a slow/flaky
+// network share, even though playback itself is fine. Fire-and-forget: don't
+// block the response, broadcast once resolved. Bails if the index moved on
+// again before the probe finished (stale result for a track no longer playing).
+function mediaProbeAndBroadcastDuration(dev, forIndex) {
+  const item = dev.playlist[forIndex]
+  if (!item || item.kind === 'image') return
+  const source = dev.sources.find(s => s.id === item.sourceId)
+  if (!source) return
+  let filePath
+  try { filePath = resolveMediaPath(source, item.path) } catch { return }
+  mediaProbeDuration(filePath).then(duration => {
+    if (!duration || dev.playback.index !== forIndex) return
+    dev.playback.duration = duration
+    broadcast({ type:'media:state', id:dev.id, playback:dev.playback })
+  })
+}
+
 app.post('/api/devices/:id/media/control', (req,res) => {
   const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
   const { action, value } = req.body
@@ -3391,13 +3566,13 @@ app.post('/api/devices/:id/media/control', (req,res) => {
     case 'pause': pb.status='paused'; break
     case 'stop':  pb.status='stopped'; pb.position=0; break
     case 'setIndex':
-      if (typeof value==='number' && value>=0 && value<dev.playlist.length) { pb.index=value; pb.position=0; pb.status='playing' }
+      if (typeof value==='number' && value>=0 && value<dev.playlist.length) { pb.index=value; pb.position=0; pb.duration=0; pb.status='playing'; mediaProbeAndBroadcastDuration(dev, pb.index) }
       break
     case 'next':
-      if (dev.playlist.length) { pb.index=mediaNextIndex(dev,1); pb.position=0; pb.status='playing' }
+      if (dev.playlist.length) { pb.index=mediaNextIndex(dev,1); pb.position=0; pb.duration=0; pb.status='playing'; mediaProbeAndBroadcastDuration(dev, pb.index) }
       break
     case 'prev':
-      if (dev.playlist.length) { pb.index=mediaNextIndex(dev,-1); pb.position=0; pb.status='playing' }
+      if (dev.playlist.length) { pb.index=mediaNextIndex(dev,-1); pb.position=0; pb.duration=0; pb.status='playing'; mediaProbeAndBroadcastDuration(dev, pb.index) }
       break
     case 'seek':
       if (typeof value==='number') pb.position=value
@@ -3413,7 +3588,11 @@ app.post('/api/devices/:id/media/control', (req,res) => {
       // playing — not a user-initiated jump, so the client applies this with
       // a drift threshold rather than snapping playback to it.
       if (typeof value?.position==='number') pb.position=value.position
-      if (typeof value?.duration==='number') pb.duration=value.duration
+      if (typeof value?.duration==='number' && value.duration>0) pb.duration=value.duration
+      // Safety net for tracks already stuck at duration 0 from before this
+      // fix existed (or a browser that never resolved its own duration) —
+      // probe once rather than waiting on a next/prev click.
+      else if (!pb.duration) mediaProbeAndBroadcastDuration(dev, pb.index)
       break
     case 'volume':
       if (typeof value==='number') pb.volume=Math.max(0,Math.min(100,value))
@@ -5008,7 +5187,6 @@ app.get('/api/live-audio/inputs/:id/stream', (req,res) => {
 })
 
 // ── Community share proxy ─────────────────────────────────────────────────────
-import https from 'https'
 const COMMUNITY_HOST = 'community.kinkcontrol.org'
 const COMMUNITY_URL  = `https://${COMMUNITY_HOST}`
 
@@ -5206,13 +5384,14 @@ function applyWifiBand(onlyFiveGhz) {
 }
 
 function applyBtAdapter(deviceId) {
-  const usingDongle = deviceId != null
-  // Only actively manage the WiFi band when the internal combo BT/WiFi radio
-  // is in use — that's the actual coexistence conflict this avoids. With a
-  // USB BT dongle there's no such conflict, so leave whatever band the user
-  // has configured (including a manual 5GHz-only preference) alone instead
-  // of silently resetting it to "both" on every reconnect.
-  if (!usingDongle) applyWifiBand(true)
+  // Force 5GHz regardless of internal vs USB dongle Bluetooth — a USB dongle
+  // avoids the worse antenna-sharing interference of the internal combo
+  // BT/WiFi radio, but 2.4GHz WiFi and 2.4GHz Bluetooth still share the same
+  // RF spectrum and congest each other either way. Confirmed on hardware:
+  // a dongle-based Coyote intermittently failed to complete a GATT connect
+  // (scan still worked — far more interference-tolerant) while WiFi sat on
+  // a 2.4GHz channel; forcing 5GHz is the fix in both adapter cases.
+  applyWifiBand(true)
   if (deviceId == null) return
   exec('hciconfig -a', (err, stdout) => {
     if (err && !stdout) return
@@ -5524,6 +5703,11 @@ exec('sudo systemctl restart bluetooth', err => {
   if (err) console.error('BT restart error:', err.message)
   else {
     console.log('Bluetooth restarted')
+    // Only create the shared DBus/node-ble connection now, after BlueZ's
+    // post-restart service instance is the final one — see the big comment
+    // by initBluetoothConnection()'s definition for why this can't happen
+    // any earlier.
+    initBluetoothConnection()
     // Wait 3s for BlueZ to finish initialising all adapters, then auto-select USB dongle if present
     setTimeout(autoSelectUsbAdapter, 3000)
   }

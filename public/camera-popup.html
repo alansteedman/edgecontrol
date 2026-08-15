@@ -44,6 +44,7 @@
   </div>
   <div style="display:flex;gap:8px;margin-left:auto">
     <button class="ctrl-btn" id="audio-btn" onclick="toggleAudio()">🔇 Muted</button>
+    <button class="ctrl-btn" id="talk-btn" onclick="toggleTalk()">🎙️ Talk</button>
     <button class="ctrl-btn" onclick="document.getElementById('video').requestFullscreen?.()">⛶ Fullscreen</button>
   </div>
 </div>
@@ -244,6 +245,82 @@
     document.getElementById('audio-btn').textContent = video.muted ? '🔇 Muted' : '🔊 Audio On'
   }
 
+  // ── TV Talkback: mic → HDMI audio (toggle) ────────────────────────────────
+  let talkStream = null, talkCtx = null, talkNode = null, talkGain = null, talkSource = null, talkWs = null
+
+  function floatTo16BitPCM(float32) {
+    const buf = new ArrayBuffer(float32.length * 2)
+    const view = new DataView(buf)
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]))
+      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true)
+    }
+    return buf
+  }
+
+  // Server expects 48kHz mono s16le. Most browsers default to 48kHz already,
+  // but this covers devices (some mobiles) that give us 44.1kHz instead.
+  function resampleTo48k(input, inRate) {
+    if (inRate === 48000) return input
+    const ratio = 48000 / inRate
+    const outLen = Math.round(input.length * ratio)
+    const out = new Float32Array(outLen)
+    for (let i = 0; i < outLen; i++) {
+      const srcIdx = i / ratio
+      const i0 = Math.floor(srcIdx), i1 = Math.min(i0 + 1, input.length - 1)
+      const frac = srcIdx - i0
+      out[i] = input[i0] + (input[i1] - input[i0]) * frac
+    }
+    return out
+  }
+
+  async function toggleTalk() {
+    if (talkWs) { stopTalk(); return }
+    const btn = document.getElementById('talk-btn')
+    try {
+      talkStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true } })
+    } catch (e) {
+      alert('Microphone access denied or unavailable: ' + e.message)
+      return
+    }
+    const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    talkWs = new WebSocket(`${wsProto}//${location.host}/api/talkback`)
+    talkWs.binaryType = 'arraybuffer'
+    talkWs.onopen = () => {
+      btn.textContent = '🔴 Talking'
+      btn.style.background = '#7f1d1d'
+      btn.style.color = '#fff'
+      talkCtx = new (window.AudioContext || window.webkitAudioContext)()
+      talkSource = talkCtx.createMediaStreamSource(talkStream)
+      talkNode = talkCtx.createScriptProcessor(2048, 1, 1)
+      talkGain = talkCtx.createGain()
+      talkGain.gain.value = 0 // ScriptProcessorNode must reach destination to fire, but keep it silent locally
+      talkNode.onaudioprocess = e => {
+        if (!talkWs || talkWs.readyState !== WebSocket.OPEN) return
+        const input = e.inputBuffer.getChannelData(0)
+        talkWs.send(floatTo16BitPCM(resampleTo48k(input, talkCtx.sampleRate)))
+      }
+      talkSource.connect(talkNode)
+      talkNode.connect(talkGain)
+      talkGain.connect(talkCtx.destination)
+    }
+    talkWs.onclose = () => stopTalk(true)
+    talkWs.onerror = () => stopTalk(true)
+  }
+
+  function stopTalk(fromServer) {
+    const btn = document.getElementById('talk-btn')
+    btn.textContent = '🎙️ Talk'
+    btn.style.background = ''
+    btn.style.color = ''
+    if (talkNode)   { try { talkNode.disconnect() } catch {}; talkNode = null }
+    if (talkGain)   { try { talkGain.disconnect() } catch {}; talkGain = null }
+    if (talkSource) { try { talkSource.disconnect() } catch {}; talkSource = null }
+    if (talkCtx)    { try { talkCtx.close() } catch {}; talkCtx = null }
+    if (talkStream) { talkStream.getTracks().forEach(t => t.stop()); talkStream = null }
+    if (talkWs)     { if (!fromServer) { try { talkWs.close() } catch {} }; talkWs = null }
+  }
+
   async function ptz(pan, tilt) {
     if (!camId) return
     fetch(`/api/cameras/${camId}/onvif/ptz`, { method:'POST', headers:{'Content-Type':'application/json'},
@@ -259,6 +336,7 @@
     active = false
     if (pc) { pc.close(); pc = null }
     cleanupMse()
+    stopTalk()
   })
 
   connect()

@@ -8028,7 +8028,13 @@ function renderMediaEditor() {
   mediaBindDragDrop()
 }
 
+// Playback position updates arrive every ~3s while something's playing —
+// a full re-render mid-drag would destroy and rebuild the seek <input>
+// under the user's cursor, snapping it back to the pre-drag position and
+// making it impossible to actually drag. Skip re-rendering while seeking.
+let _mediaSeeking = false
 function renderMediaTransport() {
+  if (_mediaSeeking) return
   const el = document.getElementById('media-transport')
   if (!el || !_mediaDev) return
   const fresh = S.devices[_mediaDev.id]
@@ -8321,6 +8327,8 @@ function mediaTransportHtml() {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <span style="font-size:10px;color:#555;width:36px">${mediaFmtTime(pb.position)}</span>
         <input type="range" min="0" max="${pb.duration||0}" value="${pb.position||0}" style="flex:1"
+               onmousedown="_mediaSeeking=true" onmouseup="_mediaSeeking=false" ontouchstart="_mediaSeeking=true" ontouchend="_mediaSeeking=false"
+               onchange="_mediaSeeking=false"
                oninput="mediaSeek(this.value)" ${pb.duration?'':'disabled'}/>
         <span style="font-size:10px;color:#555;width:36px">${mediaFmtTime(pb.duration)}</span>
       </div>

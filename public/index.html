@@ -1285,7 +1285,7 @@ select.mci{cursor:pointer}
 
 <script>
 // ── State ────────────────────────────────────────────────────────────────────
-let ws, S = { devices:{}, waveforms:{builtin:[],custom:[],live:[]}, groups:[], activities:[], role:'admin', authEnabled:false, deck:{ status:'disconnected', name:null } }
+let ws, S = { devices:{}, waveforms:{builtin:[],custom:[],live:[]}, livePresets:[], groups:[], activities:[], role:'admin', authEnabled:false, deck:{ status:'disconnected', name:null } }
 let scanPick = null
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -1580,6 +1580,7 @@ function handle(m) {
     case 'state':
       m.devices.forEach(d => { d.tickAt=performance.now(); S.devices[d.id]=d })
       if(m.waveforms) S.waveforms=m.waveforms
+      if(m.livePresets) S.livePresets=m.livePresets
       if(m.activities) S.activities=m.activities
       if(m.groups)   S.groups=m.groups
       if(m.role) S.role=m.role
@@ -1589,6 +1590,7 @@ function handle(m) {
       renderAll(); break
     case 'deck:status':
       S.deck={ status:m.status, name:m.name }; renderDeckCard(); break
+    case 'live:audio:presets:updated': S.livePresets=m.presets; renderAudioInputTab(); break
     case 'group:added':   S.groups=[...S.groups,m.group]; renderGroups(); renderCoyoteCards(); break
     case 'group:updated': S.groups=S.groups.map(g=>g.id===m.group.id?m.group:g); renderGroups(); renderCoyoteCards(); if(document.getElementById('sub-bodymap')?.classList.contains('active')) renderBodyMap(); break
     case 'group:removed': S.groups=S.groups.filter(g=>g.id!==m.id); renderGroups(); renderCoyoteCards(); break
@@ -6434,6 +6436,15 @@ function renderAudioInputTab() {
         <button class="btn btn-ghost btn-xs" onclick="laiPreset('${rawId}',3000,12000)">Highs</button>
         <button class="btn btn-ghost btn-xs" onclick="laiPreset('${rawId}',8000,20000)">Air</button>
       </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+        <select id="lai-preset-select-${safeId}" style="flex:1;background:#1a1a1a;border:1px solid #333;color:#ccc;border-radius:5px;padding:5px 8px;font-size:11px"
+          onchange="laiApplyPreset('${rawId}',this.value)">
+          <option value="">— Saved presets —</option>
+          ${(S.livePresets||[]).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
+        </select>
+        <button class="btn btn-ghost btn-xs" onclick="laiSavePreset('${rawId}')">💾 Save as…</button>
+        <button class="btn btn-ghost btn-xs" onclick="laiDeletePreset('${safeId}')">🗑</button>
+      </div>
       <div style="margin-bottom:10px">
         <div style="font-size:9px;color:${accent};margin-bottom:4px">Output</div>
         <canvas id="lai-out-${safeId}" height="120" style="width:100%;display:block;border-radius:4px;background:#080808"></canvas>
@@ -6737,6 +6748,31 @@ async function startLiveInput(id) { await fetch('/api/live-audio/inputs/'+encode
 async function stopLiveInput(id)  { await fetch('/api/live-audio/inputs/'+encodeURIComponent(id)+'/stop',{method:'POST'}) }
 async function deleteLiveInput(id) { if(!confirm('Remove this audio input?')) return; await fetch('/api/live-audio/inputs/'+encodeURIComponent(id),{method:'DELETE'}) }
 async function updateLiveInput(id, body) { await fetch('/api/live-audio/inputs/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}) }
+
+// ── Live audio → waveform presets (band-pass, gain, base freq, shaping controls) ──
+async function laiSavePreset(rawId) {
+  const w = (S.waveforms.live||[]).find(x=>x.id==='live-input:'+rawId); if(!w) return
+  const name = prompt('Preset name:', ''); if(!name || !name.trim()) return
+  await fetch('/api/live-audio/presets', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    name, lowCut:w.lowCut, highCut:w.highCut, gain:w.gain, baseFreq:w.baseFreq,
+    smoothing:w.smoothing, curve:w.curve, noiseFloor:w.noiseFloor, ceiling:w.ceiling
+  })})
+}
+
+async function laiApplyPreset(rawId, presetId) {
+  if (!presetId) return
+  const p = (S.livePresets||[]).find(x=>x.id===presetId); if (!p) return
+  await updateLiveInput(rawId, { lowCut:p.lowCut, highCut:p.highCut, gain:p.gain, baseFreq:p.baseFreq,
+    smoothing:p.smoothing, curve:p.curve, noiseFloor:p.noiseFloor, ceiling:p.ceiling })
+}
+
+async function laiDeletePreset(safeId) {
+  const sel = document.getElementById('lai-preset-select-'+safeId)
+  const id = sel?.value; if (!id) return
+  const p = (S.livePresets||[]).find(x=>x.id===id)
+  if (!confirm(`Delete preset "${p?.name||id}"?`)) return
+  await fetch('/api/live-audio/presets/'+encodeURIComponent(id), {method:'DELETE'})
+}
 
 // ── Audio Files ───────────────────────────────────────────────────────────────
 function renderAudioList(){

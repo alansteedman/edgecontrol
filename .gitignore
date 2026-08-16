@@ -2,6 +2,8 @@ node_modules/
 config.json
 macros.json
 waveforms.json
+live-audio.json
+live-audio-presets.json
 *.log
 *.bak*
 .env

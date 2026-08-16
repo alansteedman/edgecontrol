@@ -296,6 +296,14 @@ function saveLiveAudio() {
   writeFileSync(LIVE_AUDIO_PATH, JSON.stringify(toSave, null, 2))
 }
 
+// Named presets of the live-audio → waveform processing chain (band-pass, gain, base
+// freq, and the shaping controls) — saved independently of any one input so they can
+// be recalled onto any USB device later.
+const LIVE_AUDIO_PRESETS_PATH = join(__dirname, 'live-audio-presets.json')
+function loadLiveAudioPresets() { try { return JSON.parse(readFileSync(LIVE_AUDIO_PRESETS_PATH,'utf8')) } catch { return [] } }
+function saveLiveAudioPresets() { writeFileSync(LIVE_AUDIO_PRESETS_PATH, JSON.stringify(liveAudioPresets, null, 2)) }
+let liveAudioPresets = loadLiveAudioPresets()
+
 // Map: id (e.g. "hw:0,0:L") → { id, card, device, channel, name, lowCut, highCut, baseFreq, enabled, current, proc }
 const liveAudioStore = new Map()
 // One stereo ffmpeg process per physical device shared across L/R/mix logical inputs
@@ -3060,7 +3068,7 @@ wss.on('connection', (ws, request) => {
   ws.isApp  = !!(request.session?.appAuthed && !request.session?.authed)
   ws.isHdmi = !!(request.headers.referer || '').includes('/hdmi') || (request.headers.origin || '').includes('localhost')
   clients.add(ws)
-  ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), activities:BUILTIN_ACTIVITIES, macros:macroStore, macroLiveState, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
+  ws.send(JSON.stringify({ type:'state', role:ws.role, devices:Object.values(devices).map(d=>d.toJSON()), groups:config.groups||[], config:safeConfig(), waveforms:waveformsMeta(), livePresets:liveAudioPresets, activities:BUILTIN_ACTIVITIES, macros:macroStore, macroLiveState, deck:{ status: streamDeck ? 'connected' : 'disconnected', name: streamDeck?.deck?.PRODUCT_NAME||null } }))
   if (_updateAvailable) ws.send(JSON.stringify({ type:'update:available', version:_updateAvailable.version, current:APP_VERSION }))
   ws.on('message', raw => {
     try {
@@ -5167,6 +5175,38 @@ app.get('/api/live-audio/scan', (req,res) => res.json(listAlsaDevices()))
 app.get('/api/live-audio/inputs', (req,res) => {
   res.json([...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,enabled,current,proc,smoothing,curve,noiseFloor,ceiling})=>
     ({id,card,device,name,lowCut,highCut,baseFreq,enabled,active:!!proc,level:current||0,smoothing:smoothing??0,curve:curve??0,noiseFloor:noiseFloor??0,ceiling:ceiling??100})))
+})
+
+// Named presets of the live-audio processing chain — not tied to any one input,
+// so a preset saved from one USB device can be recalled onto another later.
+app.get('/api/live-audio/presets', (req,res) => res.json(liveAudioPresets))
+
+app.post('/api/live-audio/presets', (req,res) => {
+  const { name, lowCut, highCut, gain, baseFreq, smoothing, curve, noiseFloor, ceiling } = req.body
+  if (!name || !name.trim()) return res.status(400).json({error:'name required'})
+  const preset = {
+    id: 'lap-' + Date.now(),
+    name: name.trim(),
+    lowCut: parseInt(lowCut)||20, highCut: parseInt(highCut)||8000,
+    gain: parseFloat(gain)||1, baseFreq: parseInt(baseFreq)||25,
+    smoothing: Math.max(0,Math.min(100,parseFloat(smoothing)||0)),
+    curve: Math.max(0,Math.min(100,parseFloat(curve)||0)),
+    noiseFloor: Math.max(0,Math.min(100,parseFloat(noiseFloor)||0)),
+    ceiling: Math.max(0,Math.min(100,parseFloat(ceiling)??100))
+  }
+  liveAudioPresets.push(preset)
+  saveLiveAudioPresets()
+  broadcast({ type:'live:audio:presets:updated', presets:liveAudioPresets })
+  res.json(preset)
+})
+
+app.delete('/api/live-audio/presets/:id', (req,res) => {
+  const idx = liveAudioPresets.findIndex(p => p.id === req.params.id)
+  if (idx === -1) return res.status(404).json({error:'not found'})
+  liveAudioPresets.splice(idx,1)
+  saveLiveAudioPresets()
+  broadcast({ type:'live:audio:presets:updated', presets:liveAudioPresets })
+  res.json({ok:true})
 })
 
 app.post('/api/live-audio/inputs', (req,res) => {

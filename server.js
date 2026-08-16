@@ -5210,15 +5210,16 @@ app.delete('/api/live-audio/presets/:id', (req,res) => {
 })
 
 app.post('/api/live-audio/inputs', (req,res) => {
-  const {card, device, name, channel='mix', lowCut=20, highCut=8000, baseFreq=25, gain=1} = req.body
+  const {card, device, name, channel='mix', lowCut=20, highCut=8000, baseFreq=85, gain=1} = req.body
   if (card==null || device==null || !name) return res.status(400).json({error:'card, device, name required'})
   const ch = ['L','R','mix'].includes(channel) ? channel : 'mix'
   const id = `hw:${card},${device}:${ch}`
   if (liveAudioStore.has(id)) return res.status(409).json({error:'already exists'})
   const chLabel = ch === 'L' ? ' — L' : ch === 'R' ? ' — R' : ' — Mix'
-  // smoothing/curve/noiseFloor/ceiling default to 0/0/0/100 — i.e. no-ops, matching
-  // the level computation's pre-existing behaviour exactly until a user opts in
-  const li = { id, card:parseInt(card), device:parseInt(device), name: name + chLabel, channel: ch, lowCut:parseInt(lowCut), highCut:parseInt(highCut), baseFreq:parseInt(baseFreq), gain:parseFloat(gain)||1, enabled:false, current:0, proc:null, smoothing:0, curve:0, noiseFloor:0, ceiling:100 }
+  // Defaults tuned from real testing (85Hz base freq, 26% smoothing, 16% curve, 12%
+  // noise floor) rather than the raw/unshaped values the level computation would
+  // otherwise fall back to
+  const li = { id, card:parseInt(card), device:parseInt(device), name: name + chLabel, channel: ch, lowCut:parseInt(lowCut), highCut:parseInt(highCut), baseFreq:parseInt(baseFreq), gain:parseFloat(gain)||1, enabled:false, current:0, proc:null, smoothing:26, curve:16, noiseFloor:12, ceiling:100 }
   liveAudioStore.set(id, li)
   saveLiveAudio()
   broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })

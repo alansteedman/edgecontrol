@@ -6438,19 +6438,47 @@ function renderAudioInputTab() {
         <div style="font-size:9px;color:${accent};margin-bottom:4px">Output</div>
         <canvas id="lai-out-${safeId}" height="120" style="width:100%;display:block;border-radius:4px;background:#080808"></canvas>
       </div>
-      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#888;margin-bottom:6px">
-        Gain
+      <label style="display:flex;align-items:center;gap:10px;font-size:11px;color:#888;margin-bottom:14px">
+        <span style="min-width:76px">Gain</span>
         <input type="range" min="0" max="4" step="0.05" value="${w.gain??1}" style="flex:1;accent-color:${accent}"
           oninput="this.nextElementSibling.textContent=Math.round(this.value*100)+'%'"
           onchange="updateLiveInput('${rawId}',{gain:parseFloat(this.value)})"/>
         <span style="font-size:11px;color:${accent};min-width:52px;text-align:right">${Math.round((w.gain??1)*100)}%</span>
       </label>
-      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#888">
-        Base freq
+      <label style="display:flex;align-items:center;gap:10px;font-size:11px;color:#888;margin-bottom:14px">
+        <span style="min-width:76px">Base freq</span>
         <input type="range" min="10" max="200" value="${w.baseFreq||25}" style="flex:1;accent-color:${accent}"
           oninput="this.nextElementSibling.textContent=this.value+' Hz'"
           onchange="updateLiveInput('${rawId}',{baseFreq:parseInt(this.value)})"/>
         <span style="font-size:11px;color:${accent};min-width:52px;text-align:right">${w.baseFreq||25} Hz</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;font-size:11px;color:#888;margin-bottom:14px" title="Blends the level toward its target instead of jumping straight to it each update — higher values glide smoothly between peaks instead of following every transient">
+        <span style="min-width:76px">Smoothing</span>
+        <input type="range" min="0" max="100" value="${w.smoothing??0}" style="flex:1;accent-color:${accent}"
+          oninput="this.nextElementSibling.textContent=this.value+'%'"
+          onchange="updateLiveInput('${rawId}',{smoothing:parseInt(this.value)})"/>
+        <span style="font-size:11px;color:${accent};min-width:52px;text-align:right">${w.smoothing??0}%</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;font-size:11px;color:#888;margin-bottom:14px" title="Reshapes the response curve so quieter moments feel more present without touching gain — 0 is linear (unchanged), higher values lift low-level signal more">
+        <span style="min-width:76px">Curve</span>
+        <input type="range" min="0" max="100" value="${w.curve??0}" style="flex:1;accent-color:${accent}"
+          oninput="this.nextElementSibling.textContent=this.value+'%'"
+          onchange="updateLiveInput('${rawId}',{curve:parseInt(this.value)})"/>
+        <span style="font-size:11px;color:${accent};min-width:52px;text-align:right">${w.curve??0}%</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;font-size:11px;color:#888;margin-bottom:14px" title="Anything below this level is treated as silence — raise it to stop background hiss or quiet passages registering as a low buzz">
+        <span style="min-width:76px">Noise floor</span>
+        <input type="range" min="0" max="100" value="${w.noiseFloor??0}" style="flex:1;accent-color:${accent}"
+          oninput="this.nextElementSibling.textContent=this.value+'%'"
+          onchange="updateLiveInput('${rawId}',{noiseFloor:parseInt(this.value)})"/>
+        <span style="font-size:11px;color:${accent};min-width:52px;text-align:right">${w.noiseFloor??0}%</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;font-size:11px;color:#888" title="Caps the output level regardless of how loud the source gets or how high gain is set — separate from Gain, this is a hard limit">
+        <span style="min-width:76px">Ceiling</span>
+        <input type="range" min="0" max="100" value="${w.ceiling??100}" style="flex:1;accent-color:${accent}"
+          oninput="this.nextElementSibling.textContent=this.value+'%'"
+          onchange="updateLiveInput('${rawId}',{ceiling:parseInt(this.value)})"/>
+        <span style="font-size:11px;color:${accent};min-width:52px;text-align:right">${w.ceiling??100}%</span>
       </label>
       <audio id="lai-audio-${safeId}" style="display:none"></audio>`
     el.appendChild(card)

@@ -291,7 +291,8 @@ if (!existsSync(THUMB_DIR)) mkdirSync(THUMB_DIR, { recursive: true })
 const LIVE_AUDIO_PATH = join(__dirname, 'live-audio.json')
 function loadLiveAudio() { try { return JSON.parse(readFileSync(LIVE_AUDIO_PATH,'utf8')) } catch { return [] } }
 function saveLiveAudio() {
-  const toSave = [...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,gain,enabled,channel})=>({id,card,device,name,lowCut,highCut,baseFreq,gain:gain??1,enabled,channel:channel||'mix'}))
+  const toSave = [...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,gain,enabled,channel,smoothing,curve,noiseFloor,ceiling})=>
+    ({id,card,device,name,lowCut,highCut,baseFreq,gain:gain??1,enabled,channel:channel||'mix',smoothing:smoothing??0,curve:curve??0,noiseFloor:noiseFloor??0,ceiling:ceiling??100}))
   writeFileSync(LIVE_AUDIO_PATH, JSON.stringify(toSave, null, 2))
 }
 
@@ -437,7 +438,31 @@ function startLiveCapture(id) {
           const hz=j/half*nyquist; if(hz>=lo&&hz<=hi) bandSum+=m2
         }
         const bandFrac = totalSum>0 ? Math.sqrt(bandSum/totalSum) : 0
-        refLi.current = Math.min(100, Math.round(rms*500*bandFrac*(refLi.gain??1)))
+        let lvl = Math.min(100, rms*500*bandFrac*(refLi.gain??1))
+        // Noise floor — ignore anything below the threshold entirely, so background
+        // hiss/silence between hits doesn't register as a low-level buzz
+        if (lvl < (refLi.noiseFloor||0)) lvl = 0
+        // Response curve — exponent<1 lifts quieter signal so it's more present;
+        // 0 (default) = linear, unchanged from previous behaviour
+        if (lvl > 0 && refLi.curve) {
+          const exponent = 1 - (Math.min(100,refLi.curve)/100)*0.7
+          lvl = Math.pow(lvl/100, exponent) * 100
+        }
+        // Ceiling — separate from gain, caps the output regardless of how loud the
+        // source gets (default 100 = no clamp)
+        lvl = Math.min(lvl, refLi.ceiling??100)
+        // Smoothing — attack/release envelope follower toward the target level
+        // instead of jumping straight to it every chunk; 0 (default) = instant,
+        // matching previous behaviour exactly
+        const smoothing = refLi.smoothing||0
+        if (smoothing > 0) {
+          const alpha = 1 - (Math.min(100,smoothing)/100)*0.9
+          refLi._smoothLevel = refLi._smoothLevel==null ? lvl : refLi._smoothLevel + (lvl - refLi._smoothLevel)*alpha
+          lvl = refLi._smoothLevel
+        } else {
+          refLi._smoothLevel = lvl
+        }
+        refLi.current = Math.max(0, Math.min(100, Math.round(lvl)))
         broadcast({ type:'live:audio:spectrum', id:refId, bands })
         broadcast({ type:'live:audio:level', id:refId, level:refLi.current })
       }
@@ -3024,7 +3049,8 @@ function waveformsMeta() {
     live: [...liveAudioStore.values()].map(li => ({
       id: 'live-input:' + li.id, name: li.name, type: 'live-audio',
       active: !!li.proc, baseFreq: li.baseFreq||25, lowCut: li.lowCut||20, highCut: li.highCut||8000,
-      gain: li.gain??1, channel: li.channel||'mix'
+      gain: li.gain??1, channel: li.channel||'mix',
+      smoothing: li.smoothing??0, curve: li.curve??0, noiseFloor: li.noiseFloor??0, ceiling: li.ceiling??100
     }))
   }
 }
@@ -5139,8 +5165,8 @@ app.get('/api/audio/:id/frames', (req,res) => {
 app.get('/api/live-audio/scan', (req,res) => res.json(listAlsaDevices()))
 
 app.get('/api/live-audio/inputs', (req,res) => {
-  res.json([...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,enabled,current,proc})=>
-    ({id,card,device,name,lowCut,highCut,baseFreq,enabled,active:!!proc,level:current||0})))
+  res.json([...liveAudioStore.values()].map(({id,card,device,name,lowCut,highCut,baseFreq,enabled,current,proc,smoothing,curve,noiseFloor,ceiling})=>
+    ({id,card,device,name,lowCut,highCut,baseFreq,enabled,active:!!proc,level:current||0,smoothing:smoothing??0,curve:curve??0,noiseFloor:noiseFloor??0,ceiling:ceiling??100})))
 })
 
 app.post('/api/live-audio/inputs', (req,res) => {
@@ -5150,7 +5176,9 @@ app.post('/api/live-audio/inputs', (req,res) => {
   const id = `hw:${card},${device}:${ch}`
   if (liveAudioStore.has(id)) return res.status(409).json({error:'already exists'})
   const chLabel = ch === 'L' ? ' — L' : ch === 'R' ? ' — R' : ' — Mix'
-  const li = { id, card:parseInt(card), device:parseInt(device), name: name + chLabel, channel: ch, lowCut:parseInt(lowCut), highCut:parseInt(highCut), baseFreq:parseInt(baseFreq), gain:parseFloat(gain)||1, enabled:false, current:0, proc:null }
+  // smoothing/curve/noiseFloor/ceiling default to 0/0/0/100 — i.e. no-ops, matching
+  // the level computation's pre-existing behaviour exactly until a user opts in
+  const li = { id, card:parseInt(card), device:parseInt(device), name: name + chLabel, channel: ch, lowCut:parseInt(lowCut), highCut:parseInt(highCut), baseFreq:parseInt(baseFreq), gain:parseFloat(gain)||1, enabled:false, current:0, proc:null, smoothing:0, curve:0, noiseFloor:0, ceiling:100 }
   liveAudioStore.set(id, li)
   saveLiveAudio()
   broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
@@ -5161,12 +5189,16 @@ app.post('/api/live-audio/inputs', (req,res) => {
 app.patch('/api/live-audio/inputs/:id', (req,res) => {
   const li = liveAudioStore.get(req.params.id)
   if (!li) return res.status(404).json({error:'not found'})
-  const {name,lowCut,highCut,baseFreq,gain} = req.body
+  const {name,lowCut,highCut,baseFreq,gain,smoothing,curve,noiseFloor,ceiling} = req.body
   if (name)             li.name    = name
   if (lowCut)           li.lowCut  = parseInt(lowCut)
   if (highCut)          li.highCut = parseInt(highCut)
   if (baseFreq)         li.baseFreq= parseInt(baseFreq)
   if (gain !== undefined) li.gain  = parseFloat(gain)||1
+  if (smoothing !== undefined)  li.smoothing  = Math.max(0,Math.min(100,parseFloat(smoothing)||0))
+  if (curve !== undefined)      li.curve      = Math.max(0,Math.min(100,parseFloat(curve)||0))
+  if (noiseFloor !== undefined) li.noiseFloor = Math.max(0,Math.min(100,parseFloat(noiseFloor)||0))
+  if (ceiling !== undefined)    li.ceiling    = Math.max(0,Math.min(100,parseFloat(ceiling)??100))
   saveLiveAudio()
   broadcast({ type:'live:audio:updated', inputs:waveformsMeta().live })
   broadcast({ type:'waveforms:updated', waveforms:waveformsMeta() })

@@ -1597,7 +1597,7 @@ function handle(m) {
     case 'macro:added': case 'macro:updated': case 'macro:removed':
       window._handleMacroWS?.(m); break
     case 'device:tick':
-      if(S.devices[m.id]){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now(); if(m.paused!==undefined) S.devices[m.id].paused=m.paused; bmTickPulse(m.id, m.paused) } break
+      if(S.devices[m.id]){ S.devices[m.id].ticks=m.ticks; S.devices[m.id].tickAt=performance.now(); S.devices[m.id].tickIntervalMs=m.intervalMs||100; if(m.paused!==undefined) S.devices[m.id].paused=m.paused; bmTickPulse(m.id, m.paused) } break
     case 'device:status':
       if(S.devices[m.id]){ S.devices[m.id].status=m.status; if(S.devices[m.id].type==='shelly') renderShellyCards(); if(m.status!=='connected'&&(S.devices[m.id].type==='coyote'||S.devices[m.id].type==='pawprints')) S.devices[m.id].battery=null }
       renderDevList(); renderCoyoteCards(); renderEomCards();
@@ -3049,9 +3049,13 @@ function renderDevList() {
         <div class="dev-row-sub">${d.type} · ${d.type==='eom'?(d.ip+':'+d.port):d.type==='camera'?d.ip:(d.bleName||d.mac||d.ttyPath||'')}${(d.type==='coyote'||d.type==='pawprints')&&d.battery!=null?` · <span id="dev-bat-${d.id}" style="color:${batCol(d.battery)}">${batIcon(d.battery)} ${d.battery}%</span>`:`<span id="dev-bat-${d.id}"></span>`}</div>
       </div>
       <div class="status-dot ${dotClass}"></div>
+      ${d.type==='coyote' ? `<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#888;cursor:pointer;user-select:none" title="When off, this device is never auto-connected/reconnected — stops it competing for BLE bandwidth with Coyotes you're actually using">
+        <input type="checkbox" ${d.enabled!==false?'checked':''} onchange="toggleDeviceEnabled('${d.id}',this.checked)" style="accent-color:#4fc3f7">Enabled</label>` : ''}
       ${d.type==='camera'
         ? `<span style="font-size:11px;color:${{connected:'#4ade80',error:'#f87171',connecting:'#facc15'}[d.status]||'#555'}">${{connected:'Streaming',error:'Offline',connecting:'Connecting…'}[d.status]||'Idle'}</span>
            <button class="btn btn-ghost btn-xs" onclick="showTab('camera',document.querySelector('.side-btn[onclick*=camera]'));closeScan()">View</button>`
+        : d.type==='coyote' && d.enabled===false
+        ? `<span style="font-size:11px;color:#555">Disabled</span>`
         : `${conn&&d.type==='pawprints'?`<button class="btn btn-ghost btn-xs" onclick="openPpModal('${d.id}')">Monitor</button>`:''}
            ${conn
              ?`<button class="btn btn-ghost btn-xs" onclick="discDev('${d.id}')">Disconnect</button>`
@@ -3067,6 +3071,11 @@ function renderDevList() {
 }
 
 function connDev(id){ fetch(`/api/devices/${id}/connect`,{method:'POST'}).catch(()=>{}) }
+
+function toggleDeviceEnabled(id, enabled) {
+  if(S.devices[id]) { S.devices[id].enabled=enabled; renderDevList() }  // optimistic; server broadcast will confirm
+  fetch(`/api/devices/${id}/enabled`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}).catch(()=>{})
+}
 
 // ── Stream Deck card ──────────────────────────────────────────────────────────
 function renderDeckCard() {
@@ -4437,7 +4446,12 @@ function renderHueCards() {
 }
 
 async function hueRefreshInventory(id) {
-  await fetch(`/api/devices/${id}/hue/inventory`).catch(()=>{})
+  const r = await fetch(`/api/devices/${id}/hue/inventory`).catch(()=>null)
+  if (!r || !r.ok) return
+  // Apply directly rather than waiting on the WS broadcast to round-trip back —
+  // avoids a race where the caller reads S.devices before the broadcast lands.
+  const inv = await r.json().catch(()=>null)
+  if (inv && S.devices[id]) Object.assign(S.devices[id], inv)
 }
 
 async function hueActivateScene(devId, sceneId) {
@@ -4465,34 +4479,61 @@ function hueGroupSlider(devId, groupId, val) {
 }
 
 function hueShowSelect(devId) {
-  const dev = S.devices[devId]; if (!dev) return
   const overlay = document.createElement('div')
   overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;display:flex;align-items:center;justify-content:center'
   const box = document.createElement('div')
   box.style.cssText='background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:24px;width:420px;max-height:80vh;overflow-y:auto'
 
-  const scenes = Object.entries(dev.scenes||{})
-  const groups = Object.entries(dev.groups||{}).filter(([,g])=>g.type!=='Entertainment')
-  const lights = Object.entries(dev.lights||{})
-
-  const mkSection = (title, items, selKey) => {
-    if (!items.length) return ''
-    return `<div style="margin-bottom:16px"><div style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">${title}</div>`+
-      items.map(([id,item])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12px;color:#ccc">
-        <input type="checkbox" data-key="${selKey}" data-id="${id}" ${(dev[selKey]||[]).includes(id)?'checked':''} style="accent-color:#4fc3f7">
-        ${item.name}</label>`).join('')+'</div>'
+  // Preserve any not-yet-saved checkbox changes across a refresh, keyed by "selKey:id"
+  const pendingSel = {}
+  const captureChecks = () => {
+    box.querySelectorAll('input[type=checkbox]').forEach(cb => { pendingSel[cb.dataset.key+':'+cb.dataset.id] = cb.checked })
   }
 
-  box.innerHTML=`<div style="font-size:14px;font-weight:700;color:#e0e0e0;margin-bottom:16px">💡 Configure ${dev.name}</div>`+
-    mkSection('Scenes', scenes, 'selectedScenes')+
-    mkSection('Rooms & Groups', groups, 'selectedGroups')+
-    mkSection('Individual Lights', lights, 'selectedLights')+
-    `<div style="display:flex;gap:8px;margin-top:16px">
-      <button onclick="hueSaveSelect('${devId}',this.closest('[style*=fixed]'))" class="btn btn-primary btn-sm" style="flex:1">Save</button>
-      <button onclick="this.closest('[style*=fixed]').remove()" class="btn btn-ghost btn-sm" style="flex:1">Cancel</button>
-    </div>`
+  const renderBody = () => {
+    const dev = S.devices[devId]; if (!dev) return
+    const scenes = Object.entries(dev.scenes||{})
+    const groups = Object.entries(dev.groups||{}).filter(([,g])=>g.type!=='Entertainment')
+    const lights = Object.entries(dev.lights||{})
+
+    const mkSection = (title, items, selKey) => {
+      if (!items.length) return ''
+      return `<div style="margin-bottom:16px"><div style="font-size:10px;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">${title}</div>`+
+        items.map(([id,item])=>{
+          const key = selKey+':'+id
+          const checked = key in pendingSel ? pendingSel[key] : (dev[selKey]||[]).includes(id)
+          return `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12px;color:#ccc">
+            <input type="checkbox" data-key="${selKey}" data-id="${id}" ${checked?'checked':''} style="accent-color:#4fc3f7">
+            ${item.name}</label>`
+        }).join('')+'</div>'
+    }
+
+    box.innerHTML=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+        <span style="font-size:14px;font-weight:700;color:#e0e0e0">💡 Configure ${dev.name}</span>
+        <button id="hue-cfg-refresh-btn" onclick="hueConfigRefresh('${devId}')" class="btn btn-ghost btn-xs" style="margin-left:auto">↻ Refresh from bridge</button>
+      </div>`+
+      mkSection('Scenes', scenes, 'selectedScenes')+
+      mkSection('Rooms & Groups', groups, 'selectedGroups')+
+      mkSection('Individual Lights', lights, 'selectedLights')+
+      `<div style="display:flex;gap:8px;margin-top:16px">
+        <button onclick="hueSaveSelect('${devId}',this.closest('[style*=fixed]'))" class="btn btn-primary btn-sm" style="flex:1">Save</button>
+        <button onclick="this.closest('[style*=fixed]').remove()" class="btn btn-ghost btn-sm" style="flex:1">Cancel</button>
+      </div>`
+  }
+
+  window._hueConfigRefresh = async () => {
+    captureChecks()
+    const btn = document.getElementById('hue-cfg-refresh-btn')
+    if (btn) { btn.disabled = true; btn.textContent = '↻ Refreshing…' }
+    await hueRefreshInventory(devId)
+    renderBody()
+  }
+
+  renderBody()
   overlay.appendChild(box); document.body.appendChild(overlay)
 }
+
+function hueConfigRefresh(devId) { window._hueConfigRefresh?.() }
 
 async function hueSaveSelect(devId, overlay) {
   const checkboxes = overlay.querySelectorAll('input[type=checkbox]')
@@ -4639,7 +4680,7 @@ function builtinFrameAmp(wfId, tick, speed=1) {
     case 'pulse': { const ph=p(0)%40; const e=ph<8?(1-Math.cos(ph/8*Math.PI))/2:ph<24?1:ph<32?(1+Math.cos((ph-24)/8*Math.PI))/2:0; return Math.round(e*100) }
     case 'breathe': return Math.round(((Math.sin(p(0)*0.025)+1)/2)*100)
     case 'tidal': return Math.round((Math.abs(Math.sin(p(0)*0.0125))*0.9+0.05)*100)
-    case 'wave': return Math.round(((Math.sin(p(0)*0.025)+1)/2)*100)
+    case 'wave': { const w1=(Math.sin(p(0)*0.025)+1)/2, w2=(Math.sin(p(0)*0.025+Math.PI/2)+1)/2; return Math.round(((w1+w2)/2)*100) }
     case 'thud': { const ph=p(0)%40; const e=ph<12?(1-Math.cos(ph/12*Math.PI))/2:ph<20?1-(ph-12)/8:0; return Math.max(0,Math.round(e*100)) }
     case 'flutter': return p(0)%8<4?100:0
     case 'ramp': { const ph=p(0)%80; const e=ph<72?ph/72:(80-ph)/8*Math.cos((ph-72)/8*Math.PI*0.5); return Math.max(0,Math.round(e*100)) }
@@ -4730,7 +4771,7 @@ function startGrpViz(grpId) {
     const tickDev = firstCh ? S.devices[firstCh.deviceId] : null
     const grpChTick = tickDev?.ticks?.[firstCh?.channel]||0
     if(tickDev?.paused?.[firstCh?.channel]) state.phase = grpChTick
-    else state.phase = tickDev?.tickAt!=null ? grpChTick + (ts - tickDev.tickAt)/100 : state.phase + 1/60
+    else state.phase = tickDev?.tickAt!=null ? grpChTick + (ts - tickDev.tickAt)/(tickDev.tickIntervalMs||100) : state.phase + 1/60
     const PLAY_X = Math.floor(W*0.3)
     const curFrame = Math.floor(state.phase)
     const g = ctx.createLinearGradient(0,0,0,H)
@@ -4774,12 +4815,16 @@ function startChViz(devId, ch) {
   let lastTs = null, lastWfId = null, lastFLen = 0
 
   function draw(ts) {
+    if(!document.getElementById('chviz-'+devId+'-'+ch)){ state.rafId=null; return }
     lastTs = ts
     ctx.fillStyle='#080808'; ctx.fillRect(0,0,W,H)
     const dev = S.devices?.[devId]
     if(!dev || dev.status!=='connected'){
+      // Transient disconnect (e.g. mid-reconnect) — keep the loop alive so it
+      // self-heals the instant status flips back, instead of freezing the
+      // canvas until something else happens to call startChViz() again.
       ctx.fillStyle='#1c1c1c'; ctx.fillRect(0,H-1,W,1)
-      state.rafId=null; return
+      state.rafId=requestAnimationFrame(draw); return
     }
     const chData = dev.channels?.[ch]||{}
     const intensity = Math.min(chData.intensity||0, 100)
@@ -4803,7 +4848,7 @@ function startChViz(devId, ch) {
     // Sync phase to per-channel server tick; freeze when paused
     const chTick = dev.ticks?.[ch]||0
     if(dev.paused?.[ch]) state.phase = chTick
-    else state.phase = dev.tickAt!=null ? chTick + (ts - dev.tickAt)/100 : state.phase + 1/60
+    else state.phase = dev.tickAt!=null ? chTick + (ts - dev.tickAt)/(dev.tickIntervalMs||100) : state.phase + 1/60
     // Fixed playhead position — waveform scrolls past it
     const PLAY_X = Math.floor(W*0.3)
     const curFrame = Math.floor(state.phase)

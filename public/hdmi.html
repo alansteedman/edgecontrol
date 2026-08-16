@@ -64,7 +64,7 @@ function handle(m) {
     updateLiveWidgets(m.id)
   }
   if (m.type === 'device:tick') {
-    if (S.devices[m.id]) { S.devices[m.id].ticks = m.ticks; S.devices[m.id].paused = m.paused; S.devices[m.id].tickAt = performance.now() }
+    if (S.devices[m.id]) { S.devices[m.id].ticks = m.ticks; S.devices[m.id].paused = m.paused; S.devices[m.id].tickAt = performance.now(); S.devices[m.id].tickIntervalMs = m.intervalMs || 100 }
   }
   if (m.type === 'device:added')   { m.device.tickAt = performance.now(); S.devices[m.device.id] = m.device; renderHdmi() }
   if (m.type === 'device:removed') { delete S.devices[m.id]; renderHdmi() }
@@ -857,7 +857,7 @@ function builtinFrameAmp(wfId, tick, speed=1) {
     case 'pulse': { const ph=p(0)%40; const e=ph<8?(1-Math.cos(ph/8*Math.PI))/2:ph<24?1:ph<32?(1+Math.cos((ph-24)/8*Math.PI))/2:0; return Math.round(e*100) }
     case 'breathe': return Math.round(((Math.sin(p(0)*0.025)+1)/2)*100)
     case 'tidal': return Math.round((Math.abs(Math.sin(p(0)*0.0125))*0.9+0.05)*100)
-    case 'wave': return Math.round(((Math.sin(p(0)*0.025)+1)/2)*100)
+    case 'wave': { const w1=(Math.sin(p(0)*0.025)+1)/2, w2=(Math.sin(p(0)*0.025+Math.PI/2)+1)/2; return Math.round(((w1+w2)/2)*100) }
     case 'thud': { const ph=p(0)%40; const e=ph<12?(1-Math.cos(ph/12*Math.PI))/2:ph<20?1-(ph-12)/8:0; return Math.max(0,Math.round(e*100)) }
     case 'flutter': return p(0)%8<4?100:0
     case 'ramp': { const ph=p(0)%80; const e=ph<72?ph/72:(80-ph)/8*Math.cos((ph-72)/8*Math.PI*0.5); return Math.max(0,Math.round(e*100)) }
@@ -966,7 +966,7 @@ function startChWfViz(cv, devId, ch) {
     const fLen = isBuiltin ? 480 : wf.frames.length
     const chTick = dev.ticks?.[ch] || 0
     if (dev.paused?.[ch]) state.phase = chTick
-    else state.phase = dev.tickAt != null ? chTick + (ts - dev.tickAt) / 100 : state.phase + 1/60
+    else state.phase = dev.tickAt != null ? chTick + (ts - dev.tickAt) / (dev.tickIntervalMs||100) : state.phase + 1/60
     const PLAY_X = Math.floor(W * 0.3)
     const curFrame = Math.floor(state.phase)
     const g = ctx.createLinearGradient(0, 0, 0, H)
@@ -1073,7 +1073,7 @@ function startGrpWfViz(cv, groupId) {
     const tickDev = firstCh ? S.devices[firstCh.deviceId] : null
     const grpChTick = tickDev?.ticks?.[firstCh?.channel] || 0
     if (tickDev?.paused?.[firstCh?.channel]) state.phase = grpChTick
-    else state.phase = tickDev?.tickAt != null ? grpChTick + (ts - tickDev.tickAt) / 100 : state.phase + 1/60
+    else state.phase = tickDev?.tickAt != null ? grpChTick + (ts - tickDev.tickAt) / (tickDev.tickIntervalMs||100) : state.phase + 1/60
     const PLAY_X = Math.floor(W * 0.3)
     const curFrame = Math.floor(state.phase)
     const g = ctx.createLinearGradient(0, 0, 0, H)

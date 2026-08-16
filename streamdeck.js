@@ -2595,9 +2595,16 @@ export class StreamDeckController {
     const allScenes = Object.entries(hue._scenes || {}).filter(([id]) => selectedIds.includes(id))
     const entry = allScenes[this._hueSceneOffset + idx]
     if (!entry) return
-    const [, sc] = entry
+    const [sceneId, sc] = entry
     const grpId = sc.group
     if (!grpId) return
+    // First movement on a scene that isn't already live recalls it (so turning
+    // the knob makes that scene active), then further ticks just ride the
+    // brightness — re-activating on every tick would re-trigger the bridge's
+    // scene transition/crossfade on each detent, causing visible flicker.
+    if (hue._activeSceneByGroup?.[grpId] !== sceneId) {
+      hue.activateScene(sceneId)
+    }
     const grp = hue._groups?.[grpId]
     const curBri = grp ? Math.round((grp.action?.bri || 254) * 100 / 254) : 100
     const newBri = Math.min(100, Math.max(1, curBri + ticks * 2))

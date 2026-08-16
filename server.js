@@ -371,11 +371,12 @@ function startLiveCapture(id) {
 
   // arecord (not ffmpeg) so we can force tight ALSA buffer/period times — ffmpeg's alsa
   // demuxer has no equivalent flag and just inherits the driver's default buffer size,
-  // which on a lot of USB audio interfaces is 300-500ms+. 50ms buffer / 10ms period here
-  // trades a bit of underrun risk for much lower capture latency (this is what was causing
+  // which on a lot of USB audio interfaces is 300-500ms+. 20ms buffer / 5ms period here
+  // trades more underrun risk for lower capture latency still (this is what was causing
   // the audio-reactive waveform to visibly lag the beat). Output format (raw f32le stereo
-  // interleaved) is unchanged, so nothing downstream needs to change.
-  const args = ['-D',`plughw:${li.card},${li.device}`,'-f','FLOAT_LE','-c','2','-r',String(SR),'-t','raw','--buffer-time=50000','--period-time=10000','-']
+  // interleaved) is unchanged, so nothing downstream needs to change. If this causes
+  // crackling/dropouts on a given USB interface, back off toward 50000/10000.
+  const args = ['-D',`plughw:${li.card},${li.device}`,'-f','FLOAT_LE','-c','2','-r',String(SR),'-t','raw','--buffer-time=20000','--period-time=5000','-']
   const proc = spawn('arecord', args, { stdio:['ignore','pipe','ignore'] })
   const refs = new Set([id])
   const monitors = new Set()  // active monitor encoder stdinStreams
@@ -755,7 +756,8 @@ function broadcast(msg) {
   for (const ws of clients) if (ws.readyState === 1) ws.send(s)
   if (msg.type?.startsWith('macro:')) updateMacroLiveState(msg)
   // Notify Stream Deck on device state changes
-  if (msg.type === 'device:status' || msg.type === 'device:state' || msg.type === 'eom:config' || msg.type === 'eom:denial') {
+  if (msg.type === 'device:status' || msg.type === 'device:state' || msg.type === 'eom:config' || msg.type === 'eom:denial' ||
+      msg.type === 'hue:inventory' || msg.type === 'hue:light' || msg.type === 'hue:scene' || msg.type === 'hue:group') {
     streamDeck?.onDeviceUpdate()
   }
   // Notify Stream Deck on macro events
@@ -820,7 +822,15 @@ function computeWave(wfId, tick, amp, speed=1, baseFreq=25) {
     case 'pulse':     return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const env=ph<8?(1-Math.cos(ph/8*Math.PI))/2:ph<24?1:ph<32?(1+Math.cos((ph-24)/8*Math.PI))/2:0; return [f,Math.round(env*amp)] })
     case 'breathe':   return Array.from({length:4},(_,i)=>[ f, sv(i,0.025) ])
     case 'tidal':     return Array.from({length:4},(_,i)=>[ f, Math.round((Math.abs(Math.sin(p(i)*0.0125))*0.9+0.05)*amp) ])
-    case 'wave':      { const a=sv(0,0.025); return [[f,a],[f,a],[f,a],[f,a]] }
+    // "Phase-shifted dual wave": average of two sines a quarter-cycle apart — distinct
+    // envelope from Breathe's single sine, per description. Was previously sampling a
+    // single fixed point (i=0) for all 4 sub-pulses instead of varying by i like every
+    // other built-in here, so it only stepped once per packet (~every 100ms) instead of
+    // sweeping smoothly — felt like a flat pulse rather than an actual wave.
+    case 'wave':      return Array.from({length:4},(_,i)=>{
+      const w1=(Math.sin(p(i)*0.025)+1)/2, w2=(Math.sin(p(i)*0.025+Math.PI/2)+1)/2
+      return [f, Math.round(((w1+w2)/2)*amp)]
+    })
     case 'thud':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%40; const env=ph<12?(1-Math.cos(ph/12*Math.PI))/2:ph<20?1-(ph-12)/8:0; return [f,Math.round(env*amp)] })
     case 'flutter':   return Array.from({length:4},(_,i)=>{ const on=p(i)%8<4; return [f,on?amp:0] })
     case 'ramp':      return Array.from({length:4},(_,i)=>{ const ph=p(i)%80; const env=ph<72?ph/72:(80-ph)/8*Math.cos((ph-72)/8*Math.PI*0.5); return [f,Math.max(0,Math.round(env*amp))] })
@@ -861,9 +871,10 @@ function computeActivity(act, ch, tick, amp) {
 }
 
 class CoyoteDevice {
-  constructor(id, name, mac, bleName, buttonControl={A:false,B:false}) {
+  constructor(id, name, mac, bleName, buttonControl={A:false,B:false}, enabled=true) {
     this.id=id; this.name=name; this.type='coyote'; this.mac=(mac||'').toLowerCase()
     this.bleName=bleName||null; this.status='disconnected'
+    this.enabled=enabled!==false  // when false, never auto-connects/reconnects — stops BLE scan contention for devices you're not using
     this.gattServer=null; this.writeChar=null; this.notifyChar=null
     this.channels={ A:{intensity:0,waveform:'pulse',speed:1,baseFreq:25,mode:'waveform',activityId:null,driftPhase:0}, B:{intensity:0,waveform:'pulse',speed:1,baseFreq:25,mode:'waveform',activityId:null,driftPhase:0} }
     this._smoothA=0; this._smoothB=0  // smoothed intensity (0-200), lerped toward target each packet
@@ -876,6 +887,7 @@ class CoyoteDevice {
   }
 
   async connect() {
+    if (!this.enabled) return
     if (this._connectLock || this.status==='connected') return
     this._connectLock=true; this.status='connecting'
     broadcast({ type:'device:status', id:this.id, status:'connecting' })
@@ -1061,6 +1073,7 @@ class CoyoteDevice {
       this.status='error'; this._connectLock=false
       broadcast({ type:'device:status', id:this.id, status:'error', error:err.message })
       try { await adapter?.stopDiscovery() } catch {}
+      if (!this.enabled) return  // disabled mid-attempt — don't schedule a retry
       const delay = this._retryDelay
       this._retryDelay = Math.min(this._retryDelay * 2, 60000)
       console.log(`[${this.id}] Retrying in ${delay/1000}s (backoff: ${this._retryDelay/1000}s next)`)
@@ -1143,10 +1156,22 @@ class CoyoteDevice {
     const loop = async () => {
       if (!this._sendActive) return
       const t0 = Date.now()
+      // Computed up front (not just when scheduling the next call) so the current
+      // broadcast can tell clients the real gap until the next tick — the on-screen
+      // waveform used to always assume a flat 100ms/tick, which visibly stuttered
+      // whenever button-control widened this to 300/800ms.
+      // Only throttle the B0 rate around an ACTUAL recent button press, not for the
+      // entire time button-control happens to be toggled on — it was previously
+      // slowing every waveform update to 3.33Hz (300ms) permanently whenever button
+      // control was enabled, even idle minutes after the last press, which made
+      // smooth waveforms (wave/breathe/etc.) feel like distinct stepped pulses
+      // instead of continuous. Now it only widens briefly after a real press.
+      const msSinceBtn = Date.now() - (this._lastBtnAt || 0)
+      const interval = msSinceBtn < 800 ? 800 : msSinceBtn < 5000 ? 300 : 100
       if (this.writeChar && this.status === 'connected') {
         try {
           await this.writeChar.writeValue(this._buildPacket(), { type:'command' })
-          broadcast({ type:'device:tick', id:this.id, ticks:this._ticks, paused:this._paused })
+          broadcast({ type:'device:tick', id:this.id, ticks:this._ticks, paused:this._paused, intervalMs:interval })
           if(!this._paused.A) this._ticks.A++
           if(!this._paused.B) this._ticks.B++
         } catch(e) {
@@ -1161,9 +1186,7 @@ class CoyoteDevice {
         // which was starving button-press notifications out of the BLE queue.
         // Immediately after a button press, slow down even more to maximise the
         // window in which the device can send the next button notification.
-        const btnCtrl = this.buttonControl.A || this.buttonControl.B
-        const msSinceBtn = Date.now() - (this._lastBtnAt || 0)
-        const interval = msSinceBtn < 800 ? 800 : (btnCtrl ? 300 : 100)
+        // (interval computed above, before the write, so it could be broadcast too)
         this._sendTimer = setTimeout(loop, Math.max(5, interval - (Date.now() - t0)))
       }
     }
@@ -1186,7 +1209,7 @@ class CoyoteDevice {
   }
 
   toJSON() {
-    return { id:this.id, type:'coyote', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, channels:this.channels, ticks:this._ticks, paused:this._paused, buttonControl:this.buttonControl, battery:this.battery }
+    return { id:this.id, type:'coyote', name:this.name, bleName:this.bleName, mac:this.mac, status:this.status, channels:this.channels, ticks:this._ticks, paused:this._paused, buttonControl:this.buttonControl, battery:this.battery, enabled:this.enabled }
   }
 }
 
@@ -2507,7 +2530,7 @@ function mediaNextIndex(dev, dir) {
 function createDevice(cfg) {
   if (cfg.type==='hdmi')       return new HdmiDevice(cfg.id,cfg.name,cfg.layouts,cfg.activeLayout)
   if (cfg.type==='media')      return new MediaPlayerDevice(cfg.id,cfg.name,cfg.sources,cfg.playlist,cfg.playback)
-  if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName,cfg.buttonControl)
+  if (cfg.type==='coyote')     return new CoyoteDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName,cfg.buttonControl,cfg.enabled)
   if (cfg.type==='pawprints') return new PawPrintsDevice(cfg.id,cfg.name,cfg.mac,cfg.bleName)
   if (cfg.type==='eom')    return new EomDevice(cfg.id,cfg.name,cfg.ip,cfg.port)
   if (cfg.type==='nimble') return new NimbleDevice(cfg.id,cfg.name,cfg.ttyPath,cfg.tcpHost,cfg.tcpPort)
@@ -3661,6 +3684,25 @@ app.post('/api/devices/:id/connect', (req,res) => {
 app.post('/api/devices/:id/disconnect', async (req,res) => {
   const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
   try{await dev.disconnect();res.json({ok:true})}catch(e){res.status(500).json({error:e.message})}
+})
+
+// Enable/disable a device — when disabled it never auto-connects/reconnects, so a
+// paired-but-unused Coyote (etc.) stops its endless BLE scan+connect retry loop,
+// which was contending for radio time with devices you're actively using.
+app.post('/api/devices/:id/enabled', async (req,res) => {
+  const dev=devices[req.params.id]; if (!dev) return res.status(404).json({error:'not found'})
+  const enabled = !!req.body?.enabled
+  dev.enabled = enabled
+  const cfg=config.devices.find(d=>d.id===req.params.id)
+  if (cfg) { cfg.enabled=enabled; saveConfig(config) }
+  if (!enabled) {
+    try { await dev.disconnect() } catch {}
+  } else {
+    dev._retryDelay = 5000  // fresh backoff — don't inherit a long delay from before it was disabled
+    const r = dev.connect(); if (r?.catch) r.catch(e=>console.error(`[${dev.id}]`,e.message))
+  }
+  broadcast({type:'device:updated',device:dev.toJSON()})
+  res.json({ok:true})
 })
 
 // BLE scan for unconfigured Shellys

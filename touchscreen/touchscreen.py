@@ -329,7 +329,8 @@ def draw_status(info):
                   f"  ·  {st.get('deviceCount',0)} device{'s' if st.get('deviceCount',0)!=1 else ''}")
     text_centered(d, footer_str, 134, MDGRAY, F_SM)
     if in_ap:
-        button(d, 12, 152, W-24, 76, "Exit Hotspot", BTN_RED, WHITE, F_LG)
+        button(d, 6,       152, W//2-10, 76, "Retry WiFi",  BTN_BG,  WHITE, F_LG)
+        button(d, W//2+4,  152, W//2-10, 76, "Use Hotspot", BTN_AMB, WHITE, F_LG)
     else:
         button(d, 6,       152, W//2-10, 76, "AP Mode",   BTN_AMB, WHITE, F_LG)
         button(d, W//2+4,  152, W//2-10, 76, "WiFi Setup", BTN_BG, WHITE, F_LG)
@@ -503,6 +504,14 @@ def draw_ap_stopping():
     text_centered(d, "Reconnecting to WiFi", 133, GRAY, F_MD)
     return img
 
+def draw_ap_dismissing():
+    img = Image.new('RGB', (W, H), BG)
+    d = ImageDraw.Draw(img)
+    header(d, "AP Mode")
+    text_centered(d, "Using hotspot...", 105, WHITE, F_LG)
+    text_centered(d, "Hotspot stays active", 133, GRAY, F_MD)
+    return img
+
 def draw_lockout():
     RED = (220, 50, 50)
     img = Image.new('RGB', (W, H), BG)
@@ -600,7 +609,7 @@ def main():
                 img = draw_result(result_ok, selected_ssid, result_msg, result_ip)
             elif state == 'AP_INFO':
                 img = draw_ap_info(ap_ssid, ap_password, ap_ip)
-            if state not in ('SCANNING', 'CONNECTING', 'AP_ACTIVATING', 'AP_STOPPING'):
+            if state not in ('SCANNING', 'CONNECTING', 'AP_ACTIVATING', 'AP_STOPPING', 'AP_DISMISSING'):
                 show(img)
             needs_redraw = False
 
@@ -621,6 +630,13 @@ def main():
             show(draw_ap_stopping())
             api_post('/api/wifi/hotspot/stop', {})
             time.sleep(3)
+            info = fetch_status(); last_refresh = time.monotonic()
+            state = 'STATUS'; continue
+
+        if state == 'AP_DISMISSING':
+            show(draw_ap_dismissing())
+            api_post('/api/wifi/ap-mode/dismiss', {})
+            time.sleep(1)
             info = fetch_status(); last_refresh = time.monotonic()
             state = 'STATUS'; continue
 
@@ -653,7 +669,10 @@ def main():
             if ty >= 152:
                 in_ap = info.get('ap', {}).get('apMode', False)
                 if in_ap:
-                    state = 'AP_STOPPING'
+                    # Left = Retry WiFi (scan for a real network), right = Use Hotspot
+                    # (drop out of setup-lock, keep the hotspot running as-is — for when
+                    # there's genuinely no WiFi in range to reconnect to)
+                    state = 'SCANNING' if tx < W // 2 else 'AP_DISMISSING'
                 elif tx < W // 2:
                     state = 'AP_ACTIVATING'
                 else:

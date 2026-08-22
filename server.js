@@ -917,11 +917,13 @@ class CoyoteDevice {
     this._ticks={A:0,B:0}; this._paused={A:false,B:false}; this._interval=null; this._device=null; this._connectLock=false
     this._connectedAddr=null  // actual BLE address we connected to
     this._retryDelay=5000  // exponential backoff on repeated failures
+    this._reconnectTimer=null
   }
 
   async connect() {
     if (!this.enabled) return
     if (this._connectLock || this.status==='connected') return
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer=null }
     this._connectLock=true; this.status='connecting'
     broadcast({ type:'device:status', id:this.id, status:'connecting' })
     try {
@@ -1097,6 +1099,10 @@ class CoyoteDevice {
             console.log(`[${this.id}] Disconnected`)
             this._stopSending(); this._connectLock=false; this.status='disconnected'; this._connectedAddr=null; this._smoothA=0; this._smoothB=0; this.battery=null
             broadcast({ type:'device:status', id:this.id, status:'disconnected' })
+            // Mid-session drops (BLE flakiness, radio contention, etc.) used to just sit
+            // disconnected forever with no self-healing — only the initial connect()
+            // failure path retried. Auto-reconnect here too.
+            this._scheduleReconnect()
           }
         })
       } catch {}
@@ -1106,15 +1112,27 @@ class CoyoteDevice {
       this.status='error'; this._connectLock=false
       broadcast({ type:'device:status', id:this.id, status:'error', error:err.message })
       try { await adapter?.stopDiscovery() } catch {}
-      if (!this.enabled) return  // disabled mid-attempt — don't schedule a retry
-      const delay = this._retryDelay
-      this._retryDelay = Math.min(this._retryDelay * 2, 60000)
-      console.log(`[${this.id}] Retrying in ${delay/1000}s (backoff: ${this._retryDelay/1000}s next)`)
-      setTimeout(()=>this.connect().catch(e=>console.error(`[${this.id}] reconnect:`,e.message)), delay)
+      this._scheduleReconnect()
     }
   }
 
+  // Shared backoff-retry scheduler for connect() failures, mid-session BLE drops
+  // (PropertiesChanged), and write failures (_startSending) — anywhere the device
+  // ends up disconnected unexpectedly should self-heal the same way.
+  _scheduleReconnect() {
+    if (!this.enabled) return
+    if (this._reconnectTimer) return  // already scheduled
+    const delay = this._retryDelay
+    this._retryDelay = Math.min(this._retryDelay * 2, 60000)
+    console.log(`[${this.id}] Retrying in ${delay/1000}s (backoff: ${this._retryDelay/1000}s next)`)
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null
+      this.connect().catch(e => console.error(`[${this.id}] reconnect:`, e.message))
+    }, delay)
+  }
+
   async disconnect() {
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer=null }
     this._stopSending()
     try { if (this._device) await this._device.disconnect() } catch {}
     this._connectedAddr=null; this._smoothA=0; this._smoothB=0; this.status='disconnected'; this.battery=null
@@ -1174,6 +1192,10 @@ class CoyoteDevice {
       if (act) chB.driftPhase=(chB.driftPhase||0)+act.driftRate
     } else { bW=computeWave(chB.waveform,tickB,bAmp,chB.speed||1,chB.baseFreq||25) }
     const buf=Buffer.alloc(20)
+    // NOTE: tried change-gated apply-mode (0x0 vs 0x0F, matching Howl's app) here —
+    // broke physical button power reporting on real hardware, reverted. Live packet
+    // logging found the real cause of button flakiness elsewhere: mid-session BLE
+    // write failures had no auto-reconnect (see _scheduleReconnect below).
     buf[0]=0xB0; buf[1]=(((t%15)+1)<<4)|0x0F
     buf[2]=Math.min(200,Math.round(this._smoothA)); this._lastSentA=buf[2]
     buf[3]=Math.min(200,Math.round(this._smoothB)); this._lastSentB=buf[3]
@@ -1211,6 +1233,9 @@ class CoyoteDevice {
           console.error(`[${this.id}] send:`, e.message)
           this._sendActive = false; this.status = 'disconnected'; this.battery = null
           broadcast({ type:'device:status', id:this.id, status:'disconnected' })
+          // This used to just die silently here — no retry — leaving the device
+          // stuck disconnected until someone noticed and hit Connect manually.
+          this._scheduleReconnect()
           return
         }
       }
@@ -2670,7 +2695,7 @@ function requireAuth(req, res, next) {
   if (req.session?.authed) return next()
   if (req.path === '/login' || req.path === '/setup.html' || req.path.startsWith('/api/auth')) return next()
   // WiFi/status endpoints always accessible — needed during AP setup mode
-  if (req.path === '/api/status' || req.path === '/api/wifi/ap-status' || req.path === '/api/wifi/scan' || req.path === '/api/wifi/connect' || req.path === '/api/wifi/hotspot/start' || req.path === '/api/wifi/hotspot/stop') return next()
+  if (req.path === '/api/status' || req.path === '/api/wifi/ap-status' || req.path === '/api/wifi/scan' || req.path === '/api/wifi/connect' || req.path === '/api/wifi/hotspot/start' || req.path === '/api/wifi/hotspot/stop' || req.path === '/api/wifi/ap-mode/dismiss') return next()
   // Audio monitor stream — <audio> elements don't forward session cookies reliably; the capture being active is auth enough
   if (req.method === 'GET' && req.path.endsWith('/stream') && req.path.startsWith('/api/live-audio/')) return next()
   // go2rtc proxy (WebRTC signaling + MSE) — allow app sessions and HDMI kiosk (localhost)
@@ -5612,6 +5637,18 @@ app.post('/api/wifi/connect', async (req, res) => {
 app.get('/api/wifi/ap-status', (req, res) => {
   const isAP = existsSync(AP_FLAG)
   res.json({ apMode: isAP, ssid: isAP ? readFileSync(AP_FLAG, 'utf8').trim() : null })
+})
+
+// edge-network's own boot-time no-internet fallback puts the box into a *setup-only*
+// AP mode (AP_FLAG set, captive portal locks everything to /setup.html) — meant purely
+// for picking a WiFi network. If there's genuinely no WiFi to pick, that's a dead end:
+// "Exit Hotspot" tries to reconnect to nothing, fails, and AP_FLAG never gets cleared
+// (only edge-network itself clears it, only at boot), so it loops. This just clears the
+// flag — no network changes — so the box drops out of setup-lock and becomes a normal,
+// fully-usable box that happens to be reachable over its own hotspot instead of exiting it.
+app.post('/api/wifi/ap-mode/dismiss', (req, res) => {
+  try { unlinkSync(AP_FLAG) } catch {}
+  res.json({ ok: true })
 })
 
 let _preHotspotConn = null

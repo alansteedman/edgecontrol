@@ -5656,14 +5656,20 @@ let _preHotspotConn = null
 app.post('/api/wifi/hotspot/start', requireAuth, async (req, res) => {
   const ssid = `EdgeController-${config.boxId || 'setup'}`
   const password = 'edgesetup'
+  const t0 = Date.now()
   try {
     const out = await nmcli('-t -f GENERAL.CONNECTION dev show wlan0').catch(() => '')
     const name = out.split(':')[1]?.trim()
     if (name && name !== '--') _preHotspotConn = name
     await nmcli(`connection delete "Hotspot"`).catch(() => {})
+    console.log(`[hotspot] starting, ${Date.now()-t0}ms elapsed so far (pre-existing conn: ${_preHotspotConn||'none'})`)
     await nmcli(`dev wifi hotspot ifname wlan0 ssid "${ssid}" password "${password}"`)
+    console.log(`[hotspot] up after ${Date.now()-t0}ms total`)
     res.json({ ok: true, ssid, password, ip: '10.42.0.1' })
-  } catch(e) { res.status(500).json({ error: e.message }) }
+  } catch(e) {
+    console.error(`[hotspot] failed after ${Date.now()-t0}ms:`, e.message)
+    res.status(500).json({ error: e.message })
+  }
 })
 
 app.post('/api/wifi/hotspot/stop', requireAuth, async (req, res) => {

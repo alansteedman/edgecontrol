@@ -140,4 +140,23 @@ else
   log "serial-getty@ttyAMA0 already masked — skipping"
 fi
 
+
+# ── Touchscreen UI: sync deployed copy from the repo ──────────────────────────
+# touchscreen.service runs /home/alans/touchscreen/touchscreen.py — a separate
+# deployed copy, not the repo checkout — so a plain git pull never reaches it.
+# Only touch it (and only restart the service) when the content actually changed.
+TS_SRC="$APP_DIR/touchscreen/touchscreen.py"
+TS_DST="/home/$APP_USER/touchscreen/touchscreen.py"
+if [ -f "$TS_SRC" ] && [ -f /etc/systemd/system/touchscreen.service ]; then
+  if ! cmp -s "$TS_SRC" "$TS_DST" 2>/dev/null; then
+    log "Updating deployed touchscreen UI"
+    mkdir -p "/home/$APP_USER/touchscreen"
+    cp "$TS_SRC" "$TS_DST"
+    chown "$APP_USER:$APP_USER" "$TS_DST"
+    systemctl restart touchscreen.service 2>/dev/null || true
+  else
+    log "Touchscreen UI unchanged — skipping"
+  fi
+fi
+
 log "Migration complete"

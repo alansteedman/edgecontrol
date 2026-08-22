@@ -475,7 +475,7 @@ def draw_ap_activating():
     d = ImageDraw.Draw(img)
     header(d, "AP Mode")
     text_centered(d, "Starting hotspot...", 105, WHITE, F_LG)
-    text_centered(d, "Please wait", 133, GRAY, F_MD)
+    text_centered(d, "Can take up to 45s", 133, GRAY, F_MD)
     return img
 
 def draw_ap_info(ssid, password, ip):
@@ -615,7 +615,11 @@ def main():
 
         if state == 'AP_ACTIVATING':
             show(draw_ap_activating())
-            ok, result = api_post('/api/wifi/hotspot/start', {})
+            # nmcli has to tear down the existing WiFi connection before it can bring
+            # wlan0 up as an AP — that alone can take well over the default 12s timeout,
+            # so this needed longer headroom (was timing out and reporting a false
+            # failure while nmcli was still working in the background).
+            ok, result = api_post('/api/wifi/hotspot/start', {}, timeout=45)
             if ok:
                 ap_ssid     = result.get('ssid', '')
                 ap_password = result.get('password', '')

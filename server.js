@@ -5772,29 +5772,38 @@ app.post('/api/custom-layout', requireAuth, (req, res) => {
 // ── Auto-update check ────────────────────────────────────────────────────────
 let _updateAvailable = null  // { version } or null
 
+let _lastUpdateCheckError = null    // last fetch/parse failure, so "no update" is distinguishable from "couldn't check"
+let _lastCheckedRemoteVersion = null // whatever version GitHub returned on the last successful check, even if not newer
+
 async function checkForUpdate() {
   try {
     const r = await fetch('https://raw.githubusercontent.com/alansteedman/edgecontrol/main/package.json',
       { signal: AbortSignal.timeout(10000) })
-    if (!r.ok) return
+    if (!r.ok) { _lastUpdateCheckError = `GitHub returned HTTP ${r.status}`; return }
     const { version } = await r.json()
+    _lastUpdateCheckError = null
+    _lastCheckedRemoteVersion = version
     const newer = version.split('.').map(Number)
     const current = APP_VERSION.split('.').map(Number)
     const isNewer = newer[0] > current[0] || (newer[0] === current[0] && newer[1] > current[1]) ||
       (newer[0] === current[0] && newer[1] === current[1] && newer[2] > current[2])
-    if (isNewer && _updateAvailable?.version !== version) {
-      _updateAvailable = { version }
-      console.log(`[update] v${version} available (running v${APP_VERSION})`)
-      broadcast({ type: 'update:available', version, current: APP_VERSION })
+    if (isNewer) {
+      if (_updateAvailable?.version !== version) {
+        _updateAvailable = { version }
+        console.log(`[update] v${version} available (running v${APP_VERSION})`)
+        broadcast({ type: 'update:available', version, current: APP_VERSION })
+      }
+    } else {
+      _updateAvailable = null
     }
-  } catch { /* network unavailable */ }
+  } catch(e) { _lastUpdateCheckError = e.message }
 }
 
 setTimeout(checkForUpdate, 30000)
 setInterval(checkForUpdate, 4 * 60 * 60 * 1000)
 
 app.get('/api/update/status', requireAuth, (req, res) => {
-  res.json({ current: APP_VERSION, available: _updateAvailable })
+  res.json({ current: APP_VERSION, available: _updateAvailable, lastCheckedRemoteVersion: _lastCheckedRemoteVersion, lastCheckError: _lastUpdateCheckError })
 })
 app.get('/api/app/settings', requireAdmin, (req, res) => {
   res.json({ enabled: config.app?.enabled || false, hasPassword: !!(config.app?.passwordHash), link: getAppLink() })
@@ -5810,7 +5819,7 @@ app.put('/api/app/settings', requireAdmin, (req, res) => {
 
 app.post('/api/update/check', requireAuth, async (req, res) => {
   await checkForUpdate()
-  res.json({ current: APP_VERSION, available: _updateAvailable })
+  res.json({ current: APP_VERSION, available: _updateAvailable, lastCheckedRemoteVersion: _lastCheckedRemoteVersion, lastCheckError: _lastUpdateCheckError })
 })
 
 app.post('/api/update/apply', requireAdmin, (req, res) => {

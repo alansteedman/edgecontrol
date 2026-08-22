@@ -1439,8 +1439,13 @@ async function cfgCheckForUpdate() {
     if (d.available) {
       status.textContent = `v${d.available.version} available`
       status.style.color = '#86efac'
+    } else if (d.lastCheckError) {
+      // Couldn't reach GitHub at all — distinct from genuinely being up to date,
+      // so this doesn't silently look like "no update" when the check itself failed
+      status.textContent = `Couldn't check: ${d.lastCheckError}`
+      status.style.color = '#f87171'
     } else {
-      status.textContent = 'Up to date'
+      status.textContent = d.lastCheckedRemoteVersion ? `Up to date (latest is v${d.lastCheckedRemoteVersion})` : 'Up to date'
       status.style.color = '#6b7280'
     }
     status.style.display = 'inline'

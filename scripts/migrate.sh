@@ -157,6 +157,15 @@ if [ -f "$TS_SRC" ] && [ -f /etc/systemd/system/touchscreen.service ]; then
   else
     log "Touchscreen UI unchanged — skipping"
   fi
+elif [ -f "$TS_SRC" ] && sudo -u "$APP_USER" pm2 describe touchscreen >/dev/null 2>&1; then
+  # Some boxes (e.g. earlier field units) run the touchscreen as a plain pm2
+  # process straight from the repo checkout instead of the systemd-deployed-copy
+  # setup above — git pull already updates the file in place there, it just
+  # needs pm2 to actually restart the process to load it (Python doesn't
+  # hot-reload). This was previously missed entirely: the touchscreen process
+  # on those boxes could sit unrestarted for weeks across multiple updates.
+  log "Restarting pm2-managed touchscreen UI"
+  sudo -u "$APP_USER" pm2 restart touchscreen 2>/dev/null || true
 fi
 
 log "Migration complete"

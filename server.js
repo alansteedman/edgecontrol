@@ -2147,6 +2147,7 @@ class HueBridge {
     this.status='disconnected'
     this._lights={}; this._groups={}; this._scenes={}; this._bridgeName=''
     this._activeSceneByGroup={}
+    this._putQueue={} // key ('group:<id>' / 'light:<id>') -> {inFlight, pending:{path,body}}
   }
 
   async connect() {
@@ -2193,6 +2194,35 @@ class HueBridge {
     return res.json()
   }
 
+  // Serializes PUTs per target (group/light) so overlapping commands to the same target can't
+  // race each other over the network/mesh and land out of order. Coalesces bursts — if more
+  // commands arrive for the same target while one is in flight, only the LATEST is sent next
+  // (older intermediate ones are dropped, not queued), so a fast ramp or several macro blocks
+  // firing in quick succession can't pile up a backlog the bridge falls further and further
+  // behind on. Also surfaces Hue's own logical errors (HTTP 200 with an [{error:{...}}] body —
+  // e.g. an unreachable light) which fetch's .catch() never saw, so failures were silently lost.
+  async _putSerialized(key,path,body) {
+    let q=this._putQueue[key]
+    if (!q) q=this._putQueue[key]={inFlight:false,pending:null}
+    q.pending={path,body}
+    if (q.inFlight) return
+    q.inFlight=true
+    while (q.pending) {
+      const job=q.pending; q.pending=null
+      try {
+        const res=await fetch(`http://${this.ip}/api/${this.token}${job.path}`,{
+          method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(job.body)
+        })
+        const data=await res.json().catch(()=>null)
+        if (Array.isArray(data)) for (const entry of data)
+          if (entry?.error) console.error(`[${this.id}] Hue error on ${job.path}:`,entry.error.description||entry.error)
+      } catch(err) {
+        console.error(`[${this.id}] Hue PUT ${job.path}:`,err.message)
+      }
+    }
+    q.inFlight=false
+  }
+
   setLight(lightId,params) {
     const state={}
     if (params.on!==undefined) state.on=params.on
@@ -2203,7 +2233,7 @@ class HueBridge {
     if (params.transitiontime!==undefined) state.transitiontime=params.transitiontime
     if (this._lights[lightId]) Object.assign(this._lights[lightId].state,state)
     broadcast({type:'hue:light',id:this.id,lightId,state:this._lights[lightId]?.state})
-    this._put(`/lights/${lightId}/state`,state).catch(err=>console.error(`[${this.id}] Hue setLight:`,err.message))
+    this._putSerialized(`light:${lightId}`,`/lights/${lightId}/state`,state)
   }
 
   setGroup(groupId,params) {
@@ -2217,7 +2247,7 @@ class HueBridge {
     if (this._groups[groupId]) Object.assign(this._groups[groupId].action,action)
     if (params.on===false) delete this._activeSceneByGroup[groupId]
     broadcast({type:'hue:group',id:this.id,groupId,action:this._groups[groupId]?.action})
-    this._put(`/groups/${groupId}/action`,action).catch(err=>console.error(`[${this.id}] Hue setGroup:`,err.message))
+    this._putSerialized(`group:${groupId}`,`/groups/${groupId}/action`,action)
   }
 
   activateScene(sceneId) {
@@ -2226,7 +2256,9 @@ class HueBridge {
     this._activeSceneByGroup[groupId]=sceneId
     if (this._groups[groupId]) Object.assign(this._groups[groupId].action||(this._groups[groupId].action={}),{on:true})
     broadcast({type:'hue:scene',id:this.id,sceneId,groupId})
-    this._put(`/groups/${groupId}/action`,{scene:sceneId}).catch(err=>console.error(`[${this.id}] Hue activateScene:`,err.message))
+    // Same queue key as setGroup — keeps a scene activation and an immediately-following
+    // brightness set (e.g. the 300ms setTimeout in macro hue blocks) from racing each other.
+    this._putSerialized(`group:${groupId}`,`/groups/${groupId}/action`,{scene:sceneId})
   }
 
   async disconnect() {
@@ -4557,8 +4589,25 @@ let macroStore = loadMacros()
 const macroRunners = {}
 
 function getEomArousal() {
+  // Returns arousal as a 0-100 percentage, matching the "Threshold (%)" sliders
+  // in the macro editor (wait_eom/if_else/loop) — the raw reading is 0-255.
   const eom = Object.values(devices).find(d => d.type === 'eom' && d.status === 'connected')
-  return eom ? (eom._readings?.arousal ?? 0) : 0
+  const raw = eom ? (eom._readings?.arousal ?? 0) : 0
+  return Math.round(raw / 255 * 100)
+}
+
+// Returns the EoM's own live Sensitivity Threshold as a 0-100 percentage — lets a macro
+// block track whatever the user has it set to right now (tunable in real time on the EoM's
+// own slider) instead of a separate, static number baked into the macro block.
+function getEomThreshold() {
+  const eom = Object.values(devices).find(d => d.type === 'eom' && d.status === 'connected')
+  const raw = eom ? (eom._config?.sensitivity_threshold ?? 128) : 128
+  return Math.round(raw / 255 * 100)
+}
+
+function getEomDenialCount() {
+  const eom = Object.values(devices).find(d => d.type === 'eom' && d.status === 'connected')
+  return eom ? (eom._denialCount || 0) : 0
 }
 
 class MacroRunner {
@@ -4567,6 +4616,22 @@ class MacroRunner {
     this.id = macro.id
     this._abort = false
     this._waitResolve = null
+    // Tracks background (non-blocking) ramps by target key so a later block that sets the
+    // SAME device/channel/param directly can cancel the ramp instead of being immediately
+    // overwritten by its next tick. See _rampKey/_cancelRamp/_cancelAllRamps.
+    this._ramps = new Map()
+  }
+
+  _rampKey(kind, devId, sub) { return `${kind}:${devId || ''}:${sub || ''}` }
+
+  _cancelRamp(key) {
+    const tok = this._ramps.get(key)
+    if (tok) { tok.cancelled = true; this._ramps.delete(key) }
+  }
+
+  _cancelAllRamps() {
+    for (const tok of this._ramps.values()) tok.cancelled = true
+    this._ramps.clear()
   }
 
   stop() {
@@ -4645,9 +4710,9 @@ class MacroRunner {
 
       case 'wait_eom': {
         const gt = (cfg.cond || '').includes('>')
-        const thresh = cfg.thr ?? 70
         const deadline = (cfg.timeout > 0) ? Date.now() + cfg.timeout * 1000 : Infinity
         while (!this._abort) {
+          const thresh = cfg.liveThresh ? getEomThreshold() : (cfg.thr ?? 70)
           if (gt ? getEomArousal() > thresh : getEomArousal() < thresh) break
           if (Date.now() > deadline) break
           await this._sleep(500)
@@ -4704,7 +4769,8 @@ class MacroRunner {
 
       case 'if_else': {
         const gt = (cfg.cond || '').includes('>')
-        const yes = gt ? getEomArousal() > (cfg.thr ?? 80) : getEomArousal() < (cfg.thr ?? 80)
+        const ifThresh = cfg.liveThresh ? getEomThreshold() : (cfg.thr ?? 80)
+        const yes = gt ? getEomArousal() > ifThresh : getEomArousal() < ifThresh
         broadcast({ type: 'macro:label', id: this.macro.id, blockId, text: yes ? '→ YES' : '→ NO', color: yes ? '#4ade80' : '#f87171' })
         await this._sleep(350)
         await this._exec(next(yes ? 'oy' : 'on'), blockMap, adj, depth); break
@@ -4754,11 +4820,21 @@ class MacroRunner {
             broadcast({ type: 'macro:label', id: this.macro.id, blockId, text: `× ${i+1} / ${cfg.count||3}`, color: '#a5b4fc' })
             if (body) await this._exec(body, blockMap, adj, depth)
           }
+        } else if (cfg.mode === 'Until Denied Count =') {
+          const target = cfg.deniedCount ?? 5
+          let iter = 0
+          while (!this._abort) {
+            if (getEomDenialCount() >= target) break
+            iter++
+            broadcast({ type: 'macro:label', id: this.macro.id, blockId, text: `× ${iter}`, color: '#a5b4fc' })
+            if (body) await this._exec(body, blockMap, adj, depth)
+          }
         } else {
           const gt = (cfg.mode || '').includes('>')
           let iter = 0
           while (!this._abort) {
-            if (gt ? getEomArousal() > (cfg.thr ?? 75) : getEomArousal() < (cfg.thr ?? 75)) break
+            const loopThresh = cfg.liveThresh ? getEomThreshold() : (cfg.thr ?? 75)
+            if (gt ? getEomArousal() > loopThresh : getEomArousal() < loopThresh) break
             iter++
             broadcast({ type: 'macro:label', id: this.macro.id, blockId, text: `× ${iter}`, color: '#a5b4fc' })
             if (body) await this._exec(body, blockMap, adj, depth)
@@ -4827,17 +4903,16 @@ class MacroRunner {
         if (hue && hue.status === 'connected' && targetType && targetId) {
           const turnOff = cfg.action === 'off'
           if (targetType === 'scene') {
+            const grpId = hue._scenes?.[targetId]?.group
+            if (grpId) this._cancelRamp(this._rampKey('hue', hue.id, grpId))
             if (turnOff) {
-              const grpId = hue._scenes?.[targetId]?.group
               if (grpId) hue.setGroup(grpId, { on: false })
             } else {
               hue.activateScene(targetId)
-              if (cfg.bri !== undefined) {
-                const grpId = hue._scenes?.[targetId]?.group
-                if (grpId) setTimeout(() => hue.setGroup(grpId, { bri: cfg.bri }), 300)
-              }
+              if (cfg.bri !== undefined && grpId) setTimeout(() => hue.setGroup(grpId, { bri: cfg.bri }), 300)
             }
           } else if (targetType === 'group') {
+            this._cancelRamp(this._rampKey('hue', hue.id, targetId))
             if (turnOff) hue.setGroup(targetId, { on: false })
             else hue.setGroup(targetId, { on: true, bri: cfg.bri })
           }
@@ -4868,6 +4943,7 @@ class MacroRunner {
   }
 
   _stopAll() {
+    this._cancelAllRamps()
     for (const dev of Object.values(devices)) {
       if (dev.status !== 'connected') continue
       if (dev.type === 'coyote') { dev.setChannel('A', { intensity: 0 }); dev.setChannel('B', { intensity: 0 }) }
@@ -4882,32 +4958,32 @@ class MacroRunner {
     if (!dev || dev.status !== 'connected') return
     if (dev.type === 'coyote') {
       const ch = channel || 'A'
+      this._cancelRamp(this._rampKey('coyote', dev.id, ch))
       const upd = {}
       if (cfg.waveform) upd.waveform = cfg.waveform
       if (cfg.intensity !== undefined) upd.intensity = Math.round(cfg.intensity)
       if (cfg.speed !== undefined) upd.speed = cfg.speed
       dev.setChannel(ch, upd)
     } else if (dev.type === 'estim' && dev.setChannel) {
-      if (cfg.powerA !== undefined) dev.setChannel('A', { power: cfg.powerA })
-      if (cfg.powerB !== undefined) dev.setChannel('B', { power: cfg.powerB })
+      if (cfg.powerA !== undefined) { this._cancelRamp(this._rampKey('estim', dev.id, 'A')); dev.setChannel('A', { power: cfg.powerA }) }
+      if (cfg.powerB !== undefined) { this._cancelRamp(this._rampKey('estim', dev.id, 'B')); dev.setChannel('B', { power: cfg.powerB }) }
       if (cfg.mode !== undefined) dev.setMode?.(cfg.mode)
     } else if (dev.type === 'nimble') {
-      if (cfg.speed !== undefined && dev.setMotor) dev.setMotor(cfg.speed)
+      if (cfg.speed !== undefined && dev.setMotor) { this._cancelRamp(this._rampKey('nimble', dev.id, 'Speed (SPM)')); dev.setMotor(cfg.speed) }
     } else if (dev.type === 'hue') {
       const [targetType, targetId] = (block.channel || '').split(':')
       const turnOff = cfg.action === 'off'
       if (targetType === 'scene') {
+        const grpId = dev._scenes?.[targetId]?.group
+        if (grpId) this._cancelRamp(this._rampKey('hue', dev.id, grpId))
         if (turnOff) {
-          const grpId = dev._scenes?.[targetId]?.group
           if (grpId) dev.setGroup(grpId, { on: false })
         } else {
           dev.activateScene(targetId)
-          if (cfg.bri !== undefined) {
-            const grpId = dev._scenes?.[targetId]?.group
-            if (grpId) setTimeout(() => dev.setGroup(grpId, { bri: cfg.bri }), 300)
-          }
+          if (cfg.bri !== undefined && grpId) setTimeout(() => dev.setGroup(grpId, { bri: cfg.bri }), 300)
         }
       } else if (targetType === 'group') {
+        this._cancelRamp(this._rampKey('hue', dev.id, targetId))
         if (turnOff) {
           dev.setGroup(targetId, { on: false })
         } else {
@@ -4938,12 +5014,17 @@ class MacroRunner {
     if (!groupId) return
     const total = cfg.dur || 30
     const stepMs = durMs / steps
-    for (let i = 0; i <= steps && !this._abort; i++) {
-      const t = i / steps, val = Math.round(from + (to - from) * t)
-      broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: val, from, to, elapsed: t * total, total })
-      hue.setGroup(groupId, { bri: val, on: true, transitiontime: Math.round(stepMs / 100) })
-      if (i < steps) await this._sleep(stepMs)
-    }
+    const key = this._rampKey('hue', hue.id, groupId)
+    const token = { cancelled: false }
+    this._cancelRamp(key); this._ramps.set(key, token)
+    try {
+      for (let i = 0; i <= steps && !this._abort && !token.cancelled; i++) {
+        const t = i / steps, val = Math.round(from + (to - from) * t)
+        broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: val, from, to, elapsed: t * total, total })
+        hue.setGroup(groupId, { bri: val, on: true, transitiontime: Math.round(stepMs / 100) })
+        if (i < steps) await this._sleep(stepMs)
+      }
+    } finally { if (this._ramps.get(key) === token) this._ramps.delete(key) }
   }
 
   async _doEstimRamp(block) {
@@ -4952,16 +5033,21 @@ class MacroRunner {
     const from = cfg.from ?? 0, to = cfg.to ?? 80, durMs = (cfg.dur || 30) * 1000
     const steps = Math.max(10, Math.round(durMs / 200))
     const total = cfg.dur || 30
-    for (let i = 0; i <= steps && !this._abort; i++) {
-      const t = i / steps, val = Math.round(from + (to - from) * t)
-      broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: val, from, to, elapsed: t * total, total })
-      if (estim?.status === 'connected' && estim.setChannel) {
-        const ch = cfg.channel || 'Both'
-        if (ch === 'A' || ch === 'Both') estim.setChannel('A', { power: val })
-        if (ch === 'B' || ch === 'Both') estim.setChannel('B', { power: val })
+    const ch = cfg.channel || 'Both'
+    const keys = estim ? (ch === 'Both' ? [this._rampKey('estim', estim.id, 'A'), this._rampKey('estim', estim.id, 'B')] : [this._rampKey('estim', estim.id, ch)]) : []
+    const token = { cancelled: false }
+    keys.forEach(k => { this._cancelRamp(k); this._ramps.set(k, token) })
+    try {
+      for (let i = 0; i <= steps && !this._abort && !token.cancelled; i++) {
+        const t = i / steps, val = Math.round(from + (to - from) * t)
+        broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: val, from, to, elapsed: t * total, total })
+        if (estim?.status === 'connected' && estim.setChannel) {
+          if (ch === 'A' || ch === 'Both') estim.setChannel('A', { power: val })
+          if (ch === 'B' || ch === 'Both') estim.setChannel('B', { power: val })
+        }
+        if (i < steps) await this._sleep(durMs / steps)
       }
-      if (i < steps) await this._sleep(durMs / steps)
-    }
+    } finally { keys.forEach(k => { if (this._ramps.get(k) === token) this._ramps.delete(k) }) }
   }
 
   async _doNimbleRamp(block) {
@@ -4970,18 +5056,23 @@ class MacroRunner {
     const from = cfg.from ?? 20, to = cfg.to ?? 120, durMs = (cfg.dur || 30) * 1000
     const steps = Math.max(10, Math.round(durMs / 200))
     const total = cfg.dur || 30
-    for (let i = 0; i <= steps && !this._abort; i++) {
-      const t = i / steps, val = from + (to - from) * t
-      broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: Math.round(val), from, to, elapsed: t * total, total })
-      if (nimble?.status === 'connected') {
-        const param = cfg.param || 'Speed (SPM)'
-        if      (param === 'Speed (SPM)')  nimble.setOscillation({ speed:   val / 60 })
-        else if (param === 'Depth')        nimble.setOscillation({ depth:   Math.round(val) })
-        else if (param === 'Nurture')      nimble.setOscillation({ texture: Math.round(val) })
-        else if (param === 'Nature (Hz)')  nimble.setOscillation({ nature:  Math.round(val * 10) / 10 })
+    const param = cfg.param || 'Speed (SPM)'
+    const key = nimble ? this._rampKey('nimble', nimble.id, param) : null
+    const token = { cancelled: false }
+    if (key) { this._cancelRamp(key); this._ramps.set(key, token) }
+    try {
+      for (let i = 0; i <= steps && !this._abort && !token.cancelled; i++) {
+        const t = i / steps, val = from + (to - from) * t
+        broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id, value: Math.round(val), from, to, elapsed: t * total, total })
+        if (nimble?.status === 'connected') {
+          if      (param === 'Speed (SPM)')  nimble.setOscillation({ speed:   val / 60 })
+          else if (param === 'Depth')        nimble.setOscillation({ depth:   Math.round(val) })
+          else if (param === 'Nurture')      nimble.setOscillation({ texture: Math.round(val) })
+          else if (param === 'Nature (Hz)')  nimble.setOscillation({ nature:  Math.round(val * 10) / 10 })
+        }
+        if (i < steps) await this._sleep(durMs / steps)
       }
-      if (i < steps) await this._sleep(durMs / steps)
-    }
+    } finally { if (key && this._ramps.get(key) === token) this._ramps.delete(key) }
   }
 
   async _doRamp(block) {
@@ -4990,27 +5081,37 @@ class MacroRunner {
     const steps = Math.max(10, Math.round(durMs / 200))
     const dev = devRef ? devices[devRef] : null
     const total = cfg.dur || 60
-    for (let i = 0; i <= steps && !this._abort; i++) {
-      const t = i / steps, val = from + (to - from) * t
-      broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id,
-                  value: Math.round(val), from, to, elapsed: t * total, total })
-      if (dev) {
-        // Ramp specific device
-        if (dev.type === 'coyote' && dev.status === 'connected')
-          dev.setChannel(channel || 'A', { intensity: Math.round(val) })
-        else if (dev.type === 'estim' && dev.status === 'connected' && dev.setChannel) {
-          dev.setChannel('A', { power: Math.round(val) }); dev.setChannel('B', { power: Math.round(val) })
-        }
-      } else {
-        // No device specified — ramp all connected coyotes
-        for (const d of Object.values(devices))
-          if (d.type === 'coyote' && d.status === 'connected') {
-            d.setChannel('A', { intensity: Math.round(val) })
-            d.setChannel('B', { intensity: Math.round(val) })
+    const keys = dev
+      ? (dev.type === 'coyote' ? [this._rampKey('coyote', dev.id, channel || 'A')]
+        : dev.type === 'estim' ? [this._rampKey('estim', dev.id, 'A'), this._rampKey('estim', dev.id, 'B')]
+        : [])
+      : Object.values(devices).filter(d => d.type === 'coyote' && d.status === 'connected')
+          .flatMap(d => [this._rampKey('coyote', d.id, 'A'), this._rampKey('coyote', d.id, 'B')])
+    const token = { cancelled: false }
+    keys.forEach(k => { this._cancelRamp(k); this._ramps.set(k, token) })
+    try {
+      for (let i = 0; i <= steps && !this._abort && !token.cancelled; i++) {
+        const t = i / steps, val = from + (to - from) * t
+        broadcast({ type: 'macro:ramp', id: this.macro.id, blockId: block.id,
+                    value: Math.round(val), from, to, elapsed: t * total, total })
+        if (dev) {
+          // Ramp specific device
+          if (dev.type === 'coyote' && dev.status === 'connected')
+            dev.setChannel(channel || 'A', { intensity: Math.round(val) })
+          else if (dev.type === 'estim' && dev.status === 'connected' && dev.setChannel) {
+            dev.setChannel('A', { power: Math.round(val) }); dev.setChannel('B', { power: Math.round(val) })
           }
+        } else {
+          // No device specified — ramp all connected coyotes
+          for (const d of Object.values(devices))
+            if (d.type === 'coyote' && d.status === 'connected') {
+              d.setChannel('A', { intensity: Math.round(val) })
+              d.setChannel('B', { intensity: Math.round(val) })
+            }
+        }
+        if (i < steps) await this._sleep(durMs / steps)
       }
-      if (i < steps) await this._sleep(durMs / steps)
-    }
+    } finally { keys.forEach(k => { if (this._ramps.get(k) === token) this._ramps.delete(k) }) }
   }
 }
 

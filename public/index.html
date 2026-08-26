@@ -8678,9 +8678,9 @@ const BDef = {
     sm:c=>`${c.from??20}%→${c.to??100}% over ${c.dur||30}s${c.block?' ⏸':''}`
   },
   wait_eom: { label:'WAIT: EOM', icon:'◈', bg:'#261500', bd:'#f97316', tx:'#fdba74', ports:{i:['i'],o:['o']},
-    dc:{cond:'Arousal >',thr:70,timeout:0},
-    sc:[{k:'cond',l:'Condition',t:'sel',opts:['Arousal >','Arousal <']},{k:'thr',l:'Threshold (%)',t:'range',min:0,max:100},{k:'timeout',l:'Timeout (s, 0=none)',t:'num',min:0}],
-    sm:c=>`EOM ${c.cond||'Arousal >'} ${c.thr??70}%`
+    dc:{cond:'Arousal >',thr:70,liveThresh:false,timeout:0},
+    sc:[{k:'cond',l:'Condition',t:'sel',opts:['Arousal >','Arousal <']},{k:'thr',l:'Threshold (%)',t:'range',min:0,max:100},{k:'liveThresh',l:"Use EoM's live Sensitivity Threshold instead",t:'chk'},{k:'timeout',l:'Timeout (s, 0=none)',t:'num',min:0}],
+    sm:c=>c.liveThresh?`EOM ${c.cond||'Arousal >'} live threshold`:`EOM ${c.cond||'Arousal >'} ${c.thr??70}%`
   },
   wait_manual: { label:'WAIT: MANUAL', icon:'⏸', bg:'#222000', bd:'#fbbf24', tx:'#fde68a', ports:{i:['i'],o:['o']},
     dc:{prompt:'Continue when ready'},
@@ -8718,9 +8718,9 @@ const BDef = {
     sm:c=>c.mode==='Tilt Angle'?`Tilt ±${c.sensitivity??15} on ${c.axis||'Any'}`:`${c.button||'Any'} pressed?`
   },
   if_else: { label:'IF / ELSE', icon:'⋈', bg:'#1e0628', bd:'#e879f9', tx:'#f0abfc', ports:{i:['i'],o:['oy','on']},
-    dc:{cond:'EOM Arousal >',thr:80},
-    sc:[{k:'cond',l:'Condition',t:'sel',opts:['EOM Arousal >','EOM Arousal <']},{k:'thr',l:'Threshold (%)',t:'range',min:0,max:100}],
-    sm:c=>`If ${c.cond||'EOM Arousal >'} ${c.thr??80}%`
+    dc:{cond:'EOM Arousal >',thr:80,liveThresh:false},
+    sc:[{k:'cond',l:'Condition',t:'sel',opts:['EOM Arousal >','EOM Arousal <']},{k:'thr',l:'Threshold (%)',t:'range',min:0,max:100},{k:'liveThresh',l:"Use EoM's live Sensitivity Threshold instead",t:'chk'}],
+    sm:c=>c.liveThresh?`If ${c.cond||'EOM Arousal >'} live threshold`:`If ${c.cond||'EOM Arousal >'} ${c.thr??80}%`
   },
   run_macro: { label:'RUN MACRO', icon:'▷', bg:'#0a1a10', bd:'#34d399', tx:'#6ee7b7', ports:{i:['i'],o:['o']},
     dc:{macroId:''},
@@ -8728,9 +8728,9 @@ const BDef = {
     sm:c=>{ const m=window.ME?.macros?.find(x=>x.id===c.macroId); return m?`▷ ${m.name}`:'— select macro —' }
   },
   loop: { label:'LOOP', icon:'↺', bg:'#0c0c1a', bd:'#818cf8', tx:'#a5b4fc', ports:{i:['i'],o:['ob','od']},
-    dc:{mode:'Repeat N times',count:3,thr:75},
-    sc:[{k:'mode',l:'Loop mode',t:'sel',opts:['Repeat N times','Until EOM >','Until EOM <']},{k:'count',l:'Repeat count',t:'num',min:1},{k:'thr',l:'EOM threshold %',t:'range',min:0,max:100}],
-    sm:c=>c.mode==='Repeat N times'?`×${c.count||3}`:`Until EOM ${(c.mode||'').includes('>')?'>':'<'} ${c.thr??75}%`
+    dc:{mode:'Repeat N times',count:3,thr:75,liveThresh:false,deniedCount:5},
+    sc:[{k:'mode',l:'Loop mode',t:'sel',opts:['Repeat N times','Until EOM >','Until EOM <','Until Denied Count =']},{k:'count',l:'Repeat count',t:'num',min:1},{k:'thr',l:'EOM threshold %',t:'range',min:0,max:100},{k:'liveThresh',l:"Use EoM's live Sensitivity Threshold instead",t:'chk'},{k:'deniedCount',l:'Denied count',t:'num',min:1}],
+    sm:c=>c.mode==='Repeat N times'?`×${c.count||3}`:c.mode==='Until Denied Count ='?`Until Denied = ${c.deniedCount??5}`:c.liveThresh?`Until EOM ${(c.mode||'').includes('>')?'>':'<'} live threshold`:`Until EOM ${(c.mode||'').includes('>')?'>':'<'} ${c.thr??75}%`
   },
 }
 
@@ -9018,12 +9018,12 @@ document.addEventListener('keydown',e=>{
 const ME_HINTS = {
   delay: 'Execution pauses here for the set duration before moving to the next block.',
   ramp: 'Ramps the intensity of the selected device channel. Non-blocking fires in background — macro continues immediately.',
-  wait_eom: 'Execution pauses until the EOM arousal reading crosses the threshold. Set a timeout to avoid waiting forever.',
+  wait_eom: 'Execution pauses until the EOM arousal reading crosses the threshold. Set a timeout to avoid waiting forever. Tick "Use EoM\'s live Sensitivity Threshold" to track whatever the EoM\'s own slider is set to in real time instead of a fixed number here.',
   wait_manual: 'Shows a CONTINUE button in the web UI. Macro pauses until you click it.',
   wait_pawprints: 'Pauses until a PawPrints button is pressed or a tilt angle is reached. Skips if no device is connected.',
   if_pawprints: 'Button mode: waits for any press, YES if it matches the configured button, NO if not. Tilt mode: instant snapshot — YES if currently past threshold, NO if not.',
-  if_else: 'Branches based on current EOM arousal. YES = condition met, NO = condition not met.',
-  loop: 'LOOP port goes to the first block of the loop body. DONE port continues when the loop exits.',
+  if_else: 'Branches based on current EOM arousal. YES = condition met, NO = condition not met. Tick "Use EoM\'s live Sensitivity Threshold" to compare against whatever the EoM\'s own slider is set to right now instead of a fixed number here.',
+  loop: 'LOOP port goes to the first block of the loop body. DONE port continues when the loop exits. In an "Until EOM" mode, tick "Use EoM\'s live Sensitivity Threshold" to track whatever the EoM\'s own slider is set to in real time instead of a fixed number here. "Until Denied Count =" exits once the EoM\'s live Denied counter reaches the target — hit Reset on the EoM card first if you want to count from zero for this run.',
 }
 
 function renderMeCfg() {

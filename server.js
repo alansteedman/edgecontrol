@@ -987,16 +987,24 @@ class CoyoteDevice {
       // Race against 20s timeout — device.connect() can hang indefinitely if the device
       // is discoverable but not accepting connections (firmware quirk / BT stack issue)
       console.log(`[${this.id}] Connecting...`)
+      const tConnect = Date.now()
       await Promise.race([
         device.connect(),
         new Promise((_,rej) => setTimeout(()=>rej(new Error('connect timeout: device not responding after 20s')), 20000))
       ])
-      // Race device.gatt() against a 15s timeout — waitPropChange(ServicesResolved) can hang
-      // if the device disconnects before GATT discovery completes
+      console.log(`[${this.id}] Connected in ${Date.now()-tConnect}ms, discovering services...`)
+      // Race device.gatt() against a timeout — waitPropChange(ServicesResolved) can hang
+      // if the device disconnects before GATT discovery completes. A device BlueZ has never
+      // connected to before has no cached GATT attribute table and has to fully enumerate every
+      // service/characteristic from scratch, which is measurably slower than a device it already
+      // has a cache for (e.g. reconnecting the same physical unit after a firmware update) — so
+      // this is deliberately generous rather than tuned to the fast/cached case.
+      const tGatt = Date.now()
       this.gattServer = await Promise.race([
         device.gatt(),
-        new Promise((_,rej) => setTimeout(()=>rej(new Error('GATT timeout: ServicesResolved took >15s')), 15000))
+        new Promise((_,rej) => setTimeout(()=>rej(new Error('GATT timeout: ServicesResolved took >40s')), 40000))
       ])
+      console.log(`[${this.id}] Services resolved in ${Date.now()-tGatt}ms`)
       const svc = await this.gattServer.getPrimaryService('0000180c-0000-1000-8000-00805f9b34fb')
       this.writeChar  = await svc.getCharacteristic('0000150a-0000-1000-8000-00805f9b34fb')
       this.notifyChar = await svc.getCharacteristic('0000150b-0000-1000-8000-00805f9b34fb')

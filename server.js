@@ -932,8 +932,17 @@ class CoyoteDevice {
       while (_bleConnecting > 0) { await new Promise(r=>setTimeout(r,2000)) }
       if (!await adp.isDiscovering()) await adp.startDiscovery()
       const foundResult = await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('Device not found in 15s')), 15000)
+        // stopped guards the recursive setTimeout(check, 500) below — without it, the
+        // 15s timeout firing only rejects this promise, it doesn't stop check() from
+        // rescheduling itself. Every failed connect attempt was leaving an immortal
+        // polling loop running forever in the background (still calling adp.devices()
+        // + introspecting every visible BLE address every 500ms), and since this runs
+        // on every retry, they stacked up — the real cause of CPU/performance degrading
+        // over time on a device that can't reconnect, only cleared by a full restart.
+        let stopped = false
+        const timer = setTimeout(() => { stopped = true; reject(new Error('Device not found in 15s')) }, 15000)
         const check = async () => {
+          if (stopped) return
           try {
             const addrs = await adp.devices()
             for (const addr of addrs) {
@@ -950,12 +959,12 @@ class CoyoteDevice {
                              addr.toLowerCase() === (other._connectedAddr || other.mac || '')
                   )
                   if (alreadyUsed) { console.log(`[${this.id}] Skipping ${addr} — already connected to ${name}`); continue }
-                  clearTimeout(timer); console.log(`[${this.id}] Found: ${name} at ${addr}`); resolve({d, addr}); return
+                  stopped = true; clearTimeout(timer); console.log(`[${this.id}] Found: ${name} at ${addr}`); resolve({d, addr}); return
                 }
               } catch {}
             }
           } catch {}
-          setTimeout(check, 500)
+          if (!stopped) setTimeout(check, 500)
         }
         check()
       })
@@ -1301,11 +1310,17 @@ class PawPrintsDevice {
       while (_bleConnecting > 0) { await new Promise(r=>setTimeout(r,2000)) }
       if (!await adp.isDiscovering()) await adp.startDiscovery()
       const foundResult=await new Promise((resolve,reject)=>{
-        const timer=setTimeout(()=>reject(new Error('PawPrints not found in 25s')),25000)
+        // stopped guards the recursive setTimeout(check,500) below — same fix as
+        // CoyoteDevice.connect(): without it, a timed-out/rejected attempt leaves the
+        // polling loop running forever, still introspecting every visible BLE address
+        // every 500ms, and every failed retry stacks another one on top.
+        let stopped = false
+        const timer=setTimeout(()=>{ stopped = true; reject(new Error('PawPrints not found in 25s')) },25000)
         const check=async()=>{
+          if (stopped) return
           // Yield the chip immediately if something else is connecting
           if (_bleConnecting > 0) {
-            clearTimeout(timer)
+            stopped = true; clearTimeout(timer)
             await adp.stopDiscovery().catch(()=>{})
             reject(new Error('BLE busy, will retry'))
             return
@@ -1332,12 +1347,12 @@ class PawPrintsDevice {
                   // RSSI=0/null means device is in BlueZ cache but not currently advertising
                   const rssi = await d.getRSSI().catch(()=>null)
                   if (!rssi) continue
-                  clearTimeout(timer); console.log(`[${this.id}] Found: ${name||'(no name)'} at ${addr} (RSSI ${rssi})`); resolve({d,addr}); return
+                  stopped = true; clearTimeout(timer); console.log(`[${this.id}] Found: ${name||'(no name)'} at ${addr} (RSSI ${rssi})`); resolve({d,addr}); return
                 }
               } catch {}
             }
           } catch {}
-          setTimeout(check,500)
+          if (!stopped) setTimeout(check,500)
         }
         check()
       })
@@ -1963,6 +1978,19 @@ class EomDevice {
                 this._readingsReceived = true
               }
               this._readings=msg.readings
+              // Track the peak-arousal reading seen since the last broadcast — the
+              // throttle below only sends one snapshot per 100ms window, but EoM can
+              // send up to 50Hz, so a brief arousal spike that crosses the stop
+              // threshold and decays again within that window was being silently
+              // dropped: the browser only ever saw whatever _readings happened to be
+              // exactly when the delayed broadcast fired, not the actual peak. This is
+              // why the arousal bar could visibly fail to reach the threshold mark on
+              // the web UI/HDMI display even though the motor really did stop — the
+              // Stream Deck reads the live device object directly instead of going
+              // through this broadcast, so it never had this gap.
+              if (!this._peakReadings || (msg.readings.arousal||0) >= (this._peakReadings.arousal||0)) {
+                this._peakReadings = msg.readings
+              }
               // Denial detection — count transitions into TRIGGERED/ORGASM_DETECTED
               const _dstate=(msg.readings.detectState||'IDLE')
               this._lastDetectState=_dstate
@@ -1970,7 +1998,16 @@ class EomDevice {
               const _motorLive = msg.readings.motor||0
               if (this._lastMotorLive>30 && _motorLive===0 && this._mode==='automatic') {
                 this._denialCount++
-                broadcast({ type:'eom:denial', id:this.id, count:this._denialCount })
+                // Carry the readings that actually triggered this denial along with it —
+                // this fires immediately (unthrottled, unlike eom:readings below), and the
+                // Stream Deck's LCD gets an equally immediate forced redraw from the same
+                // event, reading the live device object directly. The web UI/HDMI arousal
+                // bar was only redrawing on this event too, but without the readings that
+                // caused it — so it just showed whatever stale value the separate, still
+                // 100ms-throttled eom:readings broadcast last delivered, which routinely
+                // hadn't caught up yet. That's the actual gap: not a scale mismatch, a race
+                // between two independently-timed broadcasts for what should be one moment.
+                broadcast({ type:'eom:denial', id:this.id, count:this._denialCount, readings:this._readings })
               }
               this._lastMotorLive=_motorLive
               // Rate-limit browser broadcasts to 10Hz — EoM sends up to 50Hz in auto mode
@@ -1978,7 +2015,8 @@ class EomDevice {
               if (!this._readingsThrottle) {
                 this._readingsThrottle = setTimeout(() => {
                   this._readingsThrottle = null
-                  broadcast({ type:'eom:readings', id:this.id, readings:this._readings })
+                  broadcast({ type:'eom:readings', id:this.id, readings:this._peakReadings || this._readings })
+                  this._peakReadings = null
                 }, 100)
               }
             }
@@ -1996,6 +2034,7 @@ class EomDevice {
         })
         ws.on('close', () => {
           if (this._readingsThrottle) { clearTimeout(this._readingsThrottle); this._readingsThrottle=null }
+          this._peakReadings = null
           this._readingsReceived = false
           this._ws=null
           if (this.status==='connected') {

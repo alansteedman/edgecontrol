@@ -117,7 +117,7 @@ body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;font-size
 .eom-denial-reset{font-size:10px;font-weight:700;color:#555;background:#111;border:1px solid #2a1010;border-radius:5px;padding:4px 10px;cursor:pointer;letter-spacing:.3px;transition:color .1s}
 .eom-denial-reset:hover{color:#f87171;border-color:#f87171}
 .eom-arousal-bar{height:6px;background:#1a2a1a;border-radius:3px;overflow:hidden}
-.eom-arousal-fill{height:100%;background:linear-gradient(90deg,#14532d,#4ade80);border-radius:3px;transition:width .4s ease}
+.eom-arousal-fill{height:100%;background:linear-gradient(90deg,#14532d,#4ade80);border-radius:3px}
 .eom-detect-row{display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap}
 .eom-detect-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:6px;letter-spacing:.4px;text-transform:uppercase}
 .ds-IDLE{background:#1a1a1a;color:#444}
@@ -1693,7 +1693,11 @@ function handle(m) {
     case 'eom:config':
       if(S.devices[m.id]){ S.devices[m.id].config=m.config; eomUpdateConfigUI(m.id,m.config) } break
     case 'eom:denial':
-      if(S.devices[m.id]){ S.devices[m.id].denialCount=m.count; eomUpdateDenials(m.id,m.count) } break
+      if(S.devices[m.id]){
+        S.devices[m.id].denialCount=m.count
+        if(m.readings){ S.devices[m.id].readings=m.readings; eomUpdateReadings(m.id,m.readings) }
+        eomUpdateDenials(m.id,m.count)
+      } break
     case 'device:added':
       S.devices[m.device.id]=m.device; renderAll(); lg(`Added: ${m.device.name}`); break
     case 'device:removed':
@@ -9770,6 +9774,7 @@ function hdmiLayoutEditor(layout) {
   const coyotes = Object.values(S.devices).filter(d=>d.type==='coyote')
   const cameras  = Object.values(S.devices).filter(d=>d.type==='camera')
   const mediaPlayers = Object.values(S.devices).filter(d=>d.type==='media')
+  const eoms = Object.values(S.devices).filter(d=>d.type==='eom')
   const groups   = S.groups || []
 
   const paletteHtml = `
@@ -9809,6 +9814,15 @@ function hdmiLayoutEditor(layout) {
                data-wtype="media" data-devid="${d.id}"
                style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
             <span>🎬</span>${d.name}
+          </div>`).join('')}
+      ` : ''}
+      ${eoms.length ? `
+        <div style="font-size:11px;color:#4a6a8a;margin:8px 0 4px">Edge-o-Matic</div>
+        ${eoms.map(d => `
+          <div class="hdmi-pal-item" draggable="true"
+               data-wtype="eom" data-devid="${d.id}"
+               style="background:#181818;border:1px solid #2a2a2a;border-radius:6px;padding:7px 10px;margin-bottom:4px;cursor:grab;font-size:12px;color:#c0c0c0;display:flex;align-items:center;gap:6px">
+            <span style="color:#2ecc71">◈</span>${d.name}
           </div>`).join('')}
       ` : ''}
       ${_hdmiMacros.length ? `
@@ -9963,6 +9977,7 @@ function bindHdmiDragDrop(layout) {
         if (_hdmiDragPalette.type==='group')   { w.groupId=_hdmiDragPalette.groupId }
         if (_hdmiDragPalette.type==='camera')  { w.deviceId=_hdmiDragPalette.deviceId }
         if (_hdmiDragPalette.type==='media')   { w.deviceId=_hdmiDragPalette.deviceId }
+        if (_hdmiDragPalette.type==='eom')     { w.deviceId=_hdmiDragPalette.deviceId }
         if (_hdmiDragPalette.type==='macro')   { w.macroId=_hdmiDragPalette.macroId; w.macroName=_hdmiDragPalette.macroName }
         if (_hdmiDragPalette.type==='text')    { w.text = prompt('Text to display:', '') || '' }
         widgets.push(w)

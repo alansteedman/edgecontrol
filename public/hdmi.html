@@ -66,6 +66,9 @@ function handle(m) {
   if (m.type === 'device:tick') {
     if (S.devices[m.id]) { S.devices[m.id].ticks = m.ticks; S.devices[m.id].paused = m.paused; S.devices[m.id].tickAt = performance.now(); S.devices[m.id].tickIntervalMs = m.intervalMs || 100 }
   }
+  if (m.type === 'eom:readings') { if (S.devices[m.id]) { S.devices[m.id].readings = m.readings; updateLiveWidgets(m.id) } }
+  if (m.type === 'eom:denial')   { if (S.devices[m.id]) { S.devices[m.id].denialCount = m.count; if (m.readings) S.devices[m.id].readings = m.readings; updateLiveWidgets(m.id) } }
+  if (m.type === 'eom:config')   { if (S.devices[m.id]) { S.devices[m.id].config = m.config; updateLiveWidgets(m.id) } }
   if (m.type === 'device:added')   { m.device.tickAt = performance.now(); S.devices[m.device.id] = m.device; renderHdmi() }
   if (m.type === 'device:removed') { delete S.devices[m.id]; renderHdmi() }
   if (m.type === 'device:updated') { S.devices[m.device.id] = m.device; renderHdmi() }
@@ -170,6 +173,7 @@ function buildWidget(w) {
   if (w.type === 'bodymap') return buildBodyMapWidget(w)
   if (w.type === 'media')   return buildMediaWidget(w)
   if (w.type === 'macro')   return buildMacroWidget(w)
+  if (w.type === 'eom')     return buildEomWidget(w)
   const el = document.createElement('div')
   el.className = 'w'
   return el
@@ -224,6 +228,89 @@ function buildChannelWidget(w) {
     </div>`
   setTimeout(() => el.querySelectorAll('.dc').forEach(c => drawDial(c)), 0)
   return el
+}
+
+// ── Edge-o-Matic — mirrors the Stream Deck's EoM LCD strip, plus a large
+// standalone denied counter (the small "DENIED: N" text on the Stream Deck
+// strip is easy to miss at a glance from across the room) ──────────────────
+function eomVals(dev) {
+  const readings = dev?.readings || {}
+  const cfg = dev?.config || {}
+  const mode = dev?.mode || 'manual'
+  const arousal = Math.round((readings.arousal || 0) / 255 * 100)
+  const motor = readings.motor || 0
+  const thresh = cfg.sensitivity_threshold ?? 128
+  const coolRaw = cfg.cooldown_delay_ms ?? 1000
+  return {
+    connected: dev?.status === 'connected',
+    mode, arousal, motor, thresh,
+    threshPct: Math.max(0, Math.min(1, thresh / 255)),
+    denials: dev?.denialCount || 0,
+    motorSpeed: dev?.motorSpeed ?? 0,
+    decay: cfg.arousal_decay_rate ?? 100,
+    coolStr: coolRaw >= 1000 ? `${(coolRaw/1000).toFixed(1)}s` : `${coolRaw}ms`,
+  }
+}
+
+function buildEomWidget(w) {
+  const dev = S.devices[w.deviceId]
+  const v = eomVals(dev)
+  const el = document.createElement('div')
+  el.className = 'w' + (v.connected ? '' : ' w-idle')
+  el.dataset.widgetId = w.id
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;margin-bottom:6px;flex-shrink:0">
+      <span class="w-title">${dev?.name || 'Edge-o-Matic'}</span>
+      <span class="w-badge eom-mode" style="background:${v.mode==='automatic'?'#0f3320':'#161c2c'};color:${v.mode==='automatic'?'#2ecc71':'#5a6a8a'}">${v.mode==='automatic'?'● AUTO':'○ MANUAL'}</span>
+      <div style="margin-left:auto;text-align:right;line-height:1.1">
+        <div style="font-size:9px;color:#5a6a8a;letter-spacing:.5px">DENIED</div>
+        <div class="eom-denied" style="font-size:${v.denials>0?'30px':'22px'};font-weight:700;color:${v.denials>0?'#e74c3c':'#2a3555'}">${v.denials}</div>
+      </div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:10px;min-height:0">
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#7a8ab0;margin-bottom:4px;font-family:monospace">
+          <span>AROUSAL <b class="eom-arousal-pct" style="color:#2ecc71">${v.arousal}%</b></span>
+          <span>MOTOR <b class="eom-motor-pct" style="color:#f39c12">${v.motor}%</b></span>
+        </div>
+        <div style="position:relative;height:20px;background:#0a0f1a;border-radius:4px;overflow:hidden">
+          <div class="eom-arousal-bar" style="position:absolute;inset:0;width:${v.arousal}%;background:linear-gradient(90deg,#27ae60,#f39c12 60%,#c0392b)"></div>
+          <div class="eom-thresh-tick" style="position:absolute;top:-2px;bottom:-2px;left:${v.threshPct*100}%;width:2px;background:#e74c3c"></div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;text-align:center;font-family:monospace">
+        <div><div class="eom-kv" style="font-size:14px;font-weight:700;color:#95a5a6">${v.motorSpeed}%</div><div style="font-size:8px;color:#5a6a8a;margin-top:2px">MOTOR SPD</div></div>
+        <div><div class="eom-kv" style="font-size:14px;font-weight:700;color:#1abc9c">${v.thresh}</div><div style="font-size:8px;color:#5a6a8a;margin-top:2px">THRESHOLD</div></div>
+        <div><div class="eom-kv" style="font-size:14px;font-weight:700;color:#3498db">${v.decay}</div><div style="font-size:8px;color:#5a6a8a;margin-top:2px">DECAY</div></div>
+        <div><div class="eom-kv" style="font-size:14px;font-weight:700;color:#e67e22">${v.coolStr}</div><div style="font-size:8px;color:#5a6a8a;margin-top:2px">COOL OFF</div></div>
+      </div>
+    </div>`
+  return el
+}
+
+function refreshEomWidget(el, w) {
+  const dev = S.devices[w.deviceId]
+  const v = eomVals(dev)
+  el.classList.toggle('w-idle', !v.connected)
+  const mode = el.querySelector('.eom-mode')
+  if (mode) {
+    mode.textContent = v.mode === 'automatic' ? '● AUTO' : '○ MANUAL'
+    mode.style.background = v.mode === 'automatic' ? '#0f3320' : '#161c2c'
+    mode.style.color = v.mode === 'automatic' ? '#2ecc71' : '#5a6a8a'
+  }
+  const denied = el.querySelector('.eom-denied')
+  if (denied) {
+    denied.textContent = v.denials
+    denied.style.fontSize = v.denials > 0 ? '30px' : '22px'
+    denied.style.color = v.denials > 0 ? '#e74c3c' : '#2a3555'
+  }
+  const ap = el.querySelector('.eom-arousal-pct'); if (ap) ap.textContent = v.arousal + '%'
+  const mp = el.querySelector('.eom-motor-pct');   if (mp) mp.textContent = v.motor + '%'
+  const bar = el.querySelector('.eom-arousal-bar'); if (bar) bar.style.width = v.arousal + '%'
+  const tick = el.querySelector('.eom-thresh-tick'); if (tick) tick.style.left = (v.threshPct*100) + '%'
+  const kvs = el.querySelectorAll('.eom-kv')
+  const kvVals = [v.motorSpeed + '%', v.thresh, v.decay, v.coolStr]
+  kvs.forEach((k, i) => { if (kvVals[i] !== undefined) k.textContent = kvVals[i] })
 }
 
 function grpChannelState(grp) {
@@ -780,6 +867,7 @@ function updateLiveWidgets(devId) {
     const el = document.querySelector(`[data-widget-id="${w.id}"]`)
     if (!el) continue
     if (w.type === 'channel' && w.deviceId === devId) refreshChannelWidget(el, w)
+    if (w.type === 'eom' && w.deviceId === devId) refreshEomWidget(el, w)
     if (w.type === 'group') {
       const grp = S.groups.find(g => g.id === w.groupId)
       if (grp?.channels?.some(c => c.deviceId === devId)) refreshGroupWidget(el, w)

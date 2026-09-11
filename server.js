@@ -2572,18 +2572,33 @@ function unmountMediaSource(source) {
 // no vers= (kernel default), then explicit versions oldest→newest as a
 // fallback ladder. mount error(95) "Operation not supported" is the classic
 // symptom of a version mismatch.
+//
+// Async and non-blocking on purpose — this used to run each fallback via
+// execFileSync, which blocks Node's entire single event loop (the whole app:
+// every HTTP/WebSocket request, everything) for as long as the mount attempt
+// takes. Against a host that's actually offline, each fallback took ~6s to
+// time out, so one call could freeze the app for up to 30s (5 fallbacks) —
+// exactly the "app briefly unreachable" symptom seen with a stale/offline
+// source configured. Using execFile (async) + a short per-attempt timeout
+// keeps the rest of the app fully responsive no matter what a given source
+// is doing, and caps how long the overall attempt can drag on.
+function execFileP(cmd, args, opts) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, opts, (err, stdout, stderr) => err ? reject(Object.assign(err, { stderr })) : resolve(stdout))
+  })
+}
 const CIFS_VERS_FALLBACKS = [null, '3.0', '2.1', '2.0', '1.0']
-function mountCifs(source) {
+async function mountCifs(source) {
   const { uid, gid } = userInfo()
   const credsPath = `/tmp/.ecsmb-${source.id}`
-  execFileSync('sudo', ['mkdir','-p', source.mountPath])
+  await execFileP('sudo', ['mkdir','-p', source.mountPath])
   writeFileSync(credsPath, `username=${source.username||''}\npassword=${source.password||''}\n${source.domain?`domain=${source.domain}\n`:''}`, { mode:0o600 })
   try {
     let lastErr
     for (const vers of CIFS_VERS_FALLBACKS) {
       const opts = `credentials=${credsPath},uid=${uid},gid=${gid},ro` + (vers ? `,vers=${vers}` : '')
       try {
-        execFileSync('sudo', ['mount','-t','cifs', `//${source.host}/${source.share}`, source.mountPath, '-o', opts])
+        await execFileP('sudo', ['mount','-t','cifs', `//${source.host}/${source.share}`, source.mountPath, '-o', opts], { timeout: 4000 })
         return
       } catch (e) { lastErr = e }
     }
@@ -2694,8 +2709,13 @@ for (const d of config.devices) {
         if (s.type==='usb') { s.connected = mounts.includes(` ${s.mountPath} `); continue }
         if (s.type==='smb') {
           if (mounts.includes(` ${s.mountPath} `)) { s.connected = true; continue }
-          try { mountCifs(s); s.connected = true }
-          catch (e) { console.error('[media] smb remount failed for', s.label, e.message); s.connected = false }
+          // Fire-and-forget — mountCifs is async precisely so a source that's
+          // currently offline (an unplugged NAS, a laptop that isn't sharing
+          // right now) can't block the rest of boot, or the rest of the app,
+          // while it works through its fallback attempts in the background.
+          s.connected = false
+          mountCifs(s).then(() => { s.connected = true; broadcast({ type:'media:updated', device: dev.toJSON() }) })
+            .catch(e => { console.error('[media] smb remount failed for', s.label, e.message); broadcast({ type:'media:updated', device: dev.toJSON() }) })
         }
       }
     }
@@ -3583,7 +3603,7 @@ app.post('/api/devices/:id/media/sources/smb/list-shares', (req,res) => {
   }
 })
 
-app.post('/api/devices/:id/media/sources/smb', (req,res) => {
+app.post('/api/devices/:id/media/sources/smb', async (req,res) => {
   const dev=devices[req.params.id]; if (!dev||dev.type!=='media') return res.status(404).json({error:'not found'})
   const { label, host, share, username, password, domain } = req.body
   if (!host || !share) return res.status(400).json({error:'host and share are required'})
@@ -3593,7 +3613,7 @@ app.post('/api/devices/:id/media/sources/smb', (req,res) => {
     host, share, username:username||'', password:password||'', domain:domain||'',
     mountPath:`/mnt/edgecontroller-smb-${dirLabel}`, connected:true,
   }
-  try { mountCifs(source) } catch (e) { return res.status(500).json({error:e.message}) }
+  try { await mountCifs(source) } catch (e) { return res.status(500).json({error:e.message}) }
   dev.sources.push(source)
   const cfg=config.devices.find(d=>d.id===dev.id)
   if (cfg) { cfg.sources=dev.sources; saveConfig(config) }
@@ -5672,14 +5692,16 @@ function applyWifiBand(onlyFiveGhz) {
 }
 
 function applyBtAdapter(deviceId) {
-  // Force 5GHz regardless of internal vs USB dongle Bluetooth — a USB dongle
-  // avoids the worse antenna-sharing interference of the internal combo
-  // BT/WiFi radio, but 2.4GHz WiFi and 2.4GHz Bluetooth still share the same
-  // RF spectrum and congest each other either way. Confirmed on hardware:
-  // a dongle-based Coyote intermittently failed to complete a GATT connect
-  // (scan still worked — far more interference-tolerant) while WiFi sat on
-  // a 2.4GHz channel; forcing 5GHz is the fix in both adapter cases.
-  applyWifiBand(true)
+  // Previously forced 5GHz-only here — see git history — after confirming on
+  // hardware that 2.4GHz WiFi can make a dongle-based Coyote intermittently
+  // fail to complete a GATT connect (scan still worked, far more
+  // interference-tolerant) while WiFi sat on a 2.4GHz channel. Disabled while
+  // investigating an unrelated intermittent network-unresponsiveness issue on
+  // the dev Pi that turned out to happen on 5GHz too — band is left on 'auto'
+  // (applyWifiBand is no longer called) so NetworkManager picks whichever
+  // band/channel it judges best. If Coyote GATT connects start failing again
+  // specifically when WiFi is sitting on a 2.4GHz channel, that's the
+  // confirmation this was protecting against — reinstate applyWifiBand(true).
   if (deviceId == null) return
   exec('hciconfig -a', (err, stdout) => {
     if (err && !stdout) return

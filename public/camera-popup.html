@@ -22,6 +22,12 @@
   #play-prompt { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.5); cursor:pointer; z-index:50 }
   #play-prompt div { background:rgba(0,0,0,.75); color:#fff; font-size:14px; font-weight:700; padding:16px 32px; border-radius:8px; letter-spacing:.5px; border:1px solid #333 }
   #play-prompt.hidden { display:none }
+  #talk-error { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.6); z-index:60 }
+  #talk-error.hidden { display:none }
+  #talk-error .box { background:#181818; color:#ddd; font-size:13px; line-height:1.5; padding:20px 24px; border-radius:8px; border:1px solid #333; max-width:360px }
+  #talk-error a { color:#4fc3f7 }
+  #talk-error button { margin-top:14px; background:#222; border:1px solid #333; color:#ccc; padding:6px 14px; border-radius:5px; cursor:pointer; font-size:12px; font-family:monospace }
+  #talk-error button:hover { background:#2a2a2a; color:#fff }
 </style>
 </head>
 <body>
@@ -50,6 +56,12 @@
 </div>
 <div id="play-prompt" class="hidden" onclick="startPlay()">
   <div>▶ Click to play</div>
+</div>
+<div id="talk-error" class="hidden">
+  <div class="box">
+    <div id="talk-error-msg"></div>
+    <button onclick="document.getElementById('talk-error').classList.add('hidden')">Close</button>
+  </div>
 </div>
 <script>
   const params = new URLSearchParams(location.search)
@@ -274,13 +286,35 @@
     return out
   }
 
+  async function showTalkError(html) {
+    document.getElementById('talk-error-msg').innerHTML = html
+    document.getElementById('talk-error').classList.remove('hidden')
+  }
+
   async function toggleTalk() {
     if (talkWs) { stopTalk(); return }
     const btn = document.getElementById('talk-btn')
+    if (!navigator.mediaDevices) {
+      // navigator.mediaDevices is only exposed in a "secure context" — HTTPS,
+      // or localhost specifically. A plain http://<lan-ip> page (like this
+      // one opened directly) doesn't qualify, so the API is just absent —
+      // that's the actual cause, not a permission denial.
+      let linkHtml = ''
+      try {
+        const t = await fetch('/api/tunnel/status').then(r => r.json())
+        if (t.enabled && t.hostname) {
+          const host = t.hostname.replace(/^https?:\/\//, '')
+          const link = `https://${host}${location.pathname}${location.search}`
+          linkHtml = `<br><br>Try this page over HTTPS instead:<br><a href="${link}" target="_blank">${link}</a>`
+        }
+      } catch {}
+      showTalkError(`Microphone access needs a secure (HTTPS) connection — this page was opened over plain HTTP on the local network, where browsers don't allow microphone access at all.${linkHtml || '<br><br>Set up the Cloudflare tunnel in Config to get an HTTPS link for this box.'}`)
+      return
+    }
     try {
       talkStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true } })
     } catch (e) {
-      alert('Microphone access denied or unavailable: ' + e.message)
+      showTalkError('Microphone access denied or unavailable: ' + e.message)
       return
     }
     const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:'

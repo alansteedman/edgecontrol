@@ -197,6 +197,19 @@ function checkLicenseState() {
   }
   const registeredAt = config.communityRegisteredAt
   if (!registeredAt) { _licenseMode = 'pending'; return }
+  // A device that has previously registered (has a communityDeviceToken) gets
+  // the benefit of the doubt at boot rather than an instant lockout — this
+  // check runs synchronously the moment the HTTP server starts, well before
+  // communityFleetInit()'s first heartbeat has had any chance to run (it
+  // waits on the network coming up first). Locking out immediately on a
+  // merely-stale cached token meant EVERY boot briefly locked out an
+  // otherwise-authorised box — including the web UI and HDMI display —
+  // until that first heartbeat happened to land. Staying 'pending' here lets
+  // the imminent heartbeat make the real call: 'ok' if the server still
+  // authorises it, or 'lockout' if it explicitly comes back revoked/401
+  // (see communityHeartbeat()). Only a device that was NEVER successfully
+  // registered at all falls through to the hard lockout below.
+  if (config.communityDeviceToken) { _licenseMode = 'pending'; return }
   const hoursSince = (Date.now() / 1000 - registeredAt) / 3600
   if (hoursSince < LICENSE_PENDING_HRS) {
     _licenseMode = 'pending'

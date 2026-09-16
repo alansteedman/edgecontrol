@@ -141,6 +141,28 @@ else
 fi
 
 
+# ── Touchscreen UI: deps + service ────────────────────────────────────────────
+if ! dpkg -s python3-spidev >/dev/null 2>&1; then
+  log "Installing touchscreen UI dependencies"
+  apt-get update -qq
+  apt-get install -y -qq python3-pip python3-spidev python3-lgpio python3-numpy python3-pil
+else
+  log "Touchscreen UI dependencies already installed — skipping"
+fi
+
+if [ ! -f /etc/systemd/system/touchscreen.service ]; then
+  log "Installing touchscreen.service (was missing — earlier installs never created it)"
+  mkdir -p "/home/$APP_USER/touchscreen"
+  cp "$APP_DIR/touchscreen/touchscreen.py" "/home/$APP_USER/touchscreen/touchscreen.py"
+  cp "$APP_DIR/touchscreen/logo.png" "/home/$APP_USER/touchscreen/logo.png"
+  chown -R "$APP_USER:$APP_USER" "/home/$APP_USER/touchscreen"
+  cp "$APP_DIR/systemd/touchscreen.service" /etc/systemd/system/touchscreen.service
+  systemctl daemon-reload
+  systemctl enable --now touchscreen.service
+else
+  log "touchscreen.service already installed — skipping"
+fi
+
 # ── Touchscreen UI: sync deployed copy from the repo ──────────────────────────
 # touchscreen.service runs /home/alans/touchscreen/touchscreen.py — a separate
 # deployed copy, not the repo checkout — so a plain git pull never reaches it.
@@ -166,6 +188,41 @@ elif [ -f "$TS_SRC" ] && sudo -u "$APP_USER" pm2 describe touchscreen >/dev/null
   # on those boxes could sit unrestarted for weeks across multiple updates.
   log "Restarting pm2-managed touchscreen UI"
   sudo -u "$APP_USER" pm2 restart touchscreen 2>/dev/null || true
+fi
+
+# ── Bluetooth: disable the input plugin ───────────────────────────────────────
+# BlueZ's input plugin grabs BLE devices that advertise an HID-like profile,
+# which can interfere with our own GATT connect flow for the Coyote/PawPrints.
+BT_DROP_IN="/etc/systemd/system/bluetooth.service.d/noplugin-input.conf"
+if ! cmp -s "$APP_DIR/systemd/bluetooth-noplugin-input.conf" "$BT_DROP_IN" 2>/dev/null; then
+  log "Installing bluetoothd --noplugin=input drop-in"
+  mkdir -p /etc/systemd/system/bluetooth.service.d
+  cp "$APP_DIR/systemd/bluetooth-noplugin-input.conf" "$BT_DROP_IN"
+  systemctl daemon-reload
+  systemctl restart bluetooth
+else
+  log "bluetoothd --noplugin=input drop-in already installed — skipping"
+fi
+
+# ── USB Bluetooth dongle hot-swap udev rule ───────────────────────────────────
+UDEV_DONGLE="/etc/udev/rules.d/99-bt-dongle.rules"
+if ! cmp -s "$APP_DIR/config/99-bt-dongle.rules" "$UDEV_DONGLE" 2>/dev/null; then
+  log "Installing USB Bluetooth dongle udev rule"
+  cp "$APP_DIR/config/99-bt-dongle.rules" "$UDEV_DONGLE"
+  udevadm control --reload-rules
+else
+  log "USB Bluetooth dongle udev rule already installed — skipping"
+fi
+
+# ── Stream Deck udev rule — ensure GROUP=plugdev is present ───────────────────
+SD_RULE="/etc/udev/rules.d/50-streamdeck.rules"
+if [ ! -f "$SD_RULE" ] || ! grep -q 'GROUP="plugdev"' "$SD_RULE"; then
+  log "Updating Stream Deck udev rule"
+  echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", MODE="0666", GROUP="plugdev"' > "$SD_RULE"
+  udevadm control --reload-rules
+  udevadm trigger
+else
+  log "Stream Deck udev rule already up to date — skipping"
 fi
 
 log "Migration complete"

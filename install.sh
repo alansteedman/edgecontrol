@@ -50,7 +50,12 @@ apt-get install -y -qq \
   wireplumber \
   pipewire-audio-client-libraries \
   pulseaudio-utils \
-  alsa-utils
+  alsa-utils \
+  python3-pip \
+  python3-spidev \
+  python3-lgpio \
+  python3-numpy \
+  python3-pil
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
 log "Installing Node.js $NODE_VERSION"
@@ -209,9 +214,26 @@ fi
 
 # ── Stream Deck udev rule ─────────────────────────────────────────────────────
 log "Installing Stream Deck udev rule"
-echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", MODE="0666"' > /etc/udev/rules.d/50-streamdeck.rules
+echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", MODE="0666", GROUP="plugdev"' > /etc/udev/rules.d/50-streamdeck.rules
 udevadm control --reload-rules
 udevadm trigger
+
+# ── USB Bluetooth dongle hot-swap ─────────────────────────────────────────────
+# Auto-restart the app when a USB BT adapter is plugged in so it picks the
+# dongle up (autoSelectUsbAdapter() runs at boot, not on hot-plug) without
+# needing a manual restart every time.
+log "Installing USB Bluetooth dongle udev rule"
+cp "$APP_DIR/config/99-bt-dongle.rules" /etc/udev/rules.d/99-bt-dongle.rules
+udevadm control --reload-rules
+
+# ── Bluetooth: disable the input plugin ───────────────────────────────────────
+# BlueZ's input plugin grabs BLE devices that advertise an HID-like profile,
+# which can interfere with our own GATT connect flow for the Coyote/PawPrints.
+log "Disabling BlueZ input plugin"
+mkdir -p /etc/systemd/system/bluetooth.service.d
+cp "$APP_DIR/systemd/bluetooth-noplugin-input.conf" /etc/systemd/system/bluetooth.service.d/noplugin-input.conf
+systemctl daemon-reload
+systemctl restart bluetooth
 
 # ── Icons ─────────────────────────────────────────────────────────────────────
 log "Creating icons directory"
@@ -257,6 +279,18 @@ BPEOF
 else
   ok "~/.bash_profile already has kiosk config — skipping"
 fi
+
+# ── Touchscreen UI ────────────────────────────────────────────────────────────
+log "Installing touchscreen UI"
+mkdir -p "/home/$APP_USER/touchscreen"
+cp "$APP_DIR/touchscreen/touchscreen.py" "/home/$APP_USER/touchscreen/touchscreen.py"
+cp "$APP_DIR/touchscreen/logo.png" "/home/$APP_USER/touchscreen/logo.png"
+chown -R "$APP_USER:$APP_USER" "/home/$APP_USER/touchscreen"
+cp "$APP_DIR/systemd/touchscreen.service" /etc/systemd/system/touchscreen.service
+systemctl daemon-reload
+systemctl enable touchscreen.service
+systemctl restart touchscreen.service
+ok "Touchscreen UI installed and started"
 
 # ── HDMI audio ────────────────────────────────────────────────────────────────
 # The kiosk's Chromium needs a running PipeWire session to output sound through

@@ -1,0 +1,16 @@
+[Unit]
+Description=EdgeController Touchscreen UI
+After=multi-user.target NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+User=alans
+ExecStart=/usr/bin/python3 -u /home/alans/touchscreen/touchscreen.py
+WorkingDirectory=/home/alans/touchscreen
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

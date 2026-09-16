@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="bluetooth", ENV{ID_BUS}=="usb", RUN+="/bin/bash -c 'sleep 3 && pm2 restart edgecontroller'"

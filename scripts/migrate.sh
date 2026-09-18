@@ -225,4 +225,22 @@ else
   log "Stream Deck udev rule already up to date — skipping"
 fi
 
+# ── SSH access ────────────────────────────────────────────────────────────────
+# See install.sh for why this is needed — Cloudflare Tunnel access to the box
+# is already fully automatic (autoProvision()), but nothing previously set up
+# a way to actually authenticate through it. Public key, safe to commit.
+ADMIN_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPkUnP3UdOCXfQNaHdFV25to0bqSrol1urCrmRyMpYow alansteedman@gmail.com"
+SSH_DIR="/home/$APP_USER/.ssh"
+mkdir -p "$SSH_DIR"
+touch "$SSH_DIR/authorized_keys"
+if ! grep -qF "$ADMIN_PUBKEY" "$SSH_DIR/authorized_keys"; then
+  log "Authorizing SSH key for $APP_USER"
+  echo "$ADMIN_PUBKEY" >> "$SSH_DIR/authorized_keys"
+else
+  log "SSH key already authorized — skipping"
+fi
+chmod 700 "$SSH_DIR"
+chmod 600 "$SSH_DIR/authorized_keys"
+chown -R "$APP_USER:$APP_USER" "$SSH_DIR"
+
 log "Migration complete"

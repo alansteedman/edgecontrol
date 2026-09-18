@@ -92,6 +92,27 @@ log "Configuring sudoers"
 echo "$APP_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/edgecontroller
 chmod 440 /etc/sudoers.d/edgecontroller
 
+# ── SSH access ────────────────────────────────────────────────────────────────
+# The box is reachable over Cloudflare Tunnel as soon as it self-provisions
+# (autoProvision() in server.js — this is what already makes every box show up
+# at <boxid>-ssh.kinkcontrol.org automatically, no dashboard steps needed), but
+# nothing sets up a way to actually authenticate once through — a fresh
+# useradd account has no password and no key, so SSH is a dead end without
+# this. This is a public key, safe to commit — it only grants access to
+# whoever holds the matching private key.
+log "Authorizing SSH key for $APP_USER"
+ADMIN_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPkUnP3UdOCXfQNaHdFV25to0bqSrol1urCrmRyMpYow alansteedman@gmail.com"
+SSH_DIR="/home/$APP_USER/.ssh"
+mkdir -p "$SSH_DIR"
+touch "$SSH_DIR/authorized_keys"
+if ! grep -qF "$ADMIN_PUBKEY" "$SSH_DIR/authorized_keys"; then
+  echo "$ADMIN_PUBKEY" >> "$SSH_DIR/authorized_keys"
+fi
+chmod 700 "$SSH_DIR"
+chmod 600 "$SSH_DIR/authorized_keys"
+chown -R "$APP_USER:$APP_USER" "$SSH_DIR"
+ok "SSH key authorized for $APP_USER"
+
 # ── App ───────────────────────────────────────────────────────────────────────
 log "Installing edgecontroller app"
 if [ -d "$APP_DIR/.git" ]; then
